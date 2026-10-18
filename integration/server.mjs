@@ -118,7 +118,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         const id = decodeURIComponent(path.slice('/api/live/session/'.length));
         const session = sessions.get(id);
         const cleanupPending = await session?.close() || [];
-        return json(res, 200, { closed: true, cleanup_pending: cleanupPending });
+        return json(res, 200, { closed: true, live_finalized: session?.finalized ?? null, cleanup_pending: cleanupPending });
       }
       if (req.method === 'GET' && ['/', '/index.html', '/app.js', '/style.css'].includes(path)) {
         const file = path === '/' ? 'index.html' : path.slice(1);
@@ -129,6 +129,11 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       }
       return json(res, 404, { error: 'Not found.' });
     } catch (error) {
+      if (error.status) {
+        const diagnostic = { at: new Date().toISOString(), status: error.status, code: error.code,
+          param: error.param, message: String(error.message || '').replace(/Bearer\s+\S+|sk-[A-Za-z0-9_-]+/g, '[REDACTED]').slice(0, 300) };
+        appendFileSync(join(stateDir, 'errors.jsonl'), JSON.stringify(diagnostic) + '\n', { mode: 0o600 });
+      }
       if (!res.headersSent) json(res, error.status && error.status >= 400 ? 502 : 400,
         { error: error.status ? `Provider HTTP ${error.status}` : 'Request failed. Check server configuration and input.' });
       else res.end();

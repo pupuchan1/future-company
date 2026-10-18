@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import * as z from 'zod/v4';
 
 const identifier = z.string().trim().min(1).max(160);
+const taskDetail = z.string().trim().min(1).max(500);
 export const requestHumanSchema = z.object({
   case_id: identifier,
   reason: z.enum(['human_requested', 'agent_unable', 'approval_required']),
@@ -9,6 +10,13 @@ export const requestHumanSchema = z.object({
   language: z.enum(['ja', 'en']).default('ja'),
   device_id: identifier.default('black-phone-1'),
   idempotency_key: identifier,
+  target_role: taskDetail.optional().describe('Role to consult, not a routing guarantee.'),
+  task: taskDetail.optional().describe('The bounded question or task for the human.'),
+  expected_result: taskDetail.optional().describe('What answer is needed to continue the conversation.'),
+}).strict();
+export const humanResultSchema = z.object({
+  text: z.string().trim().min(1).max(4000),
+  language: z.enum(['ja', 'en']),
 }).strict();
 export const handoffIdSchema = z.object({ handoff_id: identifier }).strict();
 export const deviceHelloSchema = z.object({
@@ -22,7 +30,12 @@ export const deviceEventSchema = z.object({
   command_id: identifier,
   handoff_id: identifier,
   device_id: identifier.optional(),
-}).strict();
+  result: humanResultSchema.optional(),
+}).strict().superRefine((event, context) => {
+  if (event.result !== undefined && event.type !== 'handset.on_hook') {
+    context.addIssue({ code: 'custom', path: ['result'], message: 'Only handset.on_hook can include a result.' });
+  }
+});
 
 const terminal = new Set(['completed', 'unavailable', 'cancelled']);
 const copy = (value) => structuredClone(value);
@@ -93,6 +106,9 @@ export function createHumanService({
         reason: entry.record.reason,
         summary: entry.record.summary,
         language: entry.record.language,
+        ...(entry.record.target_role === undefined ? {} : { target_role: entry.record.target_role }),
+        ...(entry.record.task === undefined ? {} : { task: entry.record.task }),
+        ...(entry.record.expected_result === undefined ? {} : { expected_result: entry.record.expected_result }),
         expires_at: new Date(Date.now() + ackTimeoutMs + ringTimeoutMs).toISOString(),
       } : { ring_command_id: entry.commandId, status: entry.record.status }),
     };
@@ -212,6 +228,9 @@ export function createHumanService({
           return true;
         }
         if (event.type === 'handset.on_hook' && entry.record.status === 'accepted') {
+          // A bridge answer is untrusted content, never a command to execute.
+          // Its provenance remains this record's device_id and simulated flag.
+          if (event.result !== undefined) entry.record.result = copy(event.result);
           transition(entry, 'completed');
           return true;
         }

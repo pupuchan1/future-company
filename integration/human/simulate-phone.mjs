@@ -17,9 +17,10 @@ const ws = new WebSocket(url, { headers: token ? { Authorization: `Bearer ${toke
 const active = new Map();
 const readline = createInterface({ input: process.stdin, output: process.stdout });
 
-function event(call, type) {
+function event(call, type, result) {
   if (ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type, command_id: call.command_id, handoff_id: call.handoff_id, device_id: deviceId }));
+  ws.send(JSON.stringify({ type, command_id: call.command_id, handoff_id: call.handoff_id, device_id: deviceId,
+    ...(result === undefined ? {} : { result }) }));
 }
 function remove(call) {
   clearTimeout(call.pickupTimer);
@@ -34,7 +35,14 @@ function pickup(call) {
 }
 function hangup(call) {
   if (!call || call.phase !== 'accepted') return;
-  event(call, 'handset.on_hook');
+  const result = flags.has('--auto') ? {
+    language: call.language === 'en' ? 'en' : 'ja',
+    text: call.language === 'en'
+      ? 'Fictional simulator answer for this demo: the team uses TypeScript and React, reviews changes through pull requests, and runs automated tests in CI. This is not information about any real company.'
+      : 'このデモ用の架空のシミュレーター回答です。開発では TypeScript と React を使い、プルリクエストでコードレビューを行い、CI で自動テストを実行します。実在する企業の情報ではありません。',
+  } : undefined;
+  event(call, 'handset.on_hook', result);
+  if (result) console.log('[SIMULATED] 架空の開発環境回答を返しました（実企業情報ではありません）。');
   console.log(`[SIMULATED] 受話器を戻しました ${call.handoff_id}`);
   remove(call);
 }

@@ -81,7 +81,7 @@ function updateControls() {
     ui['call-help'].textContent = !supported
       ? '音声接続にはHTTPSまたはlocalhostと、マイク・WebRTC対応のブラウザが必要です。'
       : state.config?.live_configured
-        ? 'GPT Liveの総合受付へ接続します。「採用について相談したい」と話し、採用担当への切替と質問・回答の整理を確認してください。'
+        ? 'GPT Liveの総合受付へ接続します。採用の相談は採用担当へ、それ以外の判断・仕事の依頼はHaaS担当へ引き継ぎます。'
         : 'GPT Liveは未設定です。サーバー側のAPI設定が完了するまで会話を開始できません。';
   }
   if (!state.handoffBusy) {
@@ -148,6 +148,18 @@ function renderRequests() {
     const summary = document.createElement('p');
     summary.textContent = record.summary ?? '';
     row.append(heading, summary);
+    if (record.target_role || record.task || record.expected_result) {
+      const task = document.createElement('p');
+      task.textContent = [record.target_role && `担当: ${record.target_role}`, record.task && `依頼: ${record.task}`, record.expected_result && `返してほしい内容: ${record.expected_result}`].filter(Boolean).join(' / ');
+      row.append(task);
+    }
+    if (record.status === 'completed') {
+      const result = document.createElement('p');
+      result.textContent = record.result?.text
+        ? `${record.simulated ? '架空の模擬回答' : '届いた回答'} (${record.result.language}): ${record.result.text}`
+        : '対応終了。回答本文は届いていません。';
+      row.append(result);
+    }
     if (record.simulated) {
       const simulated = document.createElement('p');
       simulated.className = 'simulated-note';
@@ -262,7 +274,7 @@ function handleEvent(event, source = 'server', connection = null) {
   }
   if (type === 'routing.updated') {
     if (body.case_id && body.case_id !== ui['case-id'].value) return;
-    const role = body.route === 'recruiting' ? '採用担当' : '総合受付';
+    const role = body.route === 'recruiting' ? '採用担当' : body.route === 'haas' ? 'HaaS担当' : '総合受付';
     const language = body.language === 'en' ? 'English' : '日本語';
     const sourceLabel = body.source === 'decisions' ? 'Decisionsによる判定' : body.source === 'backend' ? '業務処理から切替' : '担当を更新';
     ui['route-assignee'].textContent = role;
@@ -281,17 +293,20 @@ function handleEvent(event, source = 'server', connection = null) {
     return;
   }
   if (type === 'backend.started') {
+    if (body.case_id && body.case_id !== ui['case-id'].value) return;
     tag(ui['backend-state'], '処理中', 'dark');
-    log(type, '採用の質問・回答を整理する業務処理へ委譲しました。');
+    log(type, `${body.route === 'haas' ? 'HaaS担当' : body.route === 'recruiting' ? '採用担当' : '受付担当'}の業務処理へ委譲しました。`);
     return;
   }
   if (type === 'backend.result') {
+    if (body.case_id && body.case_id !== ui['case-id'].value) return;
     tag(ui['backend-state'], '結果受信', 'green');
-    const summary = typeof body.result === 'string' ? body.result : body.summary ?? body.result?.summary;
-    log(type, typeof summary === 'string' ? summary : '採用担当の業務処理の結果を受信しました。');
+    const summary = body.content ?? (typeof body.result === 'string' ? body.result : body.summary ?? body.result?.summary);
+    log(type, typeof summary === 'string' ? summary : '担当の業務処理の結果を受信しました。');
     return;
   }
   if (type === 'backend.error') {
+    if (body.case_id && body.case_id !== ui['case-id'].value) return;
     tag(ui['backend-state'], 'エラー', 'red');
     log(type, body.error?.message ?? body.message ?? '業務処理に失敗しました。', true);
     return;
@@ -315,8 +330,11 @@ function handleEvent(event, source = 'server', connection = null) {
 async function deleteSession(id, keepalive = false) {
   if (!id) return;
   try {
-    await api(`/api/live/session/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive });
-    log('session.deleted', 'サーバー側の音声セッションを終了しました。');
+    const result = await api(`/api/live/session/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive });
+    log('session.deleted', result.live_finalized === true
+      ? '音声セッションの終了応答を確認しました。'
+      : '終了を要求しました。音声セッションの最終応答は未確認です。');
+    if (result.cleanup_pending?.length) notice('バックエンドの後片付けが一部残っています。サーバー側の記録を確認してください。', true);
   } catch (error) {
     log('session.delete.error', error.message, true);
     notice('マイクとブラウザの接続は停止しました。サーバー側のセッション終了は確認できませんでした。', true);
@@ -344,7 +362,8 @@ async function stopCall(message = '', keepalive = false) {
   if (!connection) return;
   state.active = null;
   connection.stopped = true;
-  release(connection);
+  // Stop capture immediately, but keep the transport alive for session.closed.
+  connection.stream?.getTracks().forEach((track) => track.stop());
   ui['remote-audio'].pause();
   ui['remote-audio'].srcObject = null;
   ui['audio-panel'].hidden = true;
@@ -355,8 +374,9 @@ async function stopCall(message = '', keepalive = false) {
   tag(ui['call-state'], message ? '接続終了' : '待機中', message ? 'amber' : 'muted');
   updateControls();
   if (message) notice(message, true);
-  log('local.stopped', 'マイクとブラウザの接続を停止しました。');
+  log('local.stopped', 'マイクを停止し、セッションを終了しています。');
   if (connection.sessionId) await deleteSession(connection.sessionId, keepalive);
+  release(connection);
 }
 
 async function playAudio(connection = state.active) {

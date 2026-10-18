@@ -1,6 +1,6 @@
 # 14:45 設計会議 — 共通GPT Live窓口、採用、HaaS
 
-2026-10-18 / 会議用の構成案。14:35時点のチーム共有を基に整理。
+2026-10-18 / 会議用の構成案。14:35の共有に、14:40のバックエンド報告と14:42までの音声試験を反映。
 
 **今日決めたいこと：1本のGPT Live会話を保ち、採用とHaaSの2ルートを共通の依頼・結果でつなぐ。** 採用担当の画面・バックエンドと、採用以外の依頼を扱うHaaSを並行して進める。担当変更は音声で案内し、人間への相談は共通の黒電話MCPへ渡す。
 
@@ -36,7 +36,7 @@ flowchart TD
 - **音声で引継ぎを案内。** 「採用担当におつなぎします」「この件はHaaS担当に確認します」「結果が届いたので、採用の続きに戻ります」。同じLive音声で担当の違いを伝える。声自体の変更は今日の必須条件にしない案。
 - **黒電話は共通サービス。** 各業務から同じMCP契約を呼び、同じ相談の再送で二重に鳴らさない。
 
-現在のNode試作のルーティングは `reception` / `recruiting`。**`haas` と元担当への復帰は、この会議で追加する案**であり、接続済みとは扱わない。
+実装追記：Node試作に `haas` と、`handoff_id` に紐づく元担当への結果返却を追加。現在は採用/HaaSのどちらも共通MCPへ直接依頼する。採用→別チームHaaS backendの多段アダプターと、下記の永続的な親子依頼はまだ構成案。採用・非採用HaaSの両方で実WebRTCの合成音声入力→模擬回答→英語の回答読み上げを確認。自動試験41件成功。[検証記録](VERIFICATION.md)を参照。
 
 ## 2. 共通の依頼・結果と会話の復帰【案】
 
@@ -69,16 +69,16 @@ flowchart TD
 | オーケストレーター ↔ 採用/HaaS | 上記 `request/result` envelope | [Issue #8](https://github.com/pupuchan1/future-company/issues/8) の共通契約へ合流する案 |
 | FEへ通知 | `GET /api/events` のSSE：`routing.updated`、`backend.*`、`human.*`、文字起こし | Nodeにあり。実装間でpayloadと案件フィルターを統一する |
 | 業務担当 → 黒電話 | MCP `request_human` / 状態取得 / 取消 | NodeでMCP・模擬ベルの動作確認報告。実機接続は別 |
-| 黒電話 → 業務担当 | callback/WS → case更新 → Agents入力 → Live回答 | 受話器状態と回答本文は別。回答本文の接続を追加中 |
+| 黒電話 → 業務担当 | callback/WS → case更新 → Agents入力 → Live回答 | Nodeの模擬電話は回答本文まで実APIで確認。別チームの実電話・Worker保存への結合は未確認 |
 | 外部購読者へ通知 | MCP Eventsの購読検証・署名付きHTTPS Webhook | ローカルWebhook試験済み。実Work/dots購読は未接続 |
 
 | イベント | 主要フィールド／必要な振る舞い |
 | --- | --- |
-| `routing.updated` | `case_id, request_id?, route, resume_route?, language, source`。`haas`は追加案。UIと音声案内を同じ切替に合わせる |
+| `routing.updated` | Nodeは `case_id, route, language, source`。`request_id/resume_route`は共通アダプター案。UIと音声案内を同じ切替に合わせる |
 | `session.input_transcript.delta` / `session.output_transcript.delta` | `event_id, delta, start_ms, end_ms, case_id`。会話表示、二重受信の排除 |
-| `backend.started` / `backend.result` / `backend.error` | `case_id, request_id, route` と結果／エラー。結果を対応する依頼へ戻す |
+| `backend.started` / `backend.result` / `backend.error` | Nodeは `case_id, route` と結果／エラー。共通 `request_id` の付加はアダプター案。結果を対応する依頼へ戻す |
 | `human.requested/ringing/accepted/completed/unavailable/cancelled` | `case_id, handoff_id, status, simulated, revision`。`request_id`との対応は共通caseが管理 |
-| 人間の回答【追加案】 | `case_id, request_id, handoff_id, result`。受話器状態だけから回答を生成しない |
+| 人間の回答 | Nodeは `case_id, handoff_id, result:{text,language}, simulated`。共通request_idとの対応は合流時に保存。受話器状態だけから回答を生成しない |
 
 **MCP EventsはLive内の自動イベントバスではない。** 通常のMCP tool result、アプリ内SSE/WS、Agentsストリーム、外部購読者へのMCP Eventsを分ける。主音声への結果返却をWork/dotsの購読成功に依存させない。Webhookを受信した事実と、その先の仕事の完了も区別する。
 
@@ -86,12 +86,16 @@ flowchart TD
 
 以下は14:35時点のチーム共有・Issue情報。相手のローカル差分を取得・実行したという意味ではない。
 
+**14:40の #6 コメントによる更新：** r74tech側は採用送信・社員ログイン/引受・`result.text/language/simulated`のAPI→DO→D1保存まで58件の試験、型検査、buildの成功を報告。以前の「在庫前提・回答メタデータ未接続」は解消報告あり。コードは引き続き未commit/pushで、こちらから結合試験はしていない。社員デモ認証は `STAFF_API_TOKEN` による固定アカウント・署名cookie。音声・HaaSアダプター・元Agents再開は未接続。
+
+保存アダプターの接続先は `POST /api/v1/staff/requests/:requestId/answer`、本文は `{caseId,commandId,expectedRevision,result:{text,language},simulated}`。先に同じrequestを社員がclaimする既存権限・revisionを維持する。Nodeの `case_id` をWorkerのcaseId、`handoff_id`をWorker requestIdへ対応づける必要がある（現在は別々にIDを発行しているので、名前を置換するだけで同一にはならない）。Workerの `ai.resume_pending` を実際のLive再開の証拠とはしない。
+
 | 作業 | 状況 | 次の合流点 |
 | --- | --- | --- |
-| [#6 バックエンド](https://github.com/pupuchan1/future-company/issues/6) / r74tech | Workers・Hono・Durable Objects・D1、社員の引受・回答APIをローカル実装中、未push。Live sideband未接続。結果データは在庫前提 | push後に既存契約を確認。採用/HaaSの汎用 `request/result` へ合わせ、共通caseを保存する境界を決定 |
+| [#6 バックエンド](https://github.com/pupuchan1/future-company/issues/6) / r74tech | 採用・社員引受・回答メタデータのAPI→DO→D1を実装、58テスト成功の報告。未push。Live sideband未接続 | push後に既存契約を確認。共通case/requestのID対応、認可・revisionを維持する結果アダプターを結合 |
 | [#7 フロント](https://github.com/pupuchan1/future-company/issues/7) / pupu | 受付・共通音声・結果・operatorの4画面。言語は発話から推定する方針。声切替は未決 | Live作成/終了とSSEを共通音声画面へ接続。operatorの回答を `request_id` 付きで戻す |
 | [#9 フロント試作](https://github.com/pupuchan1/future-company/issues/9) / pupu | 黒・青・白、角丸なし。localStorageと別タブのモックを試作中 | モックデータ源を実API/SSEへ差し替える。ブラウザ内の同期をサーバーの受付・完了と混同しない |
-| [#4 Node接続試作](https://github.com/pupuchan1/future-company/issues/4) | Live実API・Agents API・MCP模擬ベルの動作確認報告あり。人間回答本文を追加中 | 動く接続例としてFE/Workersへ受け渡す。HaaSルートと復帰を追加し、既存実装の移植範囲を絞る |
+| [#4 Node接続試作](https://github.com/pupuchan1/future-company/pull/4) | 採用・HaaS両ルートでLive→Agents→MCP→模擬回答→音声復帰を確認。41テスト成功 | 動く接続例としてFE/Workersへ受け渡す。ID対応と認可済み結果APIの境界を結合 |
 | [#8 共通request/result](https://github.com/pupuchan1/future-company/issues/8) | 共通の依頼・結果の提案 | この会議で識別子・payload・状態・結果の復帰先を固定 |
 | 黒電話の実機 | 実機チームが担当。共通MCPへ接続する前提 | 模擬と実機を `simulated` で区別。ベル、受話器、回答、実音声を順に確認 |
 
@@ -128,12 +132,12 @@ flowchart TD
 | DevDay関連機能 | 今回の役割 | 発表での証拠・現状 |
 | --- | --- | --- |
 | GPT Live | 1本の主音声、日英会話、担当引継ぎの案内 | 実API疎通報告あり。統合FEでの実マイク→音声往復は別に確認 |
-| Agents API | 採用とHaaSの業務文脈・処理・MCP利用 | 採用側の実API確認報告あり。HaaSと復帰経路は追加案 |
-| Decisions / native Live連携 | 言語・用件の判定候補 | 採用ルートの試作あり。`haas`追加、発話との相関、曖昧時を確認 |
+| Agents API | 採用とHaaSの業務文脈・処理・MCP利用 | 両ルートで実APIと回答復帰を確認。別チームbackendとの結合は未確認 |
+| Decisions / native Live連携 | 言語・用件の判定候補 | native候補と委譲時の全文分類を確認。部分発話や分類中の追加入力で旧担当へ誤送信しない回帰試験あり |
 | MCP 2 | 業務から共通黒電話へ依頼・状態取得・取消 | 模擬ベルの動作確認報告。実機・実電話音声は未接続 |
 | MCP Events | 状態変化を外部購読者へ通知 | 署名・検証・再送のローカル試験済み。Work/dots実購読は未接続 |
 | Codex | 同じrepoで実装・Issue/PR・統合確認 | 実際の差分とテスト結果を提示 |
 
-一次資料、発表日、APIモデルID、詳細な受入項目は [DEVDAY-CHECKLIST.md](DEVDAY-CHECKLIST.md) を参照。既存チェックリストの「採用のみ優先」はこの会議で2ルートへ更新する対象。すべてをDevDay当日初公開とは表現せず、10月の追加更新も区別する。
+一次資料、発表日、APIモデルID、詳細な受入項目は [DEVDAY-CHECKLIST.md](DEVDAY-CHECKLIST.md) を参照。すべてをDevDay当日初公開とは表現せず、10月の追加更新も区別する。
 
 関連仕様：[接続試作](README.md) / [黒電話MCP](human/README.md) / [MCP Events](events/README.md)。この資料は構成相談用で、未確認のAPI接続・実機・本番反映を完了扱いにしない。

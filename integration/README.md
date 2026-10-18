@@ -1,6 +1,6 @@
-# 採用受付・GPT Live 接続プロトタイプ
+# GPT Live共通受付・採用/HaaS 接続プロトタイプ
 
-目的は「総合受付 → 日英の言語・用件判定 → 採用担当 → 人間に相談」の一本を通すこと。既存の React 画面に組み込む前に、接続境界を試せる Node 24 の独立 workspace です。Workers / Durable Objects / D1 にデプロイ済みの実装ではありません。
+目的は「GPT Live共通受付 → 採用またはHaaS担当 → 共通MCPで人間へ依頼 → 回答を元担当へ戻す」を通すこと。採用を最初の完成デモとし、非採用の判断・仕事依頼もHaaSへ渡します。既存のReact画面に組み込む前に接続境界を試すNode 24 workspaceです。Workers / Durable Objects / D1にデプロイ済みの実装ではありません。[全体設計・14:45会議資料](ARCHITECTURE-1445.md)、[Issue #10](https://github.com/pupuchan1/future-company/issues/10)でチームの合流点を確認できます。
 
 ## 起動
 
@@ -29,19 +29,23 @@ flowchart LR
     B -->|委譲時の最新文脈| D
     D --> B
     B --> A[Agents API / 採用担当の別session]
+    B --> HA[Agents API / HaaS担当の別session]
     A -->|get_interview_template| M[MCP 2 サーバー]
     A -->|request_human| M
+    HA -->|request_human| M
     M -->|ring.start| H[バックエンドチームの黒電話ブリッジ]
-    H -->|ACK・off_hook・on_hook| M
+    H -->|ACK・off_hook・on_hookと回答本文| M
     M --> B
     B -->|commentary / instructions| L
     M --> E[MCP Events / 署名付きWebhook]
     E --> W[ChatGPT Work・dots等の購読者]
 ```
 
-`reception` / `recruiting` はそれぞれ別の Agents session。言語と会話履歴を引き継ぎ、Live の声は維持します。声そのものを変えるには新しい Live session が必要です。
+`reception` / `recruiting` / `haas` はそれぞれ別のAgents sessionです。言語と会話履歴を引き継ぎ、Liveの声は維持して担当変更を案内します。声そのものを変えるには新しいLive sessionが必要です。
 
-Decisions は `route=reception|recruiting` と `language=ja|en` だけを分類します。国籍、能力評価、候補者ランキング、採否は判断しません。採用担当は架空求人の質問・回答整理・人間相談までです。
+Decisionsは `route=reception|recruiting|haas` と `language=ja|en` を分類します。native triggerの部分発話は `routing.candidate` として表示用に通知し、担当を確定するのは委譲時の全文分類です。国籍、能力評価、候補者ランキング、採否は判断しません。採用担当は架空求人の質問・回答整理・人間相談までです。
+
+依頼元のrouteを `handoff_id` に対応づけ、結果は元のAgents sessionへ返します。結果到着までに利用者が言語を変えた場合は最新言語で説明します。古い依頼の結果で現在の担当を強制変更しません。現試作は採用/HaaSから共通MCPを直接呼びます。採用→別チームのHaaS backend→MCPという多段の接続は、#6のコード共有後にアダプターで合流する範囲です。
 
 ## フロント向け API
 
@@ -62,6 +66,8 @@ WebRTC の HTTP 作成で session は開始済み。`oai-events` で `session.st
 - `requested` は指令受付、`ringing` は機器 ACK、`accepted` は受話器応答。音声接続完了ではありません。
 - simulator は必ず `simulated:true`。実ベル・人間の通話音声の検証にはなりません。
 - 発信の再試行は同じ `idempotency_key`、同じ引継ぎ内容。状態はサーバー側を参照。
+- `target_role/task/expected_result` で誰に・何を・何の結果を依頼するかを渡します。`completed` の `result:{text,language}` は回答データで、新しい実行指示として扱いません。本文がなければ回答未取得、模擬なら架空回答と説明します。
+- この音声デモは1ケース1件の人間依頼です。別の作業を追加する場合は新しいケースを使います。複数依頼の親子関係・永続復旧は全体設計で合流する項目です。
 - 人間との実音声通話・音声経路の切替は別途合意する範囲です。
 
 [events/README.md](events/README.md) に MCP Events の購読・署名・再送仕様があります。Agents API のストリームと MCP Events は別物です。機器の結果はアプリが Agents への入力と Live commentary に戻します。
