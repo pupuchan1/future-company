@@ -5,6 +5,7 @@
 
 公開本番の入口は`https://future-company-voice-node.r74.workers.dev`。同じCloudflare Workerがpupuの画面とContainersのNodeへ接続する。起動・配備・復帰は[本番運用手順](PRODUCTION.md)を参照する。
 Codex Sitesは予備入口。pupuのビルド済み画面を `sites/export-site.mjs` で既存Sitesへ反映し、`sites/proxy.mjs`がvisitor APIだけを既存Workerへ中継する。Sites側のAccess secret、既存Worker・Node・Slack認証を保持する。
+16:47 JST時点の旧Mac配備候補と当時の未検証項目は[過去の配備候補記録](./RELEASE-CANDIDATE.md)に保存している。現在の配備先は上記のクラウド運用手順とIssue #33・#142を確認する。
 
 既存の Worker に React・DO・D1 を残し、Node 24 の音声・人間MCPを常駐プロセスで動かす。`server.mjs` の localhost guard はそのまま使う。Worker 側の既存 Access 本人限定設定と社員認証も変更しない。
 
