@@ -293,3 +293,56 @@ test('startup history preserves user authority and is bounded for long Unicode t
   assert.equal(input.at(-1).role, 'assistant');
   assert.ok(input.every((item) => !item.content[0].text.includes('\ufffd')));
 });
+
+test('automatic voice handoff preserves a confirmed task without starting another Agent turn', async t => {
+  const f = await fixture(t);
+  const started = await f.start();
+  const oldId = started.body.session.id;
+  f.app.backend.classify = async () => ({ route: 'haas', language: 'en' });
+  f.sockets.get(oldId).receive({ type: 'session.input_transcript.delta', event_id: 'confirmed-input', delta: 'Find an engineer for this task.' });
+  f.sockets.get(oldId).receive({ type: 'session.delegation.created', delegation: { id: 'first-task', target: 'client' } });
+  await until(() => f.runs.length === 1);
+  await pause(0);
+  const wrong = await f.api(`/api/live/session/${oldId}/handoff`, { sdp: 'v=0\r\n', route: 'recruiting', automatic: true });
+  assert.equal(wrong.status, 409);
+  assert.equal(wrong.body.code, 'routing_changed');
+  assert.equal(f.creates.length, 1);
+  const prepared = await f.api(`/api/live/session/${oldId}/handoff`, { sdp: 'v=0\r\n', route: 'haas', automatic: true });
+  assert.equal(prepared.status, 200);
+  assert.equal((await f.activate(prepared)).status, 200);
+  const next = f.sockets.get(prepared.body.session.id);
+  next.receive({ type: 'session.delegation.created', delegation: { id: 'stale-history-request', target: 'client' } });
+  await pause(0);
+  assert.equal(f.runs.length, 1, 'Changing voice must not repeat a completed business task');
+  assert.match(next.sent.find(event => event.type === 'session.instructions.append').content, /automatic change only selects the department voice/);
+  next.receive({ type: 'session.input_transcript.delta', event_id: 'new-input', delta: 'I have another question.' });
+  next.receive({ type: 'session.delegation.created', delegation: { id: 'new-task', target: 'client' } });
+  await until(() => f.runs.length === 2);
+  assert.match(f.runs[1].transcript, /another question/);
+});
+
+test('a human answer queued during automatic handoff resumes once even before fresh caller speech', async t => {
+  const f = await fixture(t);
+  const started = await f.start('haas');
+  const commands = [];
+  const device = f.app.gateway.service.connectDevice({ type: 'hello', device_id: 'black-phone-1', simulated: true,
+    capabilities: ['ring.start', 'ring.stop'] }, command => { commands.push(command); return true; });
+  const request = f.app.gateway.service.requestHuman({ case_id: 'case-switch', reason: 'human_requested',
+    summary: 'Fictional engineering answer', language: 'en', idempotency_key: 'auto-human' });
+  const command = commands[0];
+  const prepared = await f.api(`/api/live/session/${started.body.session.id}/handoff`, { sdp: 'v=0\r\n', route: 'haas', automatic: true });
+  for (const type of ['ring.started', 'handset.off_hook', 'handset.on_hook']) {
+    device.handleEvent({ type, handoff_id: request.handoff_id, command_id: command.command_id,
+      ...(type === 'handset.on_hook' ? { result: { text: 'Fictional answer: TypeScript.', language: 'en' } } : {}) });
+  }
+  assert.equal(f.runs.length, 0);
+  const active = await f.activate(prepared);
+  assert.equal(active.status, 200);
+  await until(() => f.runs.length === 1);
+  assert.equal(f.runs[0].source, 'human_event');
+  assert.equal(f.runs[0].route, 'haas');
+  assert.match(f.runs[0].transcript, /Fictional answer: TypeScript/);
+  f.sockets.get(prepared.body.session.id).receive({ type: 'session.delegation.created', delegation: { id: 'duplicate-old-work', target: 'client' } });
+  await pause(0);
+  assert.equal(f.runs.length, 1);
+});

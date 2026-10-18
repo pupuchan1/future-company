@@ -177,7 +177,8 @@ interface VoiceSwitch {
 
 class LiveApiError extends Error {
   status: number
-  constructor(message: string, status: number) { super(message); this.status = status }
+  code?: string
+  constructor(message: string, status: number, code?: string) { super(message); this.status = status; this.code = code }
 }
 
 class ActivationUncertainError extends Error {}
@@ -212,6 +213,10 @@ export class LiveClient {
   private closing: Promise<void> | null = null
   private endpoints: { status: string; events: string; session: string }
   private bridgeToken?: () => Promise<string>
+  private automaticHandoff: { route: LiveRoute; attempts: number; awaitingOutput: boolean } | null = null
+  private automaticTimer?: ReturnType<typeof setTimeout>
+  private lastSpeechAt = 0
+  private lastAutomaticRouting = ''
 
   constructor(caseId: string, language: LiveLanguage, runtime = browserRuntime(), options: LiveClientOptions = {}) {
     const prefix = options.apiPrefix
@@ -236,6 +241,36 @@ export class LiveClient {
   }
   private patch(next: Partial<LiveSnapshot>) { this.publish({ ...this.state, ...next }) }
 
+  private cancelAutomaticHandoff() {
+    clearTimeout(this.automaticTimer)
+    this.automaticTimer = undefined
+    this.automaticHandoff = null
+  }
+
+  private scheduleAutomaticHandoff() {
+    const pending = this.automaticHandoff
+    if (!pending || this.disposed || this.closing || this.voiceSwitch || this.automaticTimer) return
+    if (pending.route === this.state.voiceRoute) { this.cancelAutomaticHandoff(); return }
+    if (pending.awaitingOutput || this.state.backend === 'running' || this.state.phase !== 'connected'
+      || !this.state.switchConfigured || !this.state.meteringAvailable || this.state.playbackBlocked || this.state.muted) return
+    this.automaticTimer = setTimeout(() => {
+      this.automaticTimer = undefined
+      if (this.automaticHandoff !== pending) return
+      if (Date.now() - this.lastSpeechAt < 1500 || pending.awaitingOutput || this.state.backend === 'running'
+        || this.state.phase !== 'connected' || this.state.muted || this.state.playbackBlocked) {
+        this.scheduleAutomaticHandoff(); return
+      }
+      pending.attempts++
+      void this.switchDepartment(pending.route, { automatic: true }).then(outcome => {
+        if (this.automaticHandoff !== pending) return
+        if (outcome === 'busy' && pending.attempts < 3) {
+          this.lastSpeechAt = Date.now()
+          this.scheduleAutomaticHandoff()
+        } else this.cancelAutomaticHandoff()
+      })
+    }, Math.max(250, 1500 - (Date.now() - this.lastSpeechAt)))
+  }
+
   private audioActivity(connection: Connection, activity: VoiceActivity) {
     if (this.disposed || this.connection !== connection) return
     const audio = connection.audio
@@ -254,9 +289,12 @@ export class LiveClient {
     const audible = connection.outputPlaying && audio && !this.voiceSwitch && !this.state.playbackBlocked && !audio.paused && !audio.muted
     const outputLevel = audible ? normalizedLevel(levels.outputLevel) * normalizedLevel(audio!.volume ?? 1) : 0
     const speaking = speakerFor(inputLevel, outputLevel)
+    if (inputLevel >= SPEAKING_RMS || outputLevel >= SPEAKING_RMS) this.lastSpeechAt = Date.now()
+    if (outputLevel >= SPEAKING_RMS && this.automaticHandoff && this.state.backend === 'result') this.automaticHandoff.awaitingOutput = false
     if (inputLevel !== this.state.inputLevel || outputLevel !== this.state.outputLevel || speaking !== this.state.speaking) {
       this.patch({ inputLevel, outputLevel, speaking })
     }
+    this.scheduleAutomaticHandoff()
   }
 
   private async api(path: string, options: RequestInit = {}) {
@@ -270,7 +308,8 @@ export class LiveClient {
     catch { throw new LiveApiError('受付の応答を確認できません。認証・接続先を確認してください。 / Invalid reception response. Check access and the endpoint.', response.status) }
     if (!response.ok) {
       const detail = typeof data.detail === 'string' ? data.detail : typeof data.error === 'string' ? data.error : object(data.error).message
-      throw new LiveApiError(`${typeof detail === 'string' ? detail : '接続失敗 / Connection failed'} (HTTP ${response.status})`, response.status)
+      throw new LiveApiError(`${typeof detail === 'string' ? detail : '接続失敗 / Connection failed'} (HTTP ${response.status})`, response.status,
+        typeof data.code === 'string' ? data.code : undefined)
     }
     return data
   }
@@ -365,6 +404,22 @@ export class LiveClient {
       return
     }
     this.publish(this.reducer.apply(this.state, event, source))
+    if (source === 'server' && type === 'routing.updated' && body.source === 'decisions'
+      && sessionId === this.connection?.sessionId && isRoute(body.route)) {
+      const key = `${sessionId}:${body.source_event_id ?? ''}:${body.route}`
+      if (key !== this.lastAutomaticRouting) {
+        this.lastAutomaticRouting = key
+        if (body.route === this.state.voiceRoute) this.cancelAutomaticHandoff()
+        else if (this.automaticHandoff?.route !== body.route) {
+          this.cancelAutomaticHandoff()
+          this.automaticHandoff = { route: body.route, attempts: 0, awaitingOutput: true }
+        }
+      }
+    }
+    if (this.automaticHandoff && (type === 'backend.started' || type === 'backend.result')) this.automaticHandoff.awaitingOutput = true
+    if (type === 'backend.error') this.cancelAutomaticHandoff()
+    if (type === 'session.input_transcript.delta' || type === 'session.output_transcript.delta') this.lastSpeechAt = Date.now()
+    this.scheduleAutomaticHandoff()
     if (closed) void this.stop()
     if (type === 'error' && source === 'datachannel') void this.stop(this.state.error)
   }
@@ -459,6 +514,8 @@ export class LiveClient {
     }
     const connection: Connection = { started: false }
     this.connection = connection
+    this.cancelAutomaticHandoff()
+    this.lastAutomaticRouting = ''
     this.reducer.reset()
     this.voice.reset()
     this.patch({ phase: 'connecting', language, route, voiceRoute: route, voice: '', transcripts: [], muted: false, playbackBlocked: false, error: '', backend: 'idle', backendResult: '', cleanupWarning: '', inputLevel: 0, outputLevel: 0, speaking: 'silent', meteringAvailable: false })
@@ -528,7 +585,8 @@ export class LiveClient {
     throw new ActivationUncertainError('担当の声の切替結果を確認できません。音声は一時停止しています。終了して再接続してください。 / Voice switch outcome is unconfirmed. End the call and reconnect.')
   }
 
-  async switchDepartment(route: LiveRoute) {
+  async switchDepartment(route: LiveRoute, { automatic = false } = {}) {
+    if (!automatic) this.cancelAutomaticHandoff()
     const previous = this.connection
     if (this.disposed || !previous?.stream || !previous.sessionId || this.closing || this.voiceSwitch) return
     if (route === this.state.voiceRoute) return
@@ -551,7 +609,7 @@ export class LiveClient {
       const sdp = await this.offer(candidate)
       if (!sdp || attempt.cancelled || this.voiceSwitch !== attempt) return
       const created = await this.api(`${this.endpoints.session}/${encodeURIComponent(previous.sessionId)}/handoff`, {
-        method: 'POST', body: JSON.stringify({ sdp, route }),
+        method: 'POST', body: JSON.stringify({ sdp, route, ...(automatic ? { automatic: true } : {}) }),
       })
       const id = object(created.session).id
       if (typeof id !== 'string' || !id || id === previous.sessionId) throw new Error('切替先のセッションIDが不正です。 / Invalid candidate session ID.')
@@ -611,6 +669,7 @@ export class LiveClient {
       this.patch({ phase: previous.peer?.connectionState === 'disconnected' ? 'reconnecting' : 'connected', muted: attempt.muted, error: `担当の声を切り替えられませんでした。元の声で続けます。 / Voice unchanged. ${microphoneError(error)}` })
       if (previous.audio) previous.audio.autoplay = true
       await this.playAudio()
+      if (automatic && error instanceof LiveApiError && error.status === 409 && error.code === 'busy') return 'busy'
     }
   }
 
@@ -680,6 +739,7 @@ export class LiveClient {
   }
 
   async stop(error = '', keepalive = false) {
+    this.cancelAutomaticHandoff()
     if (this.closing) return this.closing
     const connection = this.connection
     if (!connection) return

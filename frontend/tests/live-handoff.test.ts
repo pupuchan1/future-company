@@ -37,7 +37,7 @@ function fixture(apiPrefix?: string) {
     }
   }
   const audios: { srcObject: unknown; autoplay: boolean; paused: boolean; muted: boolean; volume: number; plays: number; play(): Promise<void>; pause(): void }[] = []
-  const meters: { disposed: number; dispose(): void; setInput(): void; setOutput(): void }[] = []
+  const meters: { disposed: number; dispose(): void; setInput(): void; setOutput(): void; levels(inputLevel: number, outputLevel: number): void }[] = []
   let route: LiveRoute = 'reception'
   let handoff = async (): Promise<Response> => Response.json({ session: { id: 'new' }, transport: { sdp: 'answer-new' }, case_id: 'case-a', old_session_id: 'old', route, voice: voices[route], handoff_token: 'token-1' })
   let activate = async (): Promise<Response> => Response.json({ session: { id: 'new' }, case_id: 'case-a', old_session_id: 'old', route, voice: voices[route], active: true })
@@ -63,7 +63,7 @@ function fixture(apiPrefix?: string) {
       return audio
     },
     supported: () => true,
-    metering() { const meter = { disposed: 0, dispose() { this.disposed++ }, setInput() {}, setOutput() {} }; meters.push(meter); return meter },
+    metering(onLevels: (levels: { inputLevel: number; outputLevel: number }) => void) { const meter = { disposed: 0, dispose() { this.disposed++ }, setInput() {}, setOutput() {}, levels(inputLevel: number, outputLevel: number) { onLevels({ inputLevel, outputLevel }) } }; meters.push(meter); return meter },
   } as unknown as LiveRuntime
   const client = new LiveClient('case-a', 'ja', runtime, { apiPrefix })
   async function start(initialRoute: LiveRoute = 'reception') {
@@ -76,7 +76,7 @@ function fixture(apiPrefix?: string) {
   }
   async function readyCandidate() {
     await tick()
-    const peer = peers[1]
+    const peer = peers.at(-1)!
     assert.ok(peer.answer)
     peer.ontrack!({ streams: [stream] })
     peer.channel.onmessage!({ data: JSON.stringify({ type: 'session.started', session: { id: 'new' } }) })
@@ -329,4 +329,82 @@ test('a transient status failure during an active call preserves negotiated swit
     await f.client.refreshStatus()
     assert.equal(f.client.getSnapshot().switchConfigured, false)
   } finally { f.runtime.fetch = fetchApi; await f.client.stop(); f.client.dispose() }
+})
+
+function serverEvent(f: ReturnType<typeof fixture>, event: Record<string, unknown>) {
+  f.source.onmessage!({ data: JSON.stringify({ case_id: 'case-a', ...event }) })
+}
+const routedToHaas = { type: 'routing.updated', session_id: 'old', source_event_id: 'input-1', source: 'decisions', route: 'haas', language: 'ja' }
+
+test('confirmed routing switches voice once after backend result and actual speech become quiet', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const f = fixture(); await f.start()
+  try {
+    serverEvent(f, { ...routedToHaas, type: 'routing.candidate' })
+    t.mock.timers.tick(2000); await tick()
+    assert.equal(f.peers.length, 1)
+    serverEvent(f, routedToHaas)
+    serverEvent(f, { type: 'backend.started' })
+    f.meters[0].levels(0, .2)
+    t.mock.timers.tick(2000); await tick()
+    assert.equal(f.peers.length, 1, 'Backend work must finish first')
+    serverEvent(f, { type: 'backend.result', content: 'The verified answer' })
+    f.meters[0].levels(0, 0)
+    t.mock.timers.tick(2000); await tick()
+    assert.equal(f.peers.length, 1, 'Do not interrupt a result before any audio is observed')
+    f.meters[0].levels(0, .2); f.meters[0].levels(0, 0)
+    t.mock.timers.tick(1400); await tick()
+    assert.equal(f.peers.length, 1)
+    f.meters[0].levels(.2, 0)
+    t.mock.timers.tick(1400); await tick()
+    assert.equal(f.peers.length, 1, 'New caller speech postpones handoff')
+    f.meters[0].levels(0, 0)
+    t.mock.timers.tick(1500); await tick()
+    assert.equal(f.peers.length, 2)
+    assert.equal(f.calls.find(call => call.path.endsWith('/handoff'))!.body.automatic, true)
+    await f.readyCandidate(); await tick()
+    assert.equal(f.client.getSnapshot().voice, 'marin')
+    serverEvent(f, routedToHaas)
+    t.mock.timers.tick(5000); await tick()
+    assert.equal(f.peers.length, 2, 'Repeated routing event must not start another switch')
+    assert.equal(f.track.stopped, 0)
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+test('automatic busy retries are bounded and duplicate routing cannot reset the budget', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const f = fixture(); await f.start()
+  f.setHandoff(async () => Response.json({ error: 'still busy', code: 'busy' }, { status: 409 }))
+  try {
+    serverEvent(f, routedToHaas)
+    serverEvent(f, { type: 'backend.result', content: 'Ready' })
+    f.meters[0].levels(0, .2); f.meters[0].levels(0, 0)
+    for (let attempt = 0; attempt < 3; attempt++) { t.mock.timers.tick(1600); await tick() }
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 3)
+    serverEvent(f, routedToHaas)
+    t.mock.timers.tick(5000); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 3)
+    assert.equal(f.client.getSnapshot().phase, 'connected')
+    assert.equal(f.peers[0].closed, false)
+    assert.equal(f.track.stopped, 0)
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+test('manual selection and Stop cancel a pending automatic handoff', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const f = fixture(); await f.start()
+  try {
+    serverEvent(f, routedToHaas)
+    serverEvent(f, { type: 'backend.result', content: 'Ready' })
+    f.meters[0].levels(0, .2); f.meters[0].levels(0, 0)
+    await f.client.switchDepartment('reception')
+    t.mock.timers.tick(3000); await tick()
+    assert.equal(f.peers.length, 1)
+    serverEvent(f, { ...routedToHaas, source_event_id: 'input-2' })
+    serverEvent(f, { type: 'backend.result', content: 'Ready' })
+    f.meters[0].levels(0, .2); f.meters[0].levels(0, 0)
+    await f.client.stop()
+    t.mock.timers.tick(3000); await tick()
+    assert.equal(f.peers.length, 1)
+  } finally { await f.client.stop(); f.client.dispose() }
 })
