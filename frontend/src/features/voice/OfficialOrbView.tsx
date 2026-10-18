@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import type { AudioSignal } from './activity.ts'
 
 const Orb = lazy(() => import('./elevenlabs/Orb.tsx').then(module => ({ default: module.Orb })))
-const brandColors: [string, string] = ['#00757D', '#9ACFC2']
+const brandColors: [string, string] = ['#8198B8', '#9ACFC2']
 const fallback = <div className="voice-orb-static" />
 
 class OrbBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {

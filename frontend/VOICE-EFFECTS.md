@@ -1,6 +1,6 @@
 # 音声オーブ
 
-最新の統合・配色判断は [#97](https://github.com/pupuchan1/future-company/issues/97)。描画本体の採用は [#54](https://github.com/pupuchan1/future-company/issues/54)。ElevenLabs UIのOrbコンポーネント本体を無改変で採用しています。以前の独自シェーダー、生成ノイズ、外形変形、移動する独自焦点の実験は撤去しました。
+最新の統合・配色判断は [#100](https://github.com/pupuchan1/future-company/issues/100)。描画本体の採用は [#54](https://github.com/pupuchan1/future-company/issues/54)。ElevenLabs UIのOrbコンポーネント本体を無改変で採用しています。以前の独自シェーダー、生成ノイズ、外形変形、移動する独自焦点の実験は撤去しました。
 
 ## 出典と一致の確認
 
@@ -8,7 +8,7 @@
 - 固定commit: `3a28ebab197f8cfa599934f52db12ad1396e54f4`
 - 配置先: `src/features/voice/elevenlabs/Orb.tsx`
 - 元ファイルとのcmp一致、SHA256: `16fdb804e37c495806091d34712e689f89c02b4638bb173ab5bef5e5eac52b91`
-- Three.js / React Three Fiber / Drei、元のCDNノイズテクスチャ、元の数式を使用。seed=1000。配色は別チャットのユーザー追加指示を反映し、公開colors引数で青緑 `#00757D` / ミント `#9ACFC2` を指定。枠・静止fallbackも同系色に統一。
+- Three.js / React Three Fiber / Drei、元のCDNノイズテクスチャ、元の数式を使用。seed=1000。配色は最新のユーザー指示を反映し、公開colors引数で薄い紺 `#8198B8` / ミント `#9ACFC2` を指定。緑の明部を残し、陰影に紺を混ぜます。枠・静止fallbackも同系色に統一。
 - MIT / Copyright (c) 2025 Eleven Labs Inc. 許諾表示全文は同ディレクトリのLICENSE.mdと、配布される `public/licenses/elevenlabs-ui.txt` に同梱。
 
 ## アプリへの接続
@@ -40,4 +40,4 @@
 
 ## PR87との統合
 
-PR87の波・音量反応・会話状態を優先し、緑系ブランド配色と既存の会話画面導線を組み合わせます。公式本体、orbVolumes、conversation判定、グレー出力円の数式は変更しません。
+PR87の波・音量反応・会話状態を優先し、ミント#9ACFC2と薄い紺#8198B8の配色、既存の会話画面導線を組み合わせます。公式本体、orbVolumes、conversation判定、グレー出力円の数式は変更しません。
