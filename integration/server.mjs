@@ -11,6 +11,7 @@ import { LiveConversation, liveConfig } from './live-session.mjs';
 import { mcpCall } from './mcp-client.mjs';
 import { createCaseState, initialHistory, isVoiceRoute, voiceMap } from './case-state.mjs';
 import { WorkerBridge } from './worker-bridge.mjs';
+import { loadServerEnvironment } from './environment.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 function json(res, status, data) {
@@ -49,6 +50,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
   const emit = (event) => {
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const res of clients) {
+      if (res.destroyed || res.writableEnded) { clients.delete(res); continue; }
       if (!res.write(payload)) { clients.delete(res); res.end(); }
     }
   };
@@ -61,15 +63,16 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     onRetry: (diagnostic) => remember({ type: 'provider_retry', operation: 'live.create', ...diagnostic }),
   });
   function receiveHuman(event) {
-    emit({ ...event, type: event.name });
     const state = cases.get(event.data.case_id);
     if (!state || state.closed || event.isValid?.() === false) return Promise.resolve({ status: 'cancelled' });
+    emit({ ...event, type: event.name });
     const active = sessions.get(state.activeSessionId);
     if (state.switching || !active) return new Promise(resolve => state.pendingHumanEvents.push({ ...event, onProcessed: resolve }));
     return Promise.resolve(active.humanEvent(event));
   }
   const workerBridge = env.WORKER_API_URL ? new WorkerBridge({ url: env.WORKER_API_URL, token: env.STAFF_API_TOKEN,
-    accessClientId: env.WORKER_ACCESS_CLIENT_ID, accessClientSecret: env.WORKER_ACCESS_CLIENT_SECRET,
+    accessClientId: env.CF_ACCESS_CLIENT_ID || env.WORKER_ACCESS_CLIENT_ID,
+    accessClientSecret: env.CF_ACCESS_CLIENT_SECRET || env.WORKER_ACCESS_CLIENT_SECRET,
     fetcher: workerFetch, socketFactory: workerSocketFactory, deliver: receiveHuman, emit }) : null;
   const gateway = createHumanGateway({ token: env.HUMAN_MCP_TOKEN || '',
     handleEventRpc: (rpc) => events.handleRpc(rpc),
@@ -84,6 +87,18 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       if (workerBridge) {
         const route = state.handoffRoutes.get(event.data.handoff_id) || state.routing.route;
         void workerBridge.humanEvent(event, route).then(linked => {
+          if (state.closed || event.isValid?.() === false) return;
+          if (linked && ['human.requested', 'human.ringing', 'human.accepted'].includes(event.name)) {
+            const [record] = workerBridge.overlayRequests([event.data]);
+            const displayed = { ...event, data: record };
+            // A delayed device ACK must display the saved Worker answer without
+            // resuming the original Agent a second time.
+            if (['completed', 'cancelled', 'unavailable'].includes(record.status)) {
+              emit({ ...displayed, type: event.name });
+              return;
+            }
+            return receiveHuman(displayed);
+          }
           if (!linked || event.name !== 'human.completed' || !event.data.result) return receiveHuman(event);
         }).catch(() => emit({ type: 'worker.error', case_id: state.id, message: 'Human result was not saved or synchronized; no Agent success is confirmed.' }));
       } else void receiveHuman(event);
@@ -313,6 +328,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
   return { server, gateway, backend, events, async close() {
     workerBridge?.close();
     for (const res of clients) res.end();
+    clients.clear();
     await Promise.allSettled([...sessions.values()].map((session) => session.close()));
     await backend?.close(); await gateway.close(); await events.close();
     server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
@@ -320,6 +336,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  loadServerEnvironment(new URL('../', import.meta.url));
   const app = createIntegration();
   app.server.listen(Number(process.env.INTEGRATION_PORT || 4320), process.env.INTEGRATION_HOST || '127.0.0.1', () => {
     console.log(`Integration ready: http://127.0.0.1:${app.server.address().port}`);
