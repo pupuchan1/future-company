@@ -107,7 +107,7 @@ export class LiveConversation {
     this.standby = false;
     this.awaitFreshInput = automatic;
     this.send('session.instructions.append', { delegation_id: null,
-      content: `The department handoff is complete. You may speak now as ${this.voiceRoute}. Continue the supplied conversation without repeating completed actions. Keep speaking ${this.routing.language === 'en' ? 'English' : 'Japanese'}.${automatic ? ' This automatic change only selects the department voice. Do not restart the task, interview or human request. Wait for the caller or an incoming verified result before delegating again.' : ''}` });
+      content: `The department handoff is complete. You may speak now as ${this.voiceRoute}. Continue the supplied conversation without repeating completed actions. Keep speaking ${this.routing.language === 'en' ? 'English' : 'Japanese'}.${automatic ? ' This automatic change only selects the department voice. Do not restart the task, interview or human request. If a short introduction arrives as commentary, speak only that introduction verbatim and then listen. Do not add a question, repeat any previous question, summarize the conversation, or ask the caller to repeat their answer. The earlier assistant may already have asked the interview question; leave it unanswered for the caller. Wait for fresh caller speech or a new verified result before continuing or delegating again.' : ''}` });
     if (automatic && announceVoice && !this.activationAnnounced) {
       this.activationAnnounced = true;
       const names = this.routing.language === 'en'
