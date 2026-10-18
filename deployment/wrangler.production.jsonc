@@ -1,0 +1,29 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "future-company-demo",
+  "account_id": "a35a4c201dc020caa185829b1d74acbf",
+  "main": "./worker-entry.ts",
+  "compatibility_date": "2025-08-03",
+  "workers_dev": true,
+  "preview_urls": false,
+  // Match the existing namespace created through cf CLI.
+  "exports": { "CaseRoom": { "type": "durable-object", "storage": "sqlite" } },
+  "assets": {
+    "directory": "../frontend/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "CASES", "class_name": "CaseRoom" }]
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "future-company-demo",
+    "database_id": "5c48aef5-7f4a-4400-8822-a2ef79bf9eaa",
+    "migrations_dir": "../migrations"
+  }],
+  "vars": {
+    "NODE_RELAY_ORIGIN": "https://jamie-journey-redhead-smart.trycloudflare.com"
+  }
+}

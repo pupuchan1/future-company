@@ -1,0 +1,17 @@
+.voice-orb-stage{display:grid;justify-items:center;gap:8px;padding:16px 0 20px;min-width:0;color:#111}
+.voice-orb-art{position:relative;width:clamp(170px,19vw,220px);aspect-ratio:1;isolation:isolate}
+.voice-orb-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.voice-orb-surface{position:absolute;inset:18%;border:1px solid #00757d;border-radius:50%!important;overflow:hidden;clip-path:circle(50%)}
+.voice-orb-official{width:100%;height:100%}
+.voice-orb-static{width:100%;height:100%;border-radius:50%!important;background:radial-gradient(circle at 30% 25%,#fff,#def2f0 60%,#8198b8)}
+.voice-orb-status{font-size:.875rem;font-weight:600;line-height:1.6;margin:0;text-align:center;min-height:1.6em}
+.voice-orb-dock{position:fixed;z-index:40;right:24px;bottom:max(20px,env(safe-area-inset-bottom));display:grid;place-items:center;width:84px;height:84px;border:0;border-radius:50%!important;background:#fff;color:#111;padding:0;box-shadow:0 4px 20px #11111112;cursor:pointer}
+.voice-orb-dock[hidden]{display:none}
+.voice-orb-dock:focus-visible{outline:2px solid #00757d;outline-offset:4px}
+.voice-orb-dock .voice-orb-art{width:84px}
+@media(max-width:600px){.voice-orb-art{width:188px}.voice-orb-dock{right:16px;width:72px;height:72px}.voice-orb-dock .voice-orb-art{width:72px}}
+
+/* Waiting is intent, not fake output energy. Keep the official sphere intact. */
+.voice-orb-art[data-waiting="true"]::after{content:"";position:absolute;inset:12%;border:1px dotted #777b83;border-radius:50%;animation:orb-wait 1.8s ease-in-out infinite;pointer-events:none}
+@keyframes orb-wait{0%,100%{opacity:.25;transform:scale(.98)}50%{opacity:.7;transform:scale(1.03)}}
+@media(prefers-reduced-motion:reduce){.voice-orb-art[data-waiting="true"]::after{animation:none;opacity:.5}}

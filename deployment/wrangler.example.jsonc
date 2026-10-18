@@ -1,0 +1,31 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  // Copy into an ignored local file and select the EXISTING authorized account and Worker.
+  "name": "future-company-demo",
+  "account_id": "REPLACE_WITH_EXISTING_ACCOUNT_ID",
+  "main": "./worker-entry.ts",
+  "compatibility_date": "2025-08-03",
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "../frontend/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "CASES", "class_name": "CaseRoom" }]
+  },
+  "exports": { "CaseRoom": { "type": "durable-object", "storage": "sqlite" } },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "future-company-demo",
+    "database_id": "REPLACE_WITH_EXISTING_DATABASE_ID",
+    "migrations_dir": "../migrations"
+  }],
+  "vars": {
+    "NODE_RELAY_ORIGIN": "https://REPLACE_WITH_AUTHORIZED_RELAY_HOST"
+  }
+  // Secret: NODE_RELAY_SECRET; preserve existing STAFF_API_TOKEN and #19 settings.
+  // Access policies are managed separately: retain the existing owner-only policy.
+}

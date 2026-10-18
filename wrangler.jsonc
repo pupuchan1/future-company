@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "future-company",
+  "compatibility_date": "2025-08-03",
+  "main": "./src/index.tsx",
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/mcp"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "CASES", "class_name": "CaseRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CaseRoom"] }],
+  "d1_databases": [{ "binding": "DB", "database_name": "future-company", "migrations_dir": "migrations", "remote": false }]
+}

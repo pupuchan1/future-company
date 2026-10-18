@@ -1,0 +1,415 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { setImmediate as nextTurn } from 'node:timers/promises';
+import { WorkerBridge } from './worker-bridge.mjs';
+import { LiveConversation } from './live-session.mjs';
+import { issueBridgeProof } from '../src/backend/bridge-proof.ts';
+import { LiveEventReducer, putRequest, readHumanRequest } from '../frontend/src/features/live/events.ts';
+import { initialSnapshot } from '../frontend/src/features/live/types.ts';
+
+const token = 'test-server-credential-'.padEnd(64, 'a');
+const result = { text: '【模擬回答】TypeScriptを使います。', language: 'ja' };
+const requested = (caseId = 'case-one', id = 'handoff-one') => ({ name: 'human.requested', data: { case_id: caseId, handoff_id: id, summary: '開発環境を確認', task: '開発環境は？', target_role: 'Engineer', expected_result: '回答本文' } });
+const completed = (caseId = 'case-one', id = 'handoff-one') => ({ name: 'human.completed', data: { case_id: caseId, handoff_id: id, result, simulated: true } });
+
+function fixture({ deliver = async () => ({ status: 'live_submitted' }), conflict = false,
+  beforeRequest = () => {}, afterWrite = () => {} } = {}) {
+  const snapshots = new Map(['case-one', 'case-two'].map(id => [id, { id, revision: 0, status: 'active', requests: [] }]));
+  const calls = [];
+  const sockets = [];
+  const commands = new Map();
+  const events = [];
+  const deliveries = [];
+  const receipts = [];
+  const fetcher = async (url, options) => {
+    assert.equal(options.headers.Authorization, `Bearer ${token}`);
+    assert.equal(options.redirect, 'error');
+    const path = url.pathname.slice('/api/v1'.length);
+    const body = options.body ? JSON.parse(options.body) : null;
+    calls.push({ path, body });
+    const id = body?.caseId || path.match(/^\/staff\/cases\/([^/]+)/)?.[1];
+    const state = snapshots.get(id);
+    const error = (status, title) => Response.json({ title }, { status, headers: { 'Content-Type': 'application/problem+json' } });
+    if (!state) return error(404, 'case_not_found');
+    await beforeRequest({ path, body, state });
+    if (!body) return Response.json({ case: structuredClone(state) });
+    const old = commands.get(`${id}:${body.commandId}`);
+    const fingerprint = JSON.stringify({ ...body, expectedRevision: undefined });
+    if (old) return old.fingerprint === fingerprint ? Response.json({ case: old.snapshot }) : error(409, 'idempotency_conflict');
+    if (conflict && path.endsWith('/handoffs')) { conflict = false; state.revision++; return error(409, 'revision_conflict'); }
+    if (body.expectedRevision !== state.revision) return error(409, 'revision_conflict');
+    if (path.endsWith('/handoffs')) {
+      state.requests.push({ id: `request-${body.handoffId}`, status: 'pending', origin: { nodeCaseId: body.nodeCaseId, handoffId: body.handoffId,
+        route: body.route, targetRole: body.targetRole, expectedResult: body.expectedResult }, summary: body.summary, question: body.task });
+    } else if (path.endsWith('/claim')) {
+      const request = state.requests.find(r => path.includes(`/${r.id}/`));
+      if (request.status !== 'pending') return error(409, 'already_claimed');
+      request.status = 'claimed'; request.assignedTo = 'demo-staff';
+    } else if (path.endsWith('/answer')) {
+      const request = state.requests.find(r => path.includes(`/${r.id}/`));
+      if (request.status !== 'claimed') return error(409, 'claim_required');
+      request.status = 'answered'; request.result = body.result; request.simulated = body.simulated;
+      request.delivery = { status: 'pending' };
+    } else if (path.endsWith('/cancel')) {
+      state.requests.find(r => path.includes(`/${r.origin.handoffId}/`)).status = 'cancelled';
+    } else if (path.endsWith('/delivery')) {
+      const request = state.requests.find(r => path.includes(`/${r.origin.handoffId}/`));
+      if (request.status !== 'answered') return error(409, 'answer_required');
+      if (body.status === 'queued' && request.delivery?.status !== 'pending') return error(409, 'delivery_in_progress');
+      request.delivery = { status: body.status };
+    } else throw new Error(`Unexpected external endpoint ${path}`);
+    state.revision++;
+    const snapshot = structuredClone(state);
+    commands.set(`${id}:${body.commandId}`, { fingerprint, snapshot });
+    await afterWrite({ path, body, state });
+    return Response.json({ case: snapshot });
+  };
+  const bridge = new WorkerBridge({ url: 'http://127.0.0.1:8787', token, fetcher,
+    socketFactory: (url, options) => {
+      assert.equal(url.protocol, 'ws:'); assert.equal(options.headers.Authorization, `Bearer ${token}`);
+      const socket = new EventEmitter(); socket.readyState = 1; socket.close = () => { socket.closed = true; };
+      sockets.push(socket); return socket;
+    }, deliver: async event => { deliveries.push(event); return deliver(event); },
+    emit: event => { events.push(event); if (event.type === 'worker.delivery') receipts.splice(0).forEach(resolve => resolve(event)); },
+  });
+  const receipt = () => new Promise(resolve => receipts.push(resolve));
+  const attach = async (id = 'case-one') => { const proof = await issueBridgeProof(id, token); await bridge.attachCase(id, proof); return proof; };
+  return { bridge, calls, events, deliveries, sockets, snapshots, receipt, attach };
+}
+
+test('phone result is saved through claim/revision then forwarded once to its original route', async () => {
+  const f = fixture({ conflict: true });
+  const proof = await f.attach();
+  await f.bridge.humanEvent(requested(), 'recruiting');
+  const receipt = f.receipt();
+  await f.bridge.humanEvent(completed(), 'haas');
+  assert.equal((await receipt).status, 'live_submitted');
+  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.deliveries[0].data.source_route, 'recruiting');
+  assert.deepEqual(f.deliveries[0].data.result, result);
+  assert.equal(f.deliveries[0].data.simulated, true);
+  const writes = f.calls.filter(call => call.body).map(call => call.path);
+  assert.ok(writes.findIndex(path => path.endsWith('/claim')) < writes.findIndex(path => path.endsWith('/answer')));
+  assert.ok(writes.findIndex(path => path.endsWith('/answer')) < writes.findIndex(path => path.endsWith('/delivery')));
+  await f.bridge.humanEvent(completed(), 'haas');
+  await f.bridge.syncCase('case-one', proof);
+  f.sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'case.snapshot', snapshot: f.snapshots.get('case-one') })));
+  await nextTurn();
+  assert.equal(f.deliveries.length, 1);
+  f.bridge.close();
+  assert.equal(f.sockets[0].closed, true);
+});
+
+test('proof, unknown case and wrong snapshot cannot deliver another caller result', async () => {
+  const f = fixture();
+  const proof = await f.attach();
+  await assert.rejects(f.bridge.attachCase('case-two', proof), { status: 403 });
+  await assert.rejects(f.bridge.syncCase('case-two', proof), { status: 403 });
+  assert.equal(await f.bridge.humanEvent(completed('case-two'), 'haas'), false);
+  f.sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'case.snapshot', snapshot: { id: 'case-two', requests: [{ status: 'answered', result, simulated: true }] } })));
+  await nextTurn();
+  assert.equal(f.deliveries.length, 0);
+  f.bridge.close();
+});
+
+test('cancel arriving during the first registration invalidates a late result', async () => {
+  const f = fixture();
+  await f.attach();
+  const register = f.bridge.humanEvent(requested(), 'haas');
+  const cancel = f.bridge.humanEvent({ name: 'human.cancelled', data: { case_id: 'case-one', handoff_id: 'handoff-one' } }, 'haas');
+  await Promise.all([register, cancel]);
+  await f.bridge.humanEvent(completed(), 'haas');
+  assert.equal(f.snapshots.get('case-one').requests[0].status, 'cancelled');
+  assert.equal(f.deliveries.length, 0);
+  f.bridge.close();
+});
+
+test('queued voice-switch delivery can be invalidated without a second Agent call', async () => {
+  let resolveDelivery;
+  let received;
+  const waiting = new Promise(resolve => { received = resolve; });
+  const f = fixture({ deliver: event => { received(event); return new Promise(resolve => { resolveDelivery = resolve; }); } });
+  await f.attach();
+  await f.bridge.humanEvent(requested(), 'recruiting');
+  await f.bridge.humanEvent(completed(), 'haas');
+  const event = await waiting;
+  assert.equal(event.isValid(), true);
+  await f.bridge.humanEvent({ name: 'human.cancelled', data: { case_id: 'case-one', handoff_id: 'handoff-one' } }, 'haas');
+  assert.equal(event.isValid(), false);
+  resolveDelivery({ status: 'cancelled' });
+  await nextTurn();
+  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.snapshots.get('case-one').requests[0].status, 'cancelled');
+  f.bridge.close();
+});
+
+test('an employee saved answer remains authoritative and thrown delivery records failure', async () => {
+  const f = fixture({ deliver: async () => { throw new Error('Provider credentials must not be logged'); } });
+  await f.attach();
+  await f.bridge.humanEvent(requested(), 'haas');
+  const state = f.snapshots.get('case-one');
+  Object.assign(state.requests[0], { status: 'answered', result: { text: 'Employee answer', language: 'en' }, simulated: false, delivery: { status: 'pending' } });
+  const receipt = f.receipt();
+  await f.bridge.humanEvent(completed(), 'haas');
+  assert.equal((await receipt).status, 'failed');
+  assert.equal(f.deliveries[0].data.result.text, 'Employee answer');
+  assert.equal(f.deliveries[0].data.simulated, false);
+  assert.equal(f.calls.filter(call => call.path.endsWith('/answer')).length, 0);
+  assert.equal(JSON.stringify(f.events).includes('credentials'), false);
+  f.bridge.close();
+});
+
+test('closed case releases a connecting socket and cannot re-sync or send a late answer', async () => {
+  const f = fixture();
+  const proof = await f.attach();
+  f.sockets[0].readyState = 0;
+  f.sockets[0].terminate = () => { f.sockets[0].terminated = true; };
+  f.bridge.closeCase('case-one');
+  assert.equal(f.sockets[0].terminated, true);
+  await assert.rejects(f.bridge.syncCase('case-one', proof), { status: 403 });
+  assert.equal(await f.bridge.humanEvent(completed(), 'recruiting'), false);
+});
+
+test('explicit synchronization retries a failed reservation before Agent delivery, but repeated snapshots do not', async () => {
+  let fail = true;
+  const f = fixture({ beforeRequest: ({ body }) => {
+    if (body?.status === 'queued' && fail) { fail = false; throw new Error('Synthetic reservation failure'); }
+  } });
+  const proof = await f.attach();
+  await f.bridge.humanEvent(requested(), 'recruiting');
+  await f.bridge.humanEvent(completed(), 'haas');
+  await f.bridge.cases.get('case-one').deliveries.get('handoff-one');
+  assert.equal(f.snapshots.get('case-one').requests[0].delivery.status, 'pending');
+  assert.equal(f.deliveries.length, 0);
+  const snapshot = { type: 'case.snapshot', snapshot: f.snapshots.get('case-one') };
+  f.sockets[0].emit('message', Buffer.from(JSON.stringify(snapshot)));
+  await f.bridge.cases.get('case-one').queue;
+  assert.equal(f.calls.filter(call => call.body?.status === 'queued').length, 1);
+  const receipt = f.receipt();
+  assert.equal((await f.bridge.syncCase('case-one', proof)).status, 'accepted');
+  assert.equal((await receipt).status, 'live_submitted');
+  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.deliveries[0].data.source_route, 'recruiting');
+  await f.bridge.syncCase('case-one', proof);
+  assert.equal(f.deliveries.length, 1);
+  f.bridge.close();
+});
+
+test('lost queued-write response can be explicitly recovered with the original command without a second delivery', async () => {
+  let loseResponse = true;
+  const f = fixture({ afterWrite: ({ body }) => {
+    if (body.status === 'queued' && loseResponse) { loseResponse = false; throw new Error('Synthetic lost reservation response'); }
+  } });
+  const proof = await f.attach();
+  await f.bridge.humanEvent(requested(), 'haas');
+  await f.bridge.humanEvent(completed(), 'haas');
+  await f.bridge.cases.get('case-one').deliveries.get('handoff-one');
+  assert.equal(f.snapshots.get('case-one').requests[0].delivery.status, 'queued');
+  assert.equal(f.deliveries.length, 0);
+  const receipt = f.receipt();
+  await f.bridge.syncCase('case-one', proof);
+  assert.equal((await receipt).status, 'live_submitted');
+  const reservations = f.calls.filter(call => call.body?.status === 'queued');
+  assert.equal(reservations.length, 2);
+  assert.equal(reservations[0].body.commandId, reservations[1].body.commandId);
+  assert.equal(f.deliveries.length, 1);
+  f.bridge.close();
+});
+
+test('an ambiguous final receipt failure never repeats an already invoked Agent delivery', async () => {
+  const f = fixture({ beforeRequest: ({ body }) => {
+    if (body?.status === 'live_submitted') throw new Error('Synthetic receipt failure');
+  } });
+  const proof = await f.attach();
+  await f.bridge.humanEvent(requested(), 'haas');
+  await f.bridge.humanEvent(completed(), 'haas');
+  await f.bridge.cases.get('case-one').deliveries.get('handoff-one');
+  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.snapshots.get('case-one').requests[0].delivery.status, 'queued');
+  await f.bridge.syncCase('case-one', proof);
+  const stale = structuredClone(f.snapshots.get('case-one'));
+  stale.requests[0].delivery.status = 'pending';
+  f.sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'case.snapshot', snapshot: stale })));
+  await f.bridge.cases.get('case-one').queue;
+  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.calls.filter(call => call.body?.status === 'queued').length, 1);
+  f.bridge.close();
+});
+
+test('Worker cancellation snapshot invalidates a result while its Agent is pending', async () => {
+  let received, started, finish;
+  const arrived = new Promise(resolve => { started = resolve; });
+  const pending = new Promise(resolve => { finish = resolve; });
+  const sent = [], turns = [];
+  // Use the real Live delivery path without constructing a provider connection.
+  const live = Object.assign(Object.create(LiveConversation.prototype), {
+    id: 'live-review', caseId: 'case-one', routing: { route: 'haas', language: 'en' },
+    history: [], seen: new Set(), queue: Promise.resolve(), closed: false,
+    emit() {}, handoffs: () => [], send: (...args) => { sent.push(args); return true; },
+    backend: { run: async args => { turns.push(args); started(); return pending; } },
+  });
+  const f = fixture({ deliver: event => { received = event; return live.humanEvent(event); } });
+  await f.attach();
+  await f.bridge.humanEvent(requested(), 'recruiting');
+  await f.bridge.humanEvent(completed(), 'haas');
+  await arrived;
+  assert.equal(received.isValid(), true);
+  assert.equal(turns[0].route, 'recruiting');
+  assert.equal(turns[0].language, 'en');
+  const state = f.snapshots.get('case-one');
+  state.requests[0].status = 'cancelled';
+  f.sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'case.snapshot', snapshot: state })));
+  assert.equal(received.isValid(), false);
+  const overlay = f.bridge.overlayRequests([{ case_id: 'case-one', handoff_id: 'handoff-one', status: 'accepted', revision: 3 }]);
+  assert.equal(overlay[0].status, 'cancelled');
+  assert.equal(overlay[0].result, undefined);
+  finish('This cancelled answer must not reach Live.');
+  await f.bridge.cases.get('case-one').deliveries.get('handoff-one');
+  assert.equal(f.events.filter(item => item.type === 'worker.delivery').length, 0);
+  assert.equal(f.calls.filter(call => call.body?.status === 'live_submitted').length, 0);
+  assert.equal(turns.length, 1);
+  assert.equal(sent.length, 0);
+  f.bridge.close();
+});
+
+test('a saved phone completion carries provenance and a new revision accepted by the real frontend reducer', async () => {
+  const f = fixture();
+  await f.attach();
+  const first = requested();
+  Object.assign(first.data, { revision: 1, status: 'requested', device_id: 'black-phone-1', audio_connected: false,
+    created_at: '2026-10-18T06:00:00Z', updated_at: '2026-10-18T06:00:00Z' });
+  await f.bridge.humanEvent(first, 'recruiting');
+  const accepted = { name: 'human.accepted', eventId: 'pickup', data: { ...first.data, status: 'accepted', revision: 3 } };
+  await f.bridge.humanEvent(accepted, 'haas');
+  const receipt = f.receipt();
+  const done = completed();
+  done.data = { ...first.data, ...done.data, revision: 4, status: 'completed', source_route: 'haas' };
+  await f.bridge.humanEvent(done, 'haas');
+  await receipt;
+  const event = f.deliveries[0];
+  assert.equal(event.data.revision, 5);
+  assert.equal(event.data.device_id, 'black-phone-1');
+  assert.equal(event.data.created_at, first.data.created_at);
+  assert.equal(typeof event.data.updated_at, 'string');
+  assert.equal(event.data.audio_connected, false);
+  assert.equal(event.data.source_route, 'recruiting');
+  const reducer = new LiveEventReducer();
+  const waiting = reducer.apply(initialSnapshot('case-one', 'ja'), accepted, 'server');
+  const finished = reducer.apply(waiting, event, 'server');
+  assert.equal(finished.requests[0].status, 'completed');
+  assert.deepEqual(finished.requests[0].result, result);
+  assert.equal(f.deliveries.length, 1);
+  f.bridge.close();
+});
+
+test('a later gateway response cannot replace an earlier saved staff answer in status or verified handoffs', async () => {
+  const f = fixture();
+  await f.attach();
+  const first = requested();
+  first.data = { ...first.data, status: 'requested', revision: 1, device_id: 'black-phone-1' };
+  await f.bridge.humanEvent(first, 'recruiting');
+  const accepted = { name: 'human.accepted', eventId: 'pickup', data: { ...first.data, status: 'accepted', revision: 3 } };
+  await f.bridge.humanEvent(accepted, 'haas');
+  const state = f.snapshots.get('case-one');
+  const staffResult = { text: 'The saved employee answer is authoritative.', language: 'en' };
+  Object.assign(state.requests[0], { status: 'answered', result: staffResult, simulated: false, delivery: { status: 'pending' } });
+  const receipt = f.receipt();
+  f.sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'case.snapshot', snapshot: state })));
+  await receipt;
+  assert.equal(f.deliveries[0].data.revision, 4);
+  const later = completed();
+  later.data = { ...first.data, ...later.data, status: 'completed', revision: 4, source_route: 'haas',
+    result: { text: 'A different phone answer must not replace the employee.', language: 'ja' } };
+  await f.bridge.humanEvent(later, 'haas');
+  const [official] = f.bridge.overlayRequests([later.data]);
+  assert.equal(official.revision, 5);
+  assert.deepEqual(official.result, staffResult);
+  assert.equal(official.simulated, false);
+  assert.equal(official.source_route, 'recruiting');
+  const reducer = new LiveEventReducer();
+  const waiting = reducer.apply(initialSnapshot('case-one', 'en'), accepted, 'server');
+  const completedUi = reducer.apply(waiting, f.deliveries[0], 'server');
+  const refreshed = putRequest(completedUi, readHumanRequest(official, 'case-one'));
+  assert.equal(refreshed.requests[0].status, 'completed');
+  assert.deepEqual(refreshed.requests[0].result, staffResult);
+  official.result.text = 'Caller mutation';
+  assert.deepEqual(f.bridge.overlayRequests([later.data])[0].result, staffResult);
+  const foreign = { ...later.data, case_id: 'case-two', source: 'worker', source_route: 'recruiting' };
+  assert.equal(f.bridge.overlayRequests([foreign])[0], foreign);
+  assert.equal(f.deliveries.length, 1);
+  f.bridge.closeCase('case-one');
+  assert.equal(f.bridge.overlayRequests([later.data])[0], later.data);
+  f.bridge.close();
+});
+
+test('cached Worker result survives stale snapshots and a failed reservation without exposing an unsaved phone answer', async () => {
+  const f = fixture({ beforeRequest: ({ body }) => {
+    if (body?.status === 'queued') throw new Error('Synthetic reservation failure');
+  } });
+  await f.attach();
+  const first = requested();
+  first.data = { ...first.data, status: 'requested', revision: 1, device_id: 'black-phone-1' };
+  await f.bridge.humanEvent(first, 'recruiting');
+  const raw = { ...first.data, status: 'completed', revision: 4, result };
+  const [pending] = f.bridge.overlayRequests([raw]);
+  assert.equal(pending.status, 'requested');
+  assert.equal(pending.result, undefined);
+  await f.bridge.humanEvent({ name: 'human.accepted', data: { ...first.data, status: 'accepted', revision: 100 } }, 'haas');
+  const snapshot = f.snapshots.get('case-one');
+  const answer = { text: 'Saved employee answer before dispatch.', language: 'en' };
+  Object.assign(snapshot.requests[0], { status: 'answered', result: answer, simulated: false, delivery: { status: 'pending' } });
+  snapshot.revision++;
+  f.sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'case.snapshot', snapshot })));
+  await f.bridge.cases.get('case-one').deliveries.get('handoff-one');
+  assert.equal(f.deliveries.length, 0);
+  const stale = { ...raw, revision: 101, source_route: 'haas' };
+  const [official] = f.bridge.overlayRequests([stale]);
+  assert.ok(official.revision > stale.revision);
+  assert.equal(official.source_route, 'recruiting');
+  assert.equal(official.task, first.data.task);
+  assert.equal(official.target_role, first.data.target_role);
+  assert.equal(official.expected_result, first.data.expected_result);
+  assert.deepEqual(official.result, answer);
+  assert.equal(official.simulated, false);
+  assert.equal(official.worker_revision, snapshot.revision);
+  f.sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'case.snapshot', snapshot: { id: 'case-one', revision: 0, requests: [] } })));
+  assert.deepEqual(f.bridge.overlayRequests([stale])[0].result, answer);
+  assert.equal(f.bridge.overlayRequests([stale])[0].worker_revision, snapshot.revision);
+  f.bridge.close();
+});
+
+test('Cloudflare Access headers are limited to the configured HTTPS Worker for both HTTP and WebSocket', async () => {
+  const access = { accessClientId: 'fixture-id.access', accessClientSecret: 'fixture-secret' };
+  const proof = await issueBridgeProof('case-one', token);
+  for (const url of ['https://worker.example.invalid', 'http://127.0.0.1:8787']) {
+    const secure = new URL(url).protocol === 'https:';
+    const calls = [];
+    const check = (target, options) => {
+      assert.equal(target.host, new URL(url).host);
+      assert.equal(options.headers.Authorization, `Bearer ${token}`);
+      assert.equal(options.headers['CF-Access-Client-Id'], secure ? access.accessClientId : undefined);
+      assert.equal(options.headers['CF-Access-Client-Secret'], secure ? access.accessClientSecret : undefined);
+      calls.push(target.protocol);
+    };
+    const bridge = new WorkerBridge({ url, token, ...access, deliver: async () => ({ status: 'live_submitted' }),
+      fetcher: async (target, options) => {
+        check(target, options);
+        assert.equal(options.redirect, 'error');
+        return Response.json({ case: { id: 'case-one', revision: 0, status: 'active', requests: [] } });
+      }, socketFactory: (target, options) => {
+        check(target, options);
+        assert.equal(options.followRedirects, false);
+        const socket = new EventEmitter(); socket.close = () => {};
+        return socket;
+      },
+    });
+    try {
+      await bridge.attachCase('case-one', proof);
+      await bridge.syncCase('case-one', proof);
+      assert.deepEqual(calls, secure ? ['https:', 'wss:', 'https:'] : ['http:', 'ws:', 'http:']);
+    } finally { bridge.close(); }
+  }
+  assert.throws(() => new WorkerBridge({ url: 'https://worker.example.invalid', token,
+    accessClientId: access.accessClientId }), /both server-only credentials/);
+});
