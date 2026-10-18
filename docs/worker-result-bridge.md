@@ -6,6 +6,8 @@ Issue #19のNodeとWorkerの接続契約。人間依頼が発生した`case_id`�
 
 Node用のルート`.env.local`へ設定する。秘密値は`VITE_`変数へ置かない。
 
+起動処理は既存のシェル変数、`.env.local`、`.env`の順に優先する。ユーザーが`.env`へAPIキーだけを貼った場合も、Node側だけで`OPENAI_API_KEY`の代わりとして読み込む。既存のキーを上書きせず、元ファイルも変更しない。複数の設定を置く場合は通常の`NAME=value`形式を使う。
+
 ```dotenv
 WORKER_API_URL=http://127.0.0.1:8787
 STAFF_API_TOKEN=

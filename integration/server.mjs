@@ -11,6 +11,7 @@ import { LiveConversation, liveConfig } from './live-session.mjs';
 import { mcpCall } from './mcp-client.mjs';
 import { createCaseState, initialHistory, isVoiceRoute, voiceMap } from './case-state.mjs';
 import { WorkerBridge } from './worker-bridge.mjs';
+import { loadServerEnvironment } from './environment.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 function json(res, status, data) {
@@ -58,9 +59,9 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
   const backend = provider ? new BusinessBackend({ client: provider, mcpUrl: env.HUMAN_MCP_URL,
     token: env.HUMAN_MCP_TOKEN, model: env.AGENT_MODEL || 'gpt-6.1-sol', emit, remember }) : null;
   function receiveHuman(event) {
-    emit({ ...event, type: event.name });
     const state = cases.get(event.data.case_id);
     if (!state || state.closed || event.isValid?.() === false) return Promise.resolve({ status: 'cancelled' });
+    emit({ ...event, type: event.name });
     const active = sessions.get(state.activeSessionId);
     if (state.switching || !active) return new Promise(resolve => state.pendingHumanEvents.push({ ...event, onProcessed: resolve }));
     return Promise.resolve(active.humanEvent(event));
@@ -81,7 +82,18 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       if (workerBridge) {
         const route = state.handoffRoutes.get(event.data.handoff_id) || state.routing.route;
         void workerBridge.humanEvent(event, route).then(linked => {
-          if (!linked || event.name !== 'human.completed') return receiveHuman(event);
+          if (!linked) return receiveHuman(event);
+          if (event.name === 'human.completed') {
+            if (!event.data.result && !workerBridge.requests(state.id, [event.data])[0]?.result) return receiveHuman(event);
+            return;
+          }
+          const data = ['human.requested', 'human.ringing', 'human.accepted'].includes(event.name)
+            ? workerBridge.requests(state.id, [event.data])[0] : event.data;
+          if (data.status === 'completed' && event.name !== 'human.completed') {
+            emit({ ...event, name: 'human.completed', type: 'human.completed', data });
+            return;
+          }
+          return receiveHuman({ ...event, data });
         }).catch(() => emit({ type: 'worker.error', case_id: state.id, message: 'Human result was not saved or synchronized; no Agent success is confirmed.' }));
       } else void receiveHuman(event);
     },
@@ -116,7 +128,10 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     const session = new LiveConversation({ id, caseId: state.id, language: state.routing.language,
       apiKey: env.OPENAI_API_KEY, backend, emit, caseState: state, route, standby,
       socketFactory, closeTimeoutMs,
-      handoffs: () => gateway.service.listRequests().filter((record) => record.case_id === state.id),
+      handoffs: () => {
+        const records = gateway.service.listRequests().filter(record => record.case_id === state.id);
+        return workerBridge ? workerBridge.requests(state.id, records) : records;
+      },
       onClosing: (closingId, { preserveCase }) => {
         if (!preserveCase) {
           state.closed = true;
@@ -147,9 +162,9 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       const path = new URL(req.url, 'http://localhost').pathname;
       if (req.method === 'GET' && path === '/api/status') return json(res, 200, {
         live_configured: Boolean(provider), mcp_configured: Boolean(env.HUMAN_MCP_URL),
-        devices: gateway.service.listDevices(), requests: gateway.service.listRequests(),
+        devices: gateway.service.listDevices(), requests: workerBridge ? workerBridge.records(gateway.service.listRequests()) : gateway.service.listRequests(),
         decisions_enabled: env.LIVE_DECISIONS_ENABLED !== 'false',
-        handoff_configured: true, voice_map: voiceMap,
+        handoff_configured: true, voice_map: voiceMap, worker_bridge_configured: Boolean(workerBridge),
       });
       if (req.method === 'GET' && path === '/api/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
@@ -316,6 +331,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  loadServerEnvironment(new URL('../', import.meta.url));
   const app = createIntegration();
   app.server.listen(Number(process.env.INTEGRATION_PORT || 4320), process.env.INTEGRATION_HOST || '127.0.0.1', () => {
     console.log(`Integration ready: http://127.0.0.1:${app.server.address().port}`);

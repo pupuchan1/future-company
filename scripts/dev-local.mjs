@@ -1,10 +1,9 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { loadServerEnvironment } from "../integration/environment.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const envFile = fileURLToPath(new URL("../.env.local", import.meta.url));
-if (existsSync(envFile)) process.loadEnvFile(envFile);
+loadServerEnvironment(new URL("../", import.meta.url));
 const npm = process.env.npm_execpath;
 if (!npm) throw new Error("Start with npm run dev.");
 const children = new Set();
