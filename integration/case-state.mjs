@@ -2,8 +2,8 @@ export const voiceMap = Object.freeze({ reception: 'shida', recruiting: 'harema'
 export const isVoiceRoute = (route) => Object.hasOwn(voiceMap, route);
 
 // Business context belongs to a case, not to an individual voice transport.
-export function createCaseState(id, language = 'ja', route = 'reception', languagePreference = 'auto') {
-  return { id, languagePreference, routing: { route, language: languagePreference === 'auto' ? language : languagePreference }, history: [], seen: new Set(), handoffRoutes: new Map(),
+export function createCaseState(id, language = 'ja', route = 'reception') {
+  return { id, routing: { route, language }, history: [], seen: new Set(), handoffRoutes: new Map(),
     pendingHumanEvents: [], deferredDelegations: new Set(), activeSessionId: null, switching: null, closed: false };
 }
 

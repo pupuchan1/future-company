@@ -59,6 +59,9 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
   const provider = client || (env.OPENAI_API_KEY ? new OpenAI({ apiKey: env.OPENAI_API_KEY, maxRetries: 0, timeout: 30000 }) : null);
   const backend = provider ? new BusinessBackend({ client: provider, mcpUrl: env.HUMAN_MCP_URL,
     token: env.HUMAN_MCP_TOKEN, model: env.AGENT_MODEL || 'gpt-6.1-sol', emit, remember }) : null;
+  const createLive = (input) => retryConnection(() => provider.live.create(input), {
+    onRetry: (diagnostic) => remember({ type: 'provider_retry', operation: 'live.create', ...diagnostic }),
+  });
   function receiveHuman(event) {
     const state = cases.get(event.data.case_id);
     if (!state || state.closed || event.isValid?.() === false) return Promise.resolve({ status: 'cancelled' });
@@ -71,9 +74,6 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     accessClientId: env.CF_ACCESS_CLIENT_ID || env.WORKER_ACCESS_CLIENT_ID,
     accessClientSecret: env.CF_ACCESS_CLIENT_SECRET || env.WORKER_ACCESS_CLIENT_SECRET,
     fetcher: workerFetch, socketFactory: workerSocketFactory, deliver: receiveHuman, emit }) : null;
-  const createLive = (input) => retryConnection(() => provider.live.create(input), {
-    onRetry: (diagnostic) => remember({ type: 'provider_retry', operation: 'live.create', ...diagnostic }),
-  });
   const gateway = createHumanGateway({ token: env.HUMAN_MCP_TOKEN || '',
     handleEventRpc: (rpc) => events.handleRpc(rpc),
     onEvent: (event) => {
@@ -88,23 +88,27 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         const route = state.handoffRoutes.get(event.data.handoff_id) || state.routing.route;
         void workerBridge.humanEvent(event, route).then(linked => {
           if (state.closed || event.isValid?.() === false) return;
-          if (!linked) return receiveHuman(event);
-          if (event.name === 'human.completed') {
-            if (!event.data.result && !workerBridge.requests(state.id, [event.data])[0]?.result) return receiveHuman(event);
-            return;
+          if (linked && ['human.requested', 'human.ringing', 'human.accepted'].includes(event.name)) {
+            const [record] = workerBridge.overlayRequests([event.data]);
+            const displayed = { ...event, data: record };
+            // A delayed device ACK must display the saved Worker answer without
+            // resuming the original Agent a second time.
+            if (['completed', 'cancelled', 'unavailable'].includes(record.status)) {
+              emit({ ...displayed, type: event.name });
+              return;
+            }
+            return receiveHuman(displayed);
           }
-          const data = ['human.requested', 'human.ringing', 'human.accepted'].includes(event.name)
-            ? workerBridge.requests(state.id, [event.data])[0] : event.data;
-          if (['completed', 'cancelled', 'unavailable'].includes(data.status)) {
-            emit({ ...event, type: event.name, data });
-            return;
-          }
-          return receiveHuman({ ...event, data });
+          if (!linked || event.name !== 'human.completed' || !event.data.result) return receiveHuman(event);
         }).catch(() => emit({ type: 'worker.error', case_id: state.id, message: 'Human result was not saved or synchronized; no Agent success is confirmed.' }));
       } else void receiveHuman(event);
     },
     onError: () => emit({ type: 'mcp.error', message: 'MCP transport error.' }),
   });
+  function currentHumanRequests() {
+    const records = gateway.service.listRequests();
+    return workerBridge ? workerBridge.overlayRequests(records) : records;
+  }
   function drainHuman(state) {
     const active = sessions.get(state.activeSessionId);
     if (!active || state.closed || state.switching) return 0;
@@ -134,10 +138,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     const session = new LiveConversation({ id, caseId: state.id, language: state.routing.language,
       apiKey: env.OPENAI_API_KEY, backend, emit, caseState: state, route, standby,
       socketFactory, closeTimeoutMs,
-      handoffs: () => {
-        const records = gateway.service.listRequests().filter(record => record.case_id === state.id);
-        return workerBridge ? workerBridge.requests(state.id, records) : records;
-      },
+      handoffs: () => currentHumanRequests().filter((record) => record.case_id === state.id),
       onClosing: (closingId, { preserveCase }) => {
         if (!preserveCase) {
           state.closed = true;
@@ -168,9 +169,9 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       const path = new URL(req.url, 'http://localhost').pathname;
       if (req.method === 'GET' && path === '/api/status') return json(res, 200, {
         live_configured: Boolean(provider), mcp_configured: Boolean(env.HUMAN_MCP_URL),
-        devices: gateway.service.listDevices(), requests: workerBridge ? workerBridge.records(gateway.service.listRequests()) : gateway.service.listRequests(),
+        devices: gateway.service.listDevices(), requests: currentHumanRequests(),
         decisions_enabled: env.LIVE_DECISIONS_ENABLED !== 'false',
-        handoff_configured: true, voice_map: voiceMap, worker_bridge_configured: Boolean(workerBridge),
+        handoff_configured: true, voice_map: voiceMap,
       });
       if (req.method === 'GET' && path === '/api/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
@@ -192,10 +193,10 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         if (!provider || !backend?.mcpUrl) return json(res, 503, { error: 'Server-side API key and HUMAN_MCP_URL are required.' });
         const input = await body(req);
         if (typeof input.sdp !== 'string' || !input.sdp.startsWith('v=0')) return json(res, 400, { error: 'A WebRTC SDP offer is required.' });
-        if (input.language_preference !== undefined && !['auto', 'ja', 'en'].includes(input.language_preference)) return json(res, 400, { error: 'Unsupported language preference.' });
         if (input.route !== undefined && !isVoiceRoute(input.route)) return json(res, 400, { error: 'Unknown voice department.', code: 'invalid_route' });
         const route = input.route || 'reception';
-        const languagePreference = input.language_preference ?? 'auto';
+        if (input.language_preference !== undefined && !['auto', 'ja', 'en'].includes(input.language_preference)) return json(res, 400, { error: 'Invalid language preference.' });
+        const languagePreference = input.language_preference || 'auto';
         const language = languagePreference === 'auto' ? (input.language === 'en' ? 'en' : 'ja') : languagePreference;
         const caseId = identifier(input.case_id) ? input.case_id : `case-${randomUUID()}`;
         if (cases.size + pendingCreates >= 3) return json(res, 429, { error: 'Close an existing session first.' });
@@ -207,7 +208,8 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
           const result = await createLive({ session: liveConfig({ model: env.LIVE_MODEL || 'gpt-live-1',
             voice: voiceMap[route], route, language, languagePreference, decisions: env.LIVE_DECISIONS_ENABLED !== 'false' }),
             transport: { type: 'webrtc', sdp: input.sdp } });
-          const state = createCaseState(caseId, language, route, languagePreference);
+          const state = createCaseState(caseId, language, route);
+          state.languagePreference = languagePreference;
           state.activeSessionId = result.session.id;
           cases.set(caseId, state);
           const session = observeSession(result, state);
@@ -225,16 +227,18 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       }
       const languageMatch = path.match(/^\/api\/live\/session\/([^/]+)\/language$/);
       if (req.method === 'POST' && languageMatch) {
-        const session = sessions.get(decodeURIComponent(languageMatch[1]));
-        if (!session || session.closed || session.closing) return json(res, 404, { error: 'Voice session not found.' });
+        const current = sessions.get(decodeURIComponent(languageMatch[1]));
+        if (!current) return json(res, 404, { error: 'Voice session not found.', code: 'session_not_found' });
         const input = await body(req);
-        const state = session.caseState;
-        if (input.case_id !== session.caseId) return json(res, 403, { error: 'Voice case does not match.' });
-        if (state.closed || state.activeSessionId !== session.id) return json(res, 409, { error: 'This voice session is no longer active.' });
-        if (session.ws.readyState !== 1) return json(res, 409, { error: 'Voice connection is not ready.' });
+        if (input.case_id !== current.caseId) return json(res, 403, { error: 'Case does not own this voice session.', code: 'case_mismatch' });
         if (!['ja', 'en'].includes(input.language) || !['auto', 'ja', 'en'].includes(input.language_preference)
-          || (input.language_preference !== 'auto' && input.language_preference !== input.language)) return json(res, 400, { error: 'Unsupported language preference.' });
-        return json(res, 200, session.setLanguage(input.language, input.language_preference));
+          || (input.language_preference !== 'auto' && input.language_preference !== input.language)) return json(res, 400, { error: 'Invalid language selection.' });
+        const state = current.caseState;
+        if (state.closed || current.closed || current.closing || state.activeSessionId !== current.id) return json(res, 409, { error: 'Voice session is inactive.', code: 'inactive_session' });
+        if (state.switching) return json(res, 409, { error: 'Wait until the handoff finishes.', code: 'handoff_in_progress' });
+        if (current.ws.readyState !== 1) return json(res, 503, { error: 'Voice connection is unavailable.' });
+        current.setLanguage(input.language, input.language_preference);
+        return json(res, 200, { ...connectionInfo(current), language: current.routing.language, language_preference: state.languagePreference });
       }
       const handoffMatch = path.match(/^\/api\/live\/session\/([^/]+)\/handoff$/);
       if (req.method === 'POST' && handoffMatch) {
@@ -259,7 +263,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         ticket.timer.unref?.();
         try {
           const result = await createLive({ session: liveConfig({ model: env.LIVE_MODEL || 'gpt-live-1',
-            voice: voiceMap[input.route], route: input.route, language: state.routing.language, languagePreference: state.languagePreference,
+            voice: voiceMap[input.route], route: input.route, language: state.routing.language, languagePreference: state.languagePreference || 'auto',
             input: initialHistory(state.history), standby: true, decisions: env.LIVE_DECISIONS_ENABLED !== 'false' }),
             transport: { type: 'webrtc', sdp: input.sdp } });
           ticket.newId = result.session.id;

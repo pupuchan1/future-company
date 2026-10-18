@@ -167,13 +167,11 @@ export function createProductionRelay({ target = 'http://127.0.0.1:4320', secret
       if (!object(value)) throw new Error('Invalid upstream JSON.');
       if (response.ok) {
         if (route.kind === 'status') value = filterStatus(value, caseId);
-        else if (['create', 'handoff', 'activate'].includes(route.kind)) {
+        else if (['create', 'handoff', 'activate', 'language'].includes(route.kind)) {
           const id = value.session?.id;
           if (value.case_id !== caseId || !sessionPattern.test(id || '') || (sessionCases.has(id) && sessionCases.get(id) !== caseId)) throw new Error('Invalid upstream session binding.');
-          if (route.kind === 'activate' && id !== route.sessionId) throw new Error('Invalid activation response.');
+          if (['activate', 'language'].includes(route.kind) && id !== route.sessionId) throw new Error('Invalid activation response.');
           sessionCases.set(id, caseId);
-        } else if (route.kind === 'language') {
-          if (value.case_id !== caseId || !['ja', 'en'].includes(value.language) || !['auto', 'ja', 'en'].includes(value.language_preference)) throw new Error('Invalid language response binding.');
         } else if (route.kind === 'close') sessionCases.delete(route.sessionId);
       }
       json(res, response.status, value);

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { request } from 'node:http';
+import { EventEmitter } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +11,7 @@ import { BusinessBackend, readRouting } from './backend.mjs';
 import { createIntegration } from './server.mjs';
 import { mcpCall } from './mcp-client.mjs';
 import { LiveConversation } from './live-session.mjs';
+import { issueBridgeProof } from '../src/backend/bridge-proof.ts';
 
 const token = 'orchestration-test-token-not-a-provider-key';
 
@@ -70,28 +72,65 @@ function liveFixture(backend = {}) {
   return { conversation, emitted, sent };
 }
 
-test('explicit language survives automatic routing; Auto restores speech detection without clearing history', async () => {
-  const { conversation, emitted, sent } = liveFixture();
-  const originalHistory = conversation.history;
-  conversation.setLanguage('en', 'en');
-  conversation.updateRouting({ route: 'haas', language: 'ja' }, 'decisions');
-  assert.deepEqual(conversation.routing, { route: 'haas', language: 'en' });
-  assert.match(sent[0].content, /explicitly selected English/);
-  assert.equal(emitted.at(-1).language, 'en');
-  conversation.setLanguage('ja', 'auto');
-  conversation.updateRouting({ route: 'recruiting', language: 'en' }, 'decisions');
-  assert.deepEqual(conversation.routing, { route: 'recruiting', language: 'en' });
-  assert.equal(conversation.history, originalHistory);
-});
-
-test('selected English is used for backend work and the no-transcript fallback', async () => {
-  let received;
-  const { conversation, sent } = liveFixture({ async run(input) { received = input; return 'English response'; } });
-  conversation.setLanguage('en', 'en');
-  await conversation.enqueue(null, 'human_event', '\nOriginal Japanese answer: 確認できました');
-  assert.equal(received.language, 'en');
-  await conversation.enqueue(null, 'delegation');
-  assert.match(sent.at(-1).content, /I have not received your transcript/);
+test('a linked phone completion without answer text still reaches its original Live conversation once', { timeout: 3000 }, async (t) => {
+  const caseId = 'case-worker-no-answer';
+  const staffToken = 'local-worker-proof-for-regression-'.padEnd(64, 'a');
+  const stateDir = await mkdtemp(join(tmpdir(), 'future-company-worker-no-answer-'));
+  const saved = { id: caseId, revision: 0, status: 'active', requests: [] };
+  const runs = [], submitted = deferred();
+  const liveSocket = new EventEmitter();
+  liveSocket.readyState = WebSocket.CONNECTING;
+  liveSocket.send = raw => {
+    const event = JSON.parse(raw);
+    if (event.type === 'session.commentary.append') submitted.resolve(event);
+    if (event.type === 'session.close') queueMicrotask(() => liveSocket.emit('message', Buffer.from(JSON.stringify({ type: 'session.closed' }))));
+  };
+  liveSocket.close = () => { liveSocket.readyState = WebSocket.CLOSED; liveSocket.emit('close'); };
+  liveSocket.terminate = liveSocket.close;
+  const workerSocket = new EventEmitter();
+  workerSocket.readyState = WebSocket.OPEN;
+  workerSocket.close = () => {};
+  const app = createIntegration({ stateDir, closeTimeoutMs: 20,
+    env: { HUMAN_MCP_TOKEN: token, HUMAN_MCP_URL: 'https://mcp.example.invalid/mcp',
+      WORKER_API_URL: 'http://127.0.0.1:9999', STAFF_API_TOKEN: staffToken },
+    client: { live: { create: async () => ({ session: { id: 'live-no-answer' }, transport: { sdp: 'v=0\r\nanswer' } }) } },
+    socketFactory: () => { queueMicrotask(() => { liveSocket.readyState = WebSocket.OPEN; liveSocket.emit('open'); }); return liveSocket; },
+    workerSocketFactory: () => workerSocket,
+    workerFetch: async (url, options) => {
+      if (options.body) {
+        assert.ok(url.pathname.endsWith('/handoffs'), 'No answer or delivery may be written without answer text.');
+        const body = JSON.parse(options.body);
+        saved.requests.push({ id: `request-${body.handoffId}`, status: 'pending',
+          origin: { handoffId: body.handoffId, nodeCaseId: caseId, route: body.route } });
+        saved.revision++;
+      }
+      return Response.json({ case: structuredClone(saved) });
+    },
+  });
+  app.backend.run = async input => { runs.push(input); return '回答本文は届いていません。'; };
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { await app.close(); await rm(stateDir, { recursive: true, force: true }); });
+  const created = await httpJson(app.server.address().port, '/api/live/session', { method: 'POST', body: {
+    case_id: caseId, sdp: 'v=0\r\n', route: 'recruiting', bridge_token: await issueBridgeProof(caseId, staffToken),
+  } });
+  assert.equal(created.status, 200);
+  const commands = [];
+  const device = app.gateway.service.connectDevice({ type: 'hello', device_id: 'black-phone-1', simulated: true,
+    capabilities: ['ring.start', 'ring.stop'] }, command => { commands.push(command); return true; });
+  const handoff = app.gateway.service.requestHuman({ case_id: caseId, reason: 'human_requested',
+    summary: '回答本文を伴わない終話の確認', language: 'ja', idempotency_key: 'no-answer' });
+  const command = commands.find(item => item.type === 'ring.start');
+  for (const type of ['ring.started', 'handset.off_hook', 'handset.on_hook']) {
+    assert.equal(device.handleEvent({ type, handoff_id: handoff.handoff_id, command_id: command.command_id }), true);
+  }
+  assert.match((await submitted.promise).content, /回答本文は届いていません/);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].caseId, caseId);
+  assert.equal(runs[0].route, 'recruiting');
+  assert.equal(runs[0].source, 'human_event');
+  assert.match(runs[0].transcript, /no answer was received/);
+  assert.equal(saved.requests[0].status, 'pending');
+  assert.equal(saved.requests[0].result, undefined);
 });
 
 test('closeCase captures a delayed created Agents session, cancels it, and deletes it', async () => {

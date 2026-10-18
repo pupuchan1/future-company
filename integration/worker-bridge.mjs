@@ -235,13 +235,6 @@ export class WorkerBridge {
     });
   }
 
-  // Keep the shared Node server's #44 call sites while using #39's canonical cache.
-  requests(caseId, records) {
-    return records.map(record => record.case_id === caseId ? this.overlayRequests([record])[0] : record);
-  }
-
-  records(records) { return this.overlayRequests(records); }
-
   closeCase(caseId) {
     const state = this.cases.get(caseId);
     if (!state) return;

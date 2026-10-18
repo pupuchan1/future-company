@@ -66,18 +66,14 @@ class ExternalSocket extends EventEmitter {
 
 type CompletedEvent = { eventId: string; isValid: () => boolean; data: { case_id: string; handoff_id: string; request_id: string; source_route: string; result: { text: string; language: string }; simulated: boolean } }
 
-function adapter(deliver: (event: CompletedEvent) => Promise<{ status: string }>, afterWrite = (_path: string, _body: Record<string, unknown>) => {}) {
+function adapter(deliver: (event: CompletedEvent) => Promise<{ status: string }>) {
   const sockets: ExternalSocket[] = []
   const errors: unknown[] = []
   const bridge = new WorkerBridge({ url: origin, token: staffToken,
-    fetcher: async (url: URL, options: RequestInit) => {
-      const response = await mf.dispatchFetch(url.href, {
-        method: options.method, headers: Object.fromEntries(new Headers(options.headers)),
-        ...(typeof options.body === 'string' ? { body: options.body } : {}),
-      })
-      if (response.ok && typeof options.body === 'string') afterWrite(url.pathname, JSON.parse(options.body))
-      return response
-    },
+    fetcher: (url: URL, options: RequestInit) => mf.dispatchFetch(url.href, {
+      method: options.method, headers: Object.fromEntries(new Headers(options.headers)),
+      ...(typeof options.body === 'string' ? { body: options.body } : {}),
+    }),
     socketFactory: () => { const socket = new ExternalSocket(); sockets.push(socket); return socket },
     deliver, emit: (event: unknown) => errors.push(event),
   })
@@ -306,33 +302,39 @@ test('Worker reserves delivery for one consumer and cannot rewind a terminal rec
   }
 })
 
-
-test('a lost durable reservation response resumes with the same command and never delivers twice', async () => {
+test('two Node consumers contend through the real DO and invoke the original Agent only once', async () => {
   const { snapshot, proof } = await newCase('haas')
   const events: CompletedEvent[] = []
-  const reservations: unknown[] = []
-  let loseResponse = true
-  const { bridge } = adapter(async event => { events.push(event); return { status: 'live_submitted' } }, (path, body) => {
-    if (!path.endsWith('/delivery') || body.status !== 'queued') return
-    reservations.push(body.commandId)
-    if (loseResponse) { loseResponse = false; throw new Error('Synthetic lost response after durable reservation') }
-  })
+  const deliver = async (event: CompletedEvent) => { events.push(event); return { status: 'live_submitted' } }
+  const first = adapter(deliver)
+  const second = adapter(deliver)
   const handoffId = `handoff-${randomUUID()}`
   try {
-    await bridge.attachCase(snapshot.id, proof)
-    await bridge.humanEvent(human(snapshot.id, handoffId), 'haas')
-    await bridge.humanEvent(human(snapshot.id, handoffId, 'human.completed', { text: 'Saved before response loss', language: 'en' }), 'haas')
-    const state = bridge.cases.get(snapshot.id)
-    await state.deliveries.get(handoffId)
-    assert.equal((await saved(snapshot.id)).requests[0].delivery?.status, 'queued')
-    assert.equal(events.length, 0)
-    await bridge.syncCase(snapshot.id, proof)
-    await state.deliveries.get(handoffId)
+    await Promise.all([first.bridge.attachCase(snapshot.id, proof), second.bridge.attachCase(snapshot.id, proof)])
+    await Promise.all([first.bridge.humanEvent(human(snapshot.id, handoffId), 'recruiting'), second.bridge.humanEvent(human(snapshot.id, handoffId), 'recruiting')])
+    let current = await saved(snapshot.id)
+    const requestId = current.requests[0].id
+    current = await readCase(await request(`/staff/requests/${requestId}/claim`, {
+      caseId: snapshot.id, commandId: `claim-${handoffId}`, expectedRevision: current.revision,
+    }, { staff: true }))
+    current = await readCase(await request(`/staff/requests/${requestId}/answer`, {
+      caseId: snapshot.id, commandId: `answer-${handoffId}`, expectedRevision: current.revision,
+      result: { text: 'Saved once, delivered once.', language: 'en' }, simulated: true,
+    }, { staff: true }))
+    first.sockets[0].snapshot(current)
+    second.sockets[0].snapshot(current)
+    const firstState = first.bridge.cases.get(snapshot.id)
+    const secondState = second.bridge.cases.get(snapshot.id)
+    assert.notEqual(firstState.handoffs.get(handoffId).reservationId, secondState.handoffs.get(handoffId).reservationId)
+    await Promise.all([firstState.deliveries.get(handoffId), secondState.deliveries.get(handoffId)])
     assert.equal(events.length, 1)
-    assert.equal(reservations.length, 2)
-    assert.equal(reservations[0], reservations[1])
-    assert.equal((await saved(snapshot.id)).requests[0].delivery?.status, 'live_submitted')
-    await bridge.syncCase(snapshot.id, proof)
+    assert.equal(events[0].data.source_route, 'recruiting')
+    const persisted = await saved(snapshot.id)
+    assert.equal(persisted.requests[0].delivery?.status, 'live_submitted')
+    first.sockets[0].snapshot(persisted)
+    second.sockets[0].snapshot(persisted)
+    await Promise.all([first.bridge.syncCase(snapshot.id, proof), second.bridge.syncCase(snapshot.id, proof)])
+    await Promise.all([firstState.queue, secondState.queue])
     assert.equal(events.length, 1)
-  } finally { bridge.close() }
+  } finally { first.bridge.close(); second.bridge.close() }
 })

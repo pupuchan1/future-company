@@ -126,47 +126,6 @@ test('HTTP voice start rejects missing, forged and other-case proof before provi
   assert.equal(f.workerSockets[0].readyState, 3);
 });
 
-test('English selection reaches startup and changes the same live case without a new provider session', async t => {
-  const f = await fixture(t);
-  const start = await f.start({ language: 'ja', language_preference: 'en' });
-  assert.equal(start.status, 200);
-  assert.match(f.liveCreates[0].session.instructions, /Start in English/);
-  assert.match(f.liveCreates[0].session.instructions, /explicitly selected English/);
-  const id = start.body.session.id;
-  const path = `/api/live/session/${id}/language`;
-  const result = await f.api(path, { case_id: 'case-owned', language: 'ja', language_preference: 'ja' });
-  assert.equal(result.status, 200);
-  assert.deepEqual(result.body, { case_id: 'case-owned', language: 'ja', language_preference: 'ja' });
-  assert.equal(f.liveCreates.length, 1);
-  assert.match(f.liveSockets.get(id).sent.at(-1).content, /explicitly selected Japanese/);
-  const automatic = await f.api(path, { case_id: 'case-owned', language: 'en', language_preference: 'auto' });
-  assert.equal(automatic.status, 200);
-  assert.match(f.liveSockets.get(id).sent.at(-1).content, /Automatic language selection/);
-  assert.equal((await f.api(path, { case_id: 'another-case', language: 'en', language_preference: 'en' })).status, 403);
-  for (const fields of [{ language: 'fr', language_preference: 'fr' }, { language: 'ja', language_preference: 'en' }, { language: 'en' }]) {
-    assert.equal((await f.api(path, { case_id: 'case-owned', ...fields })).status, 400);
-  }
-  assert.equal((await f.api(path, { case_id: 'case-owned', language: 'en', language_preference: 'en' }, { headers: { Origin: 'https://attacker.invalid' } })).status, 403);
-});
-
-test('manual English survives department handoff and inactive sessions cannot change its language', async t => {
-  const f = await fixture(t);
-  const start = await f.start({ language: 'en', language_preference: 'en' });
-  const old = start.body.session.id;
-  const handoff = await f.api(`/api/live/session/${old}/handoff`, { route: 'haas', sdp: 'v=0\r\n' });
-  assert.equal(handoff.status, 200);
-  assert.match(f.liveCreates[1].session.instructions, /explicitly selected English/);
-  const id = handoff.body.session.id;
-  const active = await f.api(`/api/live/session/${id}/activate`, { handoff_token: handoff.body.handoff_token });
-  assert.equal(active.status, 200);
-  const stale = await f.api(`/api/live/session/${old}/language`, { case_id: 'case-owned', language: 'ja', language_preference: 'ja' });
-  assert.ok([404, 409].includes(stale.status));
-  const update = await f.api(`/api/live/session/${id}/language`, { case_id: 'case-owned', language: 'ja', language_preference: 'ja' });
-  assert.equal(update.status, 200);
-  assert.equal(f.liveCreates.length, 2);
-  assert.equal(update.body.language, 'ja');
-});
-
 test('HTTP result ingress requires active case proof and preserves cross-origin rejection', async t => {
   const f = await fixture(t);
   await f.start();

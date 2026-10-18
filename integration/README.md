@@ -1,6 +1,6 @@
 # GPT Live共通受付・採用/HaaS 接続プロトタイプ
 
-目的は「GPT Live共通受付 → 採用またはHaaS担当 → 共通MCPで人間へ依頼 → 回答を元担当へ戻す」を通すこと。採用を最初の完成デモとし、非採用の判断・仕事依頼もHaaSへ渡します。既存のReact画面に組み込む前に接続境界を試すNode 24 workspaceです。Workers / Durable Objects / D1にデプロイ済みの実装ではありません。[全体設計・14:45会議資料](ARCHITECTURE-1445.md)、[Issue #10](https://github.com/pupuchan1/future-company/issues/10)でチームの合流点を確認できます。
+目的は「GPT Live共通受付 → 採用またはHaaS担当 → 共通MCPで人間へ依頼 → 回答を元担当へ戻す」を通すこと。採用と非採用のHaaS依頼を同じ入口で扱います。pupuのReact画面・Worker/DO/D1・Node 24を結合し、認証付き公開デモを動かしています。配置は[deployment/README.md](../deployment/README.md)、実接続の結果は[VERIFICATION.md](VERIFICATION.md)を参照してください。既存のCloudflare本番Workerへの反映は[Issue #33](https://github.com/pupuchan1/future-company/issues/33)、全体の合流点は[PR #39](https://github.com/pupuchan1/future-company/pull/39)です。
 
 ## 起動
 

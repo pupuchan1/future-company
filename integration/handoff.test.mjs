@@ -35,7 +35,7 @@ class FakeSocket extends EventEmitter {
   send(raw) {
     const event = JSON.parse(raw);
     this.sent.push(event);
-    if (event.type === 'session.close') queueMicrotask(() => this.receive({ type: 'session.closed', reason: 'close_requested' }));
+    if (event.type === 'session.close') queueMicrotask(() => this.receive({ type: 'session.closed' }));
   }
   close() {
     if (this.readyState === 3) return;
@@ -277,7 +277,7 @@ test('retired-session close events identify their transport and never delete a s
   await session.close();
   assert.equal(closed, 0);
   assert.deepEqual(emitted.find((event) => event.type === 'live.closed'), {
-    type: 'live.closed', case_id: 'shared-case', session_id: 'old-live', reason: 'close_requested',
+    type: 'live.closed', case_id: 'shared-case', session_id: 'old-live', reason: 'unknown',
   });
 });
 
@@ -345,4 +345,32 @@ test('a human answer queued during automatic handoff resumes once even before fr
   f.sockets.get(prepared.body.session.id).receive({ type: 'session.delegation.created', delegation: { id: 'duplicate-old-work', target: 'client' } });
   await pause(0);
   assert.equal(f.runs.length, 1);
+});
+
+
+test('language selection keeps the case, wins over classification and persists through voice handoff', async t => {
+  const f = await fixture(t);
+  const started = await f.api('/api/live/session', { sdp: 'v=0\r\n', case_id: 'case-language', language: 'ja', language_preference: 'en' });
+  const oldId = started.body.session.id;
+  assert.match(f.creates[0].session.instructions, /explicitly selected English/);
+  const language = (id, value = 'ja', preference = value, caseId = 'case-language') => f.api(`/api/live/session/${id}/language`, { case_id: caseId, language: value, language_preference: preference });
+  assert.equal((await language(oldId, 'ja', 'ja', 'foreign-case')).status, 403);
+  assert.equal((await language(oldId, 'ja', 'en')).status, 400);
+  assert.equal((await language(oldId, 'ja')).status, 200);
+  f.app.backend.classify = async () => ({ route: 'recruiting', language: 'en' });
+  f.sockets.get(oldId).receive({ type: 'session.input_transcript.delta', event_id: 'language-input', delta: 'I would like an interview.' });
+  f.sockets.get(oldId).receive({ type: 'session.delegation.created', delegation: { target: 'client', id: 'language-delegation' } });
+  await until(() => f.runs.length === 1);
+  assert.equal(f.runs[0].language, 'ja');
+  const prepared = await f.prepare(oldId, 'recruiting');
+  assert.equal((await language(oldId, 'en')).status, 409);
+  assert.match(f.creates[1].session.instructions, /explicitly selected Japanese/);
+  const newId = prepared.body.session.id;
+  await f.activate(prepared);
+  assert.equal((await language(oldId)).status, 404);
+  const automatic = await language(newId, 'en', 'auto');
+  assert.equal(automatic.status, 200);
+  assert.equal(automatic.body.language_preference, 'auto');
+  assert.equal(automatic.body.case_id, 'case-language');
+  assert.match(f.sockets.get(newId).sent.at(-1).content, /automatic language/);
 });
