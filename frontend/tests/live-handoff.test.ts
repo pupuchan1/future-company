@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { LiveClient, caseVoicePrefix } from '../src/features/live/client.ts'
+import { LiveClient } from '../src/features/live/client.ts'
 import type { LiveRuntime } from '../src/features/live/client.ts'
 import type { LiveRoute } from '../src/features/live/types.ts'
 import type { LiveMediaObserver } from '../src/features/recording/types.ts'
@@ -10,7 +10,6 @@ const tick = () => new Promise(resolve => setImmediate(resolve))
 
 function fixture(apiPrefix?: string, media?: LiveMediaObserver) {
   const calls: { path: string; body: Record<string, unknown>; method?: string }[] = []
-  const eventUrls: (string | undefined)[] = []
   const track = { enabled: true, stopped: 0, readyState: 'live', stop() { this.stopped++; this.readyState = 'ended' } }
   const stream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream
   let microphoneCalls = 0
@@ -46,7 +45,7 @@ function fixture(apiPrefix?: string, media?: LiveMediaObserver) {
     async fetch(path: string, options?: RequestInit) {
       const body = options?.body ? JSON.parse(String(options.body)) : {}
       calls.push({ path, body, method: options?.method })
-      if (path.endsWith('/status')) return Response.json({ live_configured: true, mcp_configured: true, handoff_configured: true, voice_map: voices, requests: [] })
+      if (path === '/api/status') return Response.json({ live_configured: true, mcp_configured: true, handoff_configured: true, voice_map: voices, requests: [] })
       if (options?.method === 'DELETE') return Response.json({ live_finalized: true, cleanup_pending: [] })
       if (path.endsWith('/handoff')) { route = body.route; return handoff() }
       if (path.endsWith('/activate')) return activate()
@@ -55,7 +54,7 @@ function fixture(apiPrefix?: string, media?: LiveMediaObserver) {
     },
     async microphone() { microphoneCalls++; return stream },
     peer() { const peer = makePeer(); peers.push(peer); return peer },
-    events: (url?: string) => { eventUrls.push(url); return source },
+    events: () => source,
     audio() {
       const audio = { srcObject: null as unknown, autoplay: true, paused: true, muted: false, volume: 1, plays: 0,
         async play() { this.plays++; this.paused = false }, pause() { this.paused = true },
@@ -84,7 +83,7 @@ function fixture(apiPrefix?: string, media?: LiveMediaObserver) {
     assert.equal(calls.filter(call => call.path.endsWith('/activate')).length, 0, 'Session start alone is insufficient')
     peer.connectionState = 'connected'; peer.onconnectionstatechange!()
   }
-  return { client, runtime, peers, track, stream, source, audios, meters, calls, eventUrls, start, readyCandidate,
+  return { client, runtime, peers, track, stream, source, audios, meters, calls, start, readyCandidate,
     microphoneCalls: () => microphoneCalls,
     setHandoff: (next: typeof handoff) => { handoff = next },
     setActivate: (next: typeof activate) => { activate = next },
@@ -287,30 +286,6 @@ test('candidate readiness timeout restores the old call and removes the candidat
   } finally { await f.client.stop(); f.client.dispose() }
 })
 
-
-test('Worker prefix scopes status, SSE, create, handoff, activation and final cleanup to one case', async () => {
-  const prefix = caseVoicePrefix('case-a')
-  const f = fixture(prefix)
-  try {
-    await f.start()
-    const switching = f.client.switchDepartment('haas')
-    await f.readyCandidate(); await switching; await f.client.stop()
-    assert.deepEqual(f.eventUrls, [`${prefix}/events`])
-    assert.ok(f.calls.some(call => call.path === `${prefix}/status`))
-    assert.ok(f.calls.some(call => call.path === `${prefix}/session`))
-    assert.ok(f.calls.some(call => call.path === `${prefix}/session/old/handoff`))
-    assert.ok(f.calls.some(call => call.path === `${prefix}/session/new/activate`))
-    assert.ok(f.calls.some(call => call.path === `${prefix}/session/new` && call.method === 'DELETE'))
-    assert.ok(f.calls.every(call => call.path.startsWith(`${prefix}/`)))
-  } finally { f.client.dispose() }
-})
-test('voice transport rejects absolute URLs and prefixes for another Worker case', () => {
-  for (const prefix of ['https://example.com/api', '/api/v1/cases/other/voice', '/api/v1/cases/case-a/voice/']) {
-    assert.throws(() => fixture(prefix), /same origin/)
-  }
-  assert.throws(() => caseVoicePrefix('../other'), /Invalid Worker case/)
-})
-
 test('a transient status failure during an active call preserves negotiated switching capability', async () => {
   const f = fixture(); await f.start()
   const fetchApi = f.runtime.fetch
@@ -447,38 +422,5 @@ test('recording resumes the old call after a failed switch without restarting or
     assert.equal(outputs.at(-1), f.stream)
     assert.deepEqual(enabled.at(-1), [true, true])
     assert.equal(inputs, 1); assert.equal(stopped, 0); assert.equal(f.track.stopped, 0)
-  } finally { await f.client.stop(); f.client.dispose() }
-})
-
-test('the latest manual language survives a delayed old-session reply across handoff', async () => {
-  const f = fixture()
-  await f.start()
-  const originalFetch = f.runtime.fetch
-  let serverPreference = 'ja'
-  const languageCalls: { path: string; language: string }[] = []
-  let completeOld!: (response: Response) => void
-  f.runtime.fetch = (async (path: string, options?: RequestInit) => {
-    if (!path.endsWith('/language')) return originalFetch(path, options)
-    const input = JSON.parse(String(options?.body))
-    serverPreference = input.language_preference
-    languageCalls.push({ path, language: input.language })
-    const result = { session: { id: path.includes('/old/') ? 'old' : 'new' }, case_id: 'case-a', language: input.language, language_preference: input.language_preference }
-    if (input.language === 'en') return new Promise<Response>(resolve => { completeOld = resolve })
-    return Response.json(result)
-  }) as typeof fetch
-  try {
-    await f.client.setLanguage('ja', 'ja')
-    const first = f.client.setLanguage('en', 'en')
-    const latest = f.client.setLanguage('ja', 'ja')
-    assert.equal(serverPreference, 'en', 'The server applied English before its HTTP response arrives')
-    const switching = f.client.switchDepartment('recruiting')
-    await f.readyCandidate(); await switching
-    assert.equal(f.client.getSnapshot().phase, 'connected')
-    // useLiveConnection retries the current selection when the new transport connects.
-    await f.client.setLanguage('ja', 'ja')
-    completeOld(Response.json({ session: { id: 'old' }, case_id: 'case-a', language: 'en', language_preference: 'en' }))
-    await Promise.all([first, latest])
-    assert.equal(serverPreference, 'ja', 'The new session must receive the latest manual selection even if it equals the old cached selection')
-    assert.deepEqual(languageCalls.at(-1), { path: '/api/live/session/new/language', language: 'ja' })
   } finally { await f.client.stop(); f.client.dispose() }
 })

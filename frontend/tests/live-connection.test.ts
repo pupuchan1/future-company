@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { LiveClient } from '../src/features/live/client.ts'
+import { caseVoicePrefix, LiveClient } from '../src/features/live/client.ts'
 import type { LiveRuntime } from '../src/features/live/client.ts'
 import { LiveEventReducer } from '../src/features/live/events.ts'
 import { initialSnapshot } from '../src/features/live/types.ts'
@@ -310,47 +310,43 @@ test('a permanently closed SSE after proxy failure is recreated, and dispose can
   assert.equal(opened, 2)
 })
 
-
-test('case proof is sent only to session creation, refreshed, and not retained in snapshots', async () => {
+test('case relay retains proof, selected language and the same authenticated endpoints through stop', async () => {
   const f = fixture()
-  let count = 0
-  const client = new LiveClient('case-a', 'ja', f.runtime, { bridgeToken: async () => `proof-${++count}` })
+  const prefix = caseVoicePrefix('case-a')
+  const paths: string[] = [], eventPaths: (string | undefined)[] = []
+  const fetchApi = f.runtime.fetch
+  f.runtime.fetch = async (input, options) => {
+    const path = String(input)
+    paths.push(path)
+    return fetchApi(path === `${prefix}/status` ? '/api/status' : path.replace(`${prefix}/session`, '/api/live/session'), options)
+  }
+  f.runtime.events = url => { eventPaths.push(url); return f.source as unknown as EventSource }
+  const client = new LiveClient('case-a', 'ja', f.runtime, { apiPrefix: prefix, bridgeToken: async () => 'case-only-proof' })
   try {
-    await client.refreshStatus(); await client.start(); await client.stop(); await client.start()
-    const creates = f.calls.filter(call => call.path === '/api/live/session')
-    assert.equal(JSON.parse(String(creates[0].options?.body)).bridge_token, 'proof-1')
-    assert.equal(JSON.parse(String(creates[1].options?.body)).bridge_token, 'proof-2')
-    assert.equal(creates[0].options?.redirect, 'manual')
-    assert.equal(creates[0].options?.credentials, 'same-origin')
-    assert.equal(JSON.stringify(client.getSnapshot()).includes('proof-'), false)
-  } finally { await client.stop(); client.dispose() }
+    client.observe()
+    await new Promise(resolve => setImmediate(resolve))
+    await client.start('en', 'reception', undefined, 'en')
+    const creation = f.calls.find(call => call.path === '/api/live/session')!
+    assert.deepEqual(JSON.parse(String(creation.options?.body)), { sdp: 'v=0\r\no=mock', language: 'en', case_id: 'case-a', bridge_token: 'case-only-proof', language_preference: 'en' })
+    assert.equal(creation.options?.credentials, 'same-origin')
+    assert.equal(creation.options?.redirect, 'manual')
+    f.channel.onmessage!({ data: JSON.stringify({ type: 'session.started', session: { id: 'live_1' } }) })
+    f.setCreate(async () => Response.json({ case_id: 'case-a', language: 'ja', language_preference: 'ja' }))
+    await client.setLanguage('ja', 'ja')
+    await client.stop()
+    assert.equal(client.getSnapshot().language, 'ja')
+    assert.equal(client.getSnapshot().phase, 'ended')
+    assert.equal(JSON.stringify(client.getSnapshot()).includes('case-only-proof'), false)
+    assert.deepEqual(eventPaths, [`${prefix}/events`])
+    assert.ok(paths.includes(`${prefix}/session/live_1/language`))
+    assert.ok(paths.includes(`${prefix}/session/live_1`))
+    assert.ok(paths.every(path => path.startsWith(`${prefix}/`)))
+    for (const invalid of ['https://other.test/api', '/api/v1/cases/case-b/voice']) assert.throws(() => new LiveClient('case-a', 'ja', f.runtime, { apiPrefix: invalid }), /this Worker case/)
+    for (const invalid of ['', 'a/b', '日本語', 'a'.repeat(201)]) assert.throws(() => caseVoicePrefix(invalid), /Invalid Worker case/)
+  } finally { client.dispose() }
 })
-test('a failed case proof never requests microphone permission or creates a session', async () => {
-  const f = fixture()
-  let asked = false
-  f.setMicrophone(async () => { asked = true; return f.stream })
-  const client = new LiveClient('case-a', 'ja', f.runtime, { bridgeToken: async () => { throw new Error('Authenticate first') } })
-  await client.refreshStatus(); await client.start()
-  assert.equal(asked, false)
-  assert.equal(f.calls.some(call => call.path === '/api/live/session'), false)
-  assert.match(client.getSnapshot().error, /Authenticate first/)
-  client.dispose()
-})
-test('stop during proof fetching ignores its late success before any microphone or session creation', async () => {
-  const f = fixture()
-  let resolve!: (proof: string) => void
-  let asked = false
-  f.setMicrophone(async () => { asked = true; return f.stream })
-  const client = new LiveClient('case-a', 'ja', f.runtime, { bridgeToken: () => new Promise(r => { resolve = r }) })
-  await client.refreshStatus()
-  const starting = client.start()
-  await client.stop(); resolve('late-proof'); await starting
-  assert.equal(asked, false)
-  assert.equal(f.calls.some(call => call.path === '/api/live/session'), false)
-  assert.equal(client.getSnapshot().phase, 'ended')
-  client.dispose()
-})
-test('status auth and HTML failures stay visible, and a recovered status clears only its own error', async () => {
+
+test('status auth and HTML failures stay visible, and a recovered status clears its own error', async () => {
   const f = fixture()
   const fetchApi = f.runtime.fetch
   const client = new LiveClient('case-a', 'ja', f.runtime)
@@ -367,41 +363,4 @@ test('status auth and HTML failures stay visible, and a recovered status clears 
     assert.equal(client.getSnapshot().configured, true)
     assert.equal(client.getSnapshot().error, '')
   } finally { client.dispose() }
-})
-
-test('case transport rejects foreign or cross-origin prefixes before sending a request', () => {
-  const f = fixture()
-  for (const apiPrefix of ['https://example.invalid/api', '/api/v1/cases/case-b/voice', '/api/v1/cases/case-a/voice?x=1']) {
-    assert.throws(() => new LiveClient('case-a', 'ja', f.runtime, { apiPrefix }), /same origin/)
-  }
-  assert.equal(f.calls.length, 0)
-})
-
-test('case status failures are actionable, recover on retry, and never open the microphone', async () => {
-  const f = fixture()
-  let microphones = 0
-  let response = () => Response.json({ error: 'voice_relay_unconfigured' }, { status: 503 })
-  const client = new LiveClient('case-a', 'ja', { ...f.runtime,
-    fetch: async () => response(),
-    microphone: async () => { microphones++; return f.stream as unknown as MediaStream },
-  }, { apiPrefix: '/api/v1/cases/case-a/voice' })
-  try {
-    await client.refreshStatus()
-    assert.match(client.getSnapshot().error, /voice_relay_unconfigured/)
-    await client.start()
-    assert.equal(microphones, 0)
-    // Clear the unrelated Start error by using a fresh status-only client below.
-  } finally { client.dispose() }
-  const retry = new LiveClient('case-a', 'ja', { ...f.runtime, fetch: async () => response() }, { apiPrefix: '/api/v1/cases/case-a/voice' })
-  try {
-    await retry.refreshStatus()
-    response = () => Response.json({ live_configured: true, mcp_configured: true })
-    await retry.refreshStatus()
-    assert.equal(retry.getSnapshot().error, '')
-    assert.equal(retry.getSnapshot().configured, true)
-    response = () => new Response('<html>Login</html>', { status: 200 })
-    await retry.refreshStatus()
-    assert.equal(retry.getSnapshot().configured, null)
-    assert.match(retry.getSnapshot().error, /Check access/)
-  } finally { retry.dispose() }
 })

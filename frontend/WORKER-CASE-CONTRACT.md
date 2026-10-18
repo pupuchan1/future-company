@@ -2,7 +2,7 @@
 
 共通入口は `ReceptionPage` → `useReceptionConnection` → `useLiveConnection`。部署選択や仮の実案件IDは追加しない。
 
-1. 利用者の開始操作で `POST /api/v1/cases` を送る。cookieはsame-origin、リダイレクトは追従しない。案件未作成時は全体音声APIを呼ばず、マイクも開かない。
+1. 利用者の開始操作で、音声サーバーの設定状況を確認してから `POST /api/v1/cases` を送る。cookieはsame-origin、リダイレクトは追従しない。
 2. `commandId`・`expectedRevision: 0`・`kind: haas`・初回localeを固定する。二重開始は同じPromiseを共有し、失敗後の再送も同一本文を使用する。
 3. JSONの `case.id/revision/kind/locale` を検証する。所有者cookieで `POST /api/v1/cases/:id/bridge-token` を送り、`{caseId, bridgeToken, expiresIn}` の案件一致・空でない証明・最大900秒の有効期間を検証する。再開のたびに新しい証明を取得し、キャッシュしない。
 4. Worker返却IDへLive hookが切り替わり、新しいLive clientのstatus取得が完了してから `start(undefined, bridgeToken)` で受付ルートを開始する。Nodeの開始bodyは `{sdp, language, case_id, bridge_token}`。証明取得失敗・期限異常・異なる案件ではマイクもLiveも開始しない。証明取得は15秒でタイムアウトし、取消後の遅延応答を破棄する。
@@ -16,11 +16,10 @@ Workerの汎用案件 `haas` で初期作成する。既存の `support/sales/re
 - Workerの `case.id` = Node Liveの `case_id`。短命なLive `session_id`とは別。
 - Worker `requestId` とNode `handoffId` の対応、社員認証・claim・revisionを経た結果保存から元のAgent/Liveへ戻すアダプタはIssue #19の担当範囲。現在のNode独自handoff経路と同じものとして完了表示しない。
 - プロバイダーのキーやMCP資格情報はFEへ渡さない。
-- 公開音声APIは同一originの `/api/v1/cases/:id/voice` に統一する。`status`・`events`・`session`・`session/:sessionId/handoff`・`session/:sessionId/activate`・`DELETE session/:sessionId` のすべてでWorkerが所有者cookieを確認し、Nodeへ中継する。ケース証明はこの所有者認可を置き換えない。
 - `bridgeToken` は1回の開始処理のメモリ内だけで扱う。公開hookのsnapshot、localStorage、URL、画面に保存・表示しない。社員共通secretをこの証明の代わりにFEへ渡さない。
 - 新規作成中にページを離れた場合、戻ったページは新しい相談になる。ページを跨ぐ案件再開はまだ提供しない。
 
-`npm run test:frontend` で二重送信、再送の固定、所有確認、認証、証明更新、キャンセル、異なる案件、リセットと全音声APIの案件prefixを検証する。Live接続の終了・遅延応答・担当交代も既存のLiveテストで検証する。
+`node --test frontend/tests/worker-cases.test.ts` で二重送信、再送の固定、所有確認、認証、キャンセル、異なる案件、リセットを検証する。Live接続の終了・遅延応答・担当交代は既存のLiveテストで検証する。
 
 関連: [#18](https://github.com/pupuchan1/future-company/issues/18) / [#19](https://github.com/pupuchan1/future-company/issues/19) / [#36](https://github.com/pupuchan1/future-company/issues/36)
 

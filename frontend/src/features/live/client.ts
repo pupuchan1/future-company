@@ -1,3 +1,4 @@
+import { ConversationActivity } from '../voice/conversation.ts'
 import { measureSignal, SILENT_SIGNAL, VoiceActivityStore } from '../voice/activity.ts'
 import type { AudioSignal, VoiceActivity } from '../voice/activity.ts'
 import { LiveEventReducer, putRequest, readHumanRequest } from './events.ts'
@@ -145,7 +146,7 @@ export interface LiveClientOptions {
 }
 
 export function caseVoicePrefix(caseId: string): string {
-  if (!/^[A-Za-z0-9_-]{1,100}$/.test(caseId)) throw new Error('Invalid Worker case ID.')
+  if (!/^[A-Za-z0-9_-]{1,200}$/.test(caseId)) throw new Error('Invalid Worker case ID.')
   return `/api/v1/cases/${encodeURIComponent(caseId)}/voice`
 }
 
@@ -215,6 +216,11 @@ export class LiveClient {
   private observing = false
   private disposed = false
   private closing: Promise<void> | null = null
+  private desiredLanguage: { language: LiveLanguage; preference: LiveLanguagePreference } | null = null
+  private appliedLanguage = ''
+  private languageUpdate: Promise<void> | null = null
+  private languageConnection: Connection | null = null
+  private languageGeneration = 0
   private endpoints: { status: string; events: string; session: string }
   private bridgeToken?: () => Promise<string>
   private media?: LiveMediaObserver
@@ -222,11 +228,7 @@ export class LiveClient {
   private automaticTimer?: ReturnType<typeof setTimeout>
   private lastSpeechAt = 0
   private lastAutomaticRouting = ''
-  private desiredLanguage: { language: LiveLanguage; preference: LiveLanguagePreference } | null = null
-  private appliedLanguage = ''
-  private languageUpdate: Promise<void> | null = null
-  private languageConnection: Connection | null = null
-  private languageGeneration = 0
+  private conversation = new ConversationActivity()
 
   constructor(caseId: string, language: LiveLanguage, runtime = browserRuntime(), options: LiveClientOptions = {}) {
     const prefix = options.apiPrefix
@@ -302,8 +304,9 @@ export class LiveClient {
     const speaking = speakerFor(inputLevel, outputLevel)
     if (inputLevel >= SPEAKING_RMS || outputLevel >= SPEAKING_RMS) this.lastSpeechAt = Date.now()
     if (outputLevel >= SPEAKING_RMS && this.automaticHandoff && this.state.backend === 'result') this.automaticHandoff.awaitingOutput = false
-    if (inputLevel !== this.state.inputLevel || outputLevel !== this.state.outputLevel || speaking !== this.state.speaking) {
-      this.patch({ inputLevel, outputLevel, speaking })
+    const conversation = this.conversation.sample(inputLevel, outputLevel, !!audible && (audio?.volume ?? 1) > 0, this.state.muted)
+    if (inputLevel !== this.state.inputLevel || outputLevel !== this.state.outputLevel || speaking !== this.state.speaking || conversation !== this.state.conversation) {
+      this.patch({ inputLevel, outputLevel, speaking, conversation })
     }
     this.scheduleAutomaticHandoff()
   }
@@ -414,7 +417,22 @@ export class LiveClient {
       this.voiceSwitch.previousEnded = true
       return
     }
-    this.publish(this.reducer.apply(this.state, event, source))
+    // A case can outlive several transports. Ignore delayed events from the old
+    // session, including transcripts and backend results, for the orb only.
+    const reduced = this.reducer.apply(this.state, event, source)
+    const newTranscript = reduced.transcripts !== this.state.transcripts
+    this.publish(reduced)
+    const activeVoice = !this.voiceSwitch && this.connection &&
+      (source === 'datachannel' ? connection === this.connection && (!sessionId || sessionId === this.connection.sessionId) : sessionId === this.connection.sessionId)
+    if (activeVoice) {
+      const inputText = typeof body.delta === 'string' ? body.delta : object(body.delta).text ?? object(body.delta).transcript
+      if (newTranscript && type === 'session.input_transcript.delta' && typeof inputText === 'string' && inputText.trim()) this.conversation.acceptInput()
+      if (type === 'backend.started' || type === 'backend.result') this.conversation.awaitResponse()
+      if (type === 'backend.error' || type === 'error') this.conversation.fail()
+      const audio = this.connection?.audio
+      const audible = !!this.connection?.outputPlaying && !!audio && !audio.paused && !audio.muted && audio.volume > 0 && !this.state.playbackBlocked
+      this.patch({ conversation: this.conversation.sample(this.state.inputLevel, this.state.outputLevel, audible, this.state.muted) })
+    }
     if (source === 'server' && type === 'routing.updated' && body.source === 'decisions'
       && sessionId === this.connection?.sessionId && isRoute(body.route)) {
       const key = `${sessionId}:${body.source_event_id ?? ''}:${body.route}`
@@ -530,7 +548,8 @@ export class LiveClient {
     this.lastAutomaticRouting = ''
     this.reducer.reset()
     this.voice.reset()
-    this.patch({ phase: 'connecting', language, route, voiceRoute: route, voice: '', transcripts: [], muted: false, playbackBlocked: false, error: '', backend: 'idle', backendResult: '', cleanupWarning: '', inputLevel: 0, outputLevel: 0, speaking: 'silent', meteringAvailable: false })
+    this.conversation.reset()
+    this.patch({ conversation: 'listening', phase: 'connecting', language, route, voiceRoute: route, voice: '', transcripts: [], muted: false, playbackBlocked: false, error: '', backend: 'idle', backendResult: '', cleanupWarning: '', inputLevel: 0, outputLevel: 0, speaking: 'silent', meteringAvailable: false })
     try {
       // Construct/resume inside the user's Start gesture, before microphone await.
       this.createMeter(connection)
@@ -547,7 +566,7 @@ export class LiveClient {
       if (!sdp || this.connection !== connection) return
       // Do not abort this request on Stop: a late response still needs DELETE.
       this.appliedLanguage = `${language}:${preference}`
-      const created = await this.api(this.endpoints.session, { method: 'POST', body: JSON.stringify({ sdp, language, ...(preference === 'auto' ? {} : { language_preference: preference }), case_id: this.state.caseId, ...(route === 'reception' ? {} : { route }), ...(bridgeToken ? { bridge_token: bridgeToken } : {}) }) })
+      const created = await this.api(this.endpoints.session, { method: 'POST', body: JSON.stringify({ sdp, language, case_id: this.state.caseId, ...(preference === 'auto' ? {} : { language_preference: preference }), ...(bridgeToken ? { bridge_token: bridgeToken } : {}), ...(route === 'reception' ? {} : { route }) }) })
       const id = object(created.session).id ?? created.session_id
       if (typeof id === 'string') connection.sessionId = id
       if (this.connection !== connection) { await this.finalize(connection); return }
@@ -613,6 +632,8 @@ export class LiveClient {
     this.voiceSwitch = attempt
     this.notifyMedia(observer => observer.setEnabled(false, false))
     this.voice.reset()
+    this.conversation.reset()
+    this.patch({ conversation: 'listening' })
     previous.outputPlaying = false
     previous.stream.getAudioTracks().forEach(track => { track.enabled = false })
     if (previous.audio) { previous.audio.autoplay = false; previous.audio.pause() }
@@ -702,9 +723,6 @@ export class LiveClient {
         const desired = this.desiredLanguage!
         const key = `${desired.language}:${desired.preference}`
         if (key === this.appliedLanguage) break
-        // The server may apply this selection before its reply reaches the old peer.
-        // An unknown in-flight selection must not suppress a newer choice after handoff.
-        this.appliedLanguage = ''
         const result = await this.api(`${this.endpoints.session}/${encodeURIComponent(connection.sessionId!)}/language`, {
           method: 'POST', body: JSON.stringify({ case_id: this.state.caseId, language: desired.language, language_preference: desired.preference }),
         })
@@ -736,7 +754,10 @@ export class LiveClient {
     this.connection.stream.getAudioTracks().forEach(track => { track.enabled = !muted })
     this.notifyMedia(observer => observer.setEnabled(!muted, !!this.connection?.outputPlaying && !this.state.playbackBlocked))
     const inputLevel = muted ? 0 : this.state.inputLevel
-    this.patch({ muted, inputLevel, speaking: speakerFor(inputLevel, this.state.outputLevel) })
+    const audio = this.connection.audio
+    const audible = !!this.connection.outputPlaying && !!audio && !audio.paused && !audio.muted && audio.volume > 0 && !this.state.playbackBlocked
+    this.patch({ muted, inputLevel, speaking: speakerFor(inputLevel, this.state.outputLevel),
+      conversation: this.conversation.sample(inputLevel, audible ? this.state.outputLevel : 0, audible, muted) })
     if (muted) this.voice.publish({ ...this.voice.getSnapshot(), input: SILENT_SIGNAL })
   }
 
@@ -808,6 +829,8 @@ export class LiveClient {
     const connections = attempt ? [attempt.candidate, connection] : [connection]
     this.connection = null
     this.voice.reset()
+    this.conversation.reset()
+    this.patch({ conversation: 'listening' })
     this.voiceSwitch = null
     if (attempt) { attempt.cancelled = true; attempt.candidate.failure = new Error('Voice switch cancelled'); attempt.candidate.rejectReady?.(attempt.candidate.failure) }
     const tracks = new Set(connections.flatMap(item => item.stream?.getTracks() ?? []))
