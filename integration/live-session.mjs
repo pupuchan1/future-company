@@ -29,8 +29,8 @@ ${standby ? 'This voice transport is being prepared for a department handoff. St
 
 export class LiveConversation {
   constructor({ id, caseId, language, apiKey, backend, emit, handoffs, onClose, onClosing, remember,
-    caseState, requestWork, route = 'reception', standby = false, socketFactory = (url, options) => new WebSocket(url, options), closeTimeoutMs = 3000 }) {
-    Object.assign(this, { id, caseId, backend, emit, handoffs, onClose, onClosing, remember, caseState, closeTimeoutMs, requestWork });
+    caseState, requestWork, cancelWork, route = 'reception', standby = false, socketFactory = (url, options) => new WebSocket(url, options), closeTimeoutMs = 3000 }) {
+    Object.assign(this, { id, caseId, backend, emit, handoffs, onClose, onClosing, remember, caseState, closeTimeoutMs, requestWork, cancelWork });
     this.routing = caseState?.routing || { route, language };
     this.history = caseState?.history || [];
     this.seen = caseState?.seen || new Set();
@@ -196,6 +196,7 @@ export class LiveConversation {
       // commit the department only at delegation using the accumulated context.
       this.emit({ type: 'routing.candidate', case_id: this.caseId,
         ...readRouting(event.event.decision.answers, this.routing), source: 'live_decisions', source_event_id: event.source_event_id });
+      if (this.startWorkRequest()) return;
       if (this.caseState?.handoffBeforeWork && this.canWork() && !this.busy) {
         const next = readRouting(event.event.decision.answers, this.routing);
         if (next.route !== this.routing.route) {
@@ -218,6 +219,31 @@ export class LiveConversation {
     }
   }
 
+  scheduleWorkRequest() {
+    clearTimeout(this.workRequestTimer);
+    if (!this.requestWork || this.voiceRoute === 'recruiting' || this.caseState?.fastWorkRequest) return;
+    const text = historyTurns(this.history).filter(turn => turn.role === 'user').at(-1)?.text || '';
+    if (!requestsWork(text)) return;
+    this.workRequestTimer = setTimeout(() => this.startWorkRequest(), 350);
+    this.workRequestTimer.unref?.();
+  }
+
+  startWorkRequest() {
+    if (!this.requestWork || !this.canWork() || this.voiceRoute === 'recruiting') return false;
+    const text = historyTurns(this.history).filter(turn => turn.role === 'user').at(-1)?.text || '';
+    const existing = this.caseState?.fastWorkRequest;
+    if (existing) {
+      if (/キャンセル|取り消|取消|撤回|やめて|cancel/i.test(text)) { this.cancelWork?.(); return true; }
+      return Boolean(existing.summary && text.startsWith(existing.summary));
+    }
+    if (!requestsWork(text)) return false;
+    clearTimeout(this.workRequestTimer);
+    this.emit({ type: 'backend.started', case_id: this.caseId, live_session_id: this.id, source: 'fast_work_intake' });
+    try { this.requestWork(text); }
+    catch { this.backendError('仕事の依頼を送信できませんでした。'); }
+    return true;
+  }
+
   deferHandoff(delegationId) {
     const pending = this.caseState.deferredDelegations;
     if (pending.has(delegationId)) return;
@@ -231,30 +257,9 @@ export class LiveConversation {
     fallback.unref?.();
   }
 
-  scheduleWorkRequest() {
-    clearTimeout(this.workRequestTimer);
-    if (!this.requestWork || this.voiceRoute === 'recruiting' || this.caseState?.fastWorkRequest) return;
-    const text = historyTurns(this.history).filter(turn => turn.role === 'user').at(-1)?.text || '';
-    if (!requestsWork(text)) return;
-    this.workRequestTimer = setTimeout(() => this.startWorkRequest(), 350);
-    this.workRequestTimer.unref?.();
-  }
-
-  startWorkRequest() {
-    if (!this.requestWork || !this.canWork() || this.voiceRoute === 'recruiting') return false;
-    if (this.caseState?.fastWorkRequest) return true;
-    const text = historyTurns(this.history).filter(turn => turn.role === 'user').at(-1)?.text || '';
-    if (!requestsWork(text)) return false;
-    clearTimeout(this.workRequestTimer);
-    this.emit({ type: 'backend.started', case_id: this.caseId, live_session_id: this.id, source: 'fast_work_intake' });
-    try { this.requestWork(text); }
-    catch { this.backendError('仕事の依頼を送信できませんでした。'); }
-    return true;
-  }
-
   enqueue(delegationId, source, extra = '', resumeRoute = null, isValid = () => true) {
     if (!this.canWork()) return this.queue;
-    if (source === 'delegation' && this.startWorkRequest()) return Promise.resolve({ status: 'human_requested' });
+    if (['delegation', 'handoff', 'handoff_continuation', 'handoff_fallback'].includes(source) && this.startWorkRequest()) return Promise.resolve({ status: 'human_requested' });
     this.pendingWork = (this.pendingWork || 0) + 1;
     this.queue = this.queue.then(async () => {
       if (!this.canWork() || !isValid()) return { status: 'cancelled' };
@@ -326,6 +331,8 @@ export class LiveConversation {
         this.remember?.({ type: 'work_slack_delivered', case_id: this.caseId, elapsed_ms: Date.now() - (this.caseState?.fastWorkRequest?.startedAt || Date.now()) });
       } else if (event.name === 'human.completed' && event.data.result?.text) {
         content = (this.routing.language === 'en' ? 'The team replied: ' : '担当者からの回答です。') + event.data.result.text.slice(0, 600);
+      } else if (event.name === 'human.cancelled') {
+        content = this.routing.language === 'en' ? 'I have cancelled your work request.' : '仕事の依頼を取り消しました。';
       } else if (event.name === 'human.unavailable') {
         content = event.data.notification_status === 'sent' ? '担当者からの返信はまだ届いていません。' : 'Slackへの送信を確認できませんでした。担当者への確認が必要です。';
       }

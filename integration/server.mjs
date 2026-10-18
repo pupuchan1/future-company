@@ -165,6 +165,9 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     const session = new LiveConversation({ id, caseId: state.id, language: state.routing.language,
       apiKey: env.OPENAI_API_KEY, backend, emit, caseState: state, route, standby,
       socketFactory, closeTimeoutMs,
+      cancelWork: () => {
+        if (state.fastWorkRequest?.handoff_id) gateway.service.cancelHumanRequest({ handoff_id: state.fastWorkRequest.handoff_id });
+      },
       requestWork: text => {
         if (state.fastWorkRequest) return state.fastWorkRequest;
         state.routing.route = 'haas';
