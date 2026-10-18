@@ -382,7 +382,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         const response = { ...connectionInfo(candidate), old_session_id: ticket.oldId, active: true };
         candidate.activation = { token: ticket.token, response };
         const resumedHuman = drainHuman(state);
-        candidate.activateDepartment({ announce: !ticket.automatic && resumedHuman === 0, automatic: ticket.automatic,
+        candidate.activateDepartment({ announce: !ticket.automatic && resumedHuman === 0 && !continueWork, automatic: ticket.automatic,
           announceVoice: resumedHuman === 0 });
         if (continueWork) void candidate.enqueue(null, 'handoff_continuation');
         emit({ type: 'live.handoff', ...response, session_id: candidate.id });

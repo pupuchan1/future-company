@@ -3,7 +3,7 @@ import test from 'node:test'
 import { callsRecruiter } from '../src/features/live/spoken-department.ts'
 
 test('a short caller selection names the recruiting department', () => {
-  for (const text of ['採用担当', '採用担当。', '採用担当者', '採用担当お願いします', '採用担当につないでください', 'すみません、採用担当の方へお願いします。', '採用担当と話したいです', 'Recruiter, please']) {
+  for (const text of ['採用担当', '採用担当。', '採用担当者', '採用担当お願いします', '採用担当を呼んでください', '採用担当につないでください', 'すみません、採用担当の方へお願いします。', '採用担当と話したいです', 'Recruiter, please']) {
     assert.equal(callsRecruiter(text), true, text)
   }
 })

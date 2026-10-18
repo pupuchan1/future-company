@@ -702,6 +702,24 @@ test('an explicit recruiting selection introduces the new voice before the inter
 });
 
 
+test('a direct department activation resumes deferred native work only once', async t => {
+  const f = await fixture(t);
+  const started = await f.api('/api/live/session', { sdp: 'v=0\r\n', case_id: 'case-switch', handoff_before_work: true });
+  const old = f.sockets.get(started.body.session.id);
+  old.receive({ type: 'session.input_transcript.delta', event_id: 'direct-input', delta: '採用担当' });
+  old.receive({ type: 'decision.event', source_event_id: 'direct-input', source_event_type: 'session.input_transcript.delta',
+    event: { type: 'decision.completed', decision: { answers: [{ name: 'route', type: 'choice', choice: 'recruiting', confidence: .99 }] } } });
+  const prepared = await f.prepare(started.body.session.id, 'recruiting');
+  assert.equal(prepared.status, 200);
+  assert.equal((await f.activate(prepared)).status, 200);
+  await until(() => f.runs.length === 1);
+  await pause(10);
+  assert.equal(f.runs.length, 1);
+  assert.equal(f.runs[0].source, 'handoff_continuation');
+  assert.equal((await f.activate(prepared)).status, 200);
+  assert.equal(f.runs.length, 1);
+});
+
 test('work requests notify Slack before classification or Agent work and speak the receipt once', async t => {
   const posts = [];
   const f = await fixture(t, { extraEnv: { SLACK_BOT_TOKEN: 'test-only', SLACK_CHANNEL_ID: 'C123' },

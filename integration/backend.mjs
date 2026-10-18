@@ -123,7 +123,7 @@ export class BusinessBackend {
         ? this.client.beta.agents.sessions.stream(state.id, { input, idempotencyKey: randomUUID() }, { maxRetries: 2 })
         : await this.request('agents.create', () => this.client.beta.agents.sessions.create({
           environment: { type: 'openai_hosted' },
-          agent: { model: this.model, instructions: instructions(route, caseId), reasoning: { effort: 'low' },
+          agent: { model: this.model, service_tier: 'fast', instructions: instructions(route, caseId), reasoning: { effort: 'low' },
             tools: [...(route === 'haas' ? [{ type: 'web_search', mode: 'live', context_size: 'low' }] : []),
               { type: 'mcp', server_label: 'human_bridge', connection_origin: 'service', required: true,
               transport: { type: 'http', server_url: this.mcpUrl, authorization: `Bearer ${this.token}` },
