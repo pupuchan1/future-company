@@ -187,4 +187,64 @@ test('gateway configuration binds a fixed loopback Worker and validates private 
   assert.throws(() => createDemoGateway({ username, password, workerOrigin: 'https://remote.test' }), /loopback/);
   assert.throws(() => createDemoGateway({ username, password, workerOrigin: 'http://127.0.0.1:8787/other' }), /loopback/);
   assert.throws(() => createDemoGateway({ username, password, publicOrigin: 'http://public.test' }), /HTTPS/);
+  assert.throws(() => createDemoGateway({ username, password, workerOrigin: 'https://future-company-demo.r74.workers.dev' }), /server-only Access/);
+});
+
+test('approved production Worker gets only server Access headers after demo authentication', async t => {
+  const calls = [];
+  const remote = 'https://future-company-demo.r74.workers.dev';
+  const accessClientId = 'test-machine-client.access';
+  const accessClientSecret = 'test-machine-secret-0000000000000000';
+  const f = await fixture(t, (_req, res) => res.end('unused'), { workerOrigin: remote, accessClientId, accessClientSecret,
+    fetchImpl: async (url, init) => {
+      calls.push({ url: String(url), init });
+      const headers = new Headers({ 'CF-Access-Client-Secret': accessClientSecret });
+      headers.append('Set-Cookie', 'future_company_visitor=signed; Path=/api/v1; HttpOnly; Secure; SameSite=Strict');
+      headers.append('Set-Cookie', 'CF_Authorization=machine-session; Path=/; Secure');
+      return Response.json({ ok: true }, { headers });
+    },
+  });
+  const unauthorized = await fetch(`${f.origin}/api/v1/cases`, { headers: { 'CF-Access-Client-Id': accessClientId, 'CF-Access-Client-Secret': accessClientSecret } });
+  assert.equal(unauthorized.status, 401); assert.equal(calls.length, 0);
+  const authenticated = await login(f); const cookie = authenticated.headers.get('set-cookie').split(';')[0];
+  const result = await fetch(`${f.origin}/api/v1/cases`, { method: 'POST', headers: { Cookie: `${cookie}; visitor=owned`, Origin: f.origin, 'Content-Type': 'application/json', 'CF-Access-Client-Id': 'forged-id', 'CF-Access-Client-Secret': 'forged-secret' }, body: '{}' });
+  assert.equal(result.status, 200);
+  assert.equal(calls[0].url, `${remote}/api/v1/cases`);
+  const headers = calls[0].init.headers;
+  assert.equal(headers.get('Origin'), remote);
+  assert.equal(headers.get('Cookie'), 'visitor=owned');
+  assert.equal(headers.get('Authorization'), null);
+  assert.equal(headers.get('CF-Access-Client-Id'), accessClientId);
+  assert.equal(headers.get('CF-Access-Client-Secret'), accessClientSecret);
+  assert.equal(calls[0].init.redirect, 'manual');
+  assert.equal(result.headers.get('CF-Access-Client-Secret'), null);
+  assert.equal(result.headers.get('set-cookie').includes('CF_Authorization'), false);
+  assert.equal((await result.text()).includes(accessClientSecret), false);
+});
+
+test('remote Worker SSE behind browser WebSocket uses the same private Access identity', async t => {
+  let received;
+  const f = await fixture(t, (_req, res) => res.end('unused'), {
+    workerOrigin: 'https://future-company-demo.r74.workers.dev', accessClientId: 'test-machine-client.access', accessClientSecret: 'test-machine-secret-0000000000000000',
+    fetchImpl: async (url, init) => {
+      received = { url: String(url), headers: init.headers };
+      const stream = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(': ready\n\n')); } });
+      return new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+  const ws = f.socket('/api/v1/cases/case-a/voice/events');
+  await once(ws, 'open');
+  assert.equal(received.headers.get('CF-Access-Client-Id'), 'test-machine-client.access');
+  assert.equal(received.headers.get('CF-Access-Client-Secret'), 'test-machine-secret-0000000000000000');
+  assert.equal(received.headers.get('Authorization'), null);
+  assert.equal(received.headers.get('Cookie'), 'visitor=owner');
+  assert.equal(received.headers.get('Origin'), 'https://future-company-demo.r74.workers.dev');
+  const ended = once(ws, 'close'); ws.close(); await ended;
+});
+
+test('loading production Access settings never sends them to the local Worker', async t => {
+  const f = await fixture(t, (_req, res) => res.end('local'), { accessClientId: 'test-machine-client.access', accessClientSecret: 'test-machine-secret-0000000000000000' });
+  assert.equal((await f.request('/')).status, 200);
+  assert.equal(f.requests[0].headers['cf-access-client-id'], undefined);
+  assert.equal(f.requests[0].headers['cf-access-client-secret'], undefined);
 });

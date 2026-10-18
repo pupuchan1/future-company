@@ -13,6 +13,7 @@ const safeHeaders = ['accept', 'content-type', 'cookie', 'sec-fetch-site', 'last
 const replyHeaders = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY' };
 const sessionCookieName = '__Host-haas_demo';
 const sessionLifetimeMs = 8 * 60 * 60 * 1000;
+const productionWorkerOrigin = 'https://future-company-demo.r74.workers.dev';
 
 function cookiePairs(value = '') {
   return value.split(';').map(part => part.trim()).filter(Boolean);
@@ -45,11 +46,14 @@ function rejectUpgrade(socket, status) {
 
 /** Private, loopback-only gateway. No provider credentials or voice/case state are created here. */
 export function createDemoGateway({ workerOrigin = 'http://127.0.0.1:8787', username, password,
-  publicOrigin = '', fetchImpl = fetch, eventLifetimeMs = 60000, clock = Date.now } = {}) {
+  publicOrigin = '', accessClientId = '', accessClientSecret = '', fetchImpl = fetch, eventLifetimeMs = 60000, clock = Date.now } = {}) {
   if (typeof username !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(username)
     || typeof password !== 'string' || !/^[A-Za-z0-9_-]{32,200}$/.test(password)) throw new Error('Configure a demo username and a 32–200 character URL-safe password.');
   const worker = new URL(workerOrigin);
-  if (worker.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(worker.hostname) || worker.pathname !== '/' || worker.search || worker.hash || worker.username || worker.password) throw new Error('Worker target must be a fixed loopback HTTP origin.');
+  const remoteWorker = worker.origin === productionWorkerOrigin;
+  const loopbackWorker = worker.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(worker.hostname);
+  if ((!loopbackWorker && !remoteWorker) || worker.pathname !== '/' || worker.search || worker.hash || worker.username || worker.password) throw new Error('Worker target must be a fixed loopback HTTP origin or the approved production HTTPS origin.');
+  if (remoteWorker && (!/^[A-Za-z0-9._-]{16,512}$/.test(accessClientId) || !/^[A-Za-z0-9._-]{16,512}$/.test(accessClientSecret))) throw new Error('The production Worker requires server-only Access credentials.');
   const published = publicOrigin ? new URL(publicOrigin) : null;
   if (published && (published.protocol !== 'https:' || published.pathname !== '/' || published.search || published.hash || published.username || published.password)) throw new Error('The public origin must be an HTTPS origin.');
   const expectedAuth = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
@@ -86,6 +90,12 @@ export function createDemoGateway({ workerOrigin = 'http://127.0.0.1:8787', user
     for (const name of safeHeaders) if (typeof req.headers[name] === 'string') {
       const value = name === 'cookie' ? cookiePairs(req.headers[name]).filter(pair => !pair.startsWith(`${sessionCookieName}=`)).join('; ') : req.headers[name];
       if (value) headers.set(name, value);
+    }
+    // Browser-supplied Access headers are never forwarded; only the fixed
+    // production Worker receives the operator's server-side service identity.
+    if (remoteWorker) {
+      headers.set('CF-Access-Client-Id', accessClientId);
+      headers.set('CF-Access-Client-Secret', accessClientSecret);
     }
     // Only requests that already passed the public same-origin check are rewritten.
     if (req.headers.origin) headers.set('Origin', worker.origin);
@@ -136,7 +146,9 @@ export function createDemoGateway({ workerOrigin = 'http://127.0.0.1:8787', user
       const type = response.headers.get('Content-Type') || 'application/octet-stream';
       const outputHeaders = { ...replyHeaders, 'Content-Type': type };
       const isSecure = published?.protocol === 'https:' || req.headers['x-forwarded-proto'] === 'https';
-      const cookies = response.headers.getSetCookie().map(cookie => isSecure && !/;\s*Secure(?:;|$)/i.test(cookie) ? `${cookie}; Secure` : cookie);
+      const cookies = response.headers.getSetCookie()
+        .filter(cookie => !/^(?:CF_|__cf|__Host-haas_demo=)/i.test(cookie))
+        .map(cookie => isSecure && !/;\s*Secure(?:;|$)/i.test(cookie) ? `${cookie}; Secure` : cookie);
       if (cookies.length) outputHeaders['Set-Cookie'] = cookies;
       if (type.includes('text/html') && req.method !== 'HEAD') {
         const html = new TextDecoder().decode(await readBoundedBody(response.body, 2 * 1024 * 1024));
@@ -222,7 +234,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const port = Number(process.env.DEMO_GATEWAY_PORT || 4350);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid demo port.');
   const server = createDemoGateway({ username: process.env.DEMO_GATEWAY_USER, password: process.env.DEMO_GATEWAY_PASSWORD,
-    workerOrigin: process.env.DEMO_GATEWAY_WORKER_ORIGIN || 'http://127.0.0.1:8787', publicOrigin: process.env.DEMO_GATEWAY_PUBLIC_ORIGIN || '' });
+    workerOrigin: process.env.DEMO_GATEWAY_WORKER_ORIGIN || 'http://127.0.0.1:8787', publicOrigin: process.env.DEMO_GATEWAY_PUBLIC_ORIGIN || '',
+    accessClientId: process.env.WORKER_ACCESS_CLIENT_ID || process.env.CF_ACCESS_CLIENT_ID || '',
+    accessClientSecret: process.env.WORKER_ACCESS_CLIENT_SECRET || process.env.CF_ACCESS_CLIENT_SECRET || '' });
   server.listen(port, '127.0.0.1', () => console.log(`Private demo gateway listening on loopback port ${port}.`));
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void server.shutdown().then(() => process.exit(0)); });
 }
