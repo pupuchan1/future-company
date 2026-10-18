@@ -66,14 +66,18 @@ class ExternalSocket extends EventEmitter {
 
 type CompletedEvent = { eventId: string; isValid: () => boolean; data: { case_id: string; handoff_id: string; request_id: string; source_route: string; result: { text: string; language: string }; simulated: boolean } }
 
-function adapter(deliver: (event: CompletedEvent) => Promise<{ status: string }>) {
+function adapter(deliver: (event: CompletedEvent) => Promise<{ status: string }>, afterWrite = (_path: string, _body: Record<string, unknown>) => {}) {
   const sockets: ExternalSocket[] = []
   const errors: unknown[] = []
   const bridge = new WorkerBridge({ url: origin, token: staffToken,
-    fetcher: (url: URL, options: RequestInit) => mf.dispatchFetch(url.href, {
-      method: options.method, headers: Object.fromEntries(new Headers(options.headers)),
-      ...(typeof options.body === 'string' ? { body: options.body } : {}),
-    }),
+    fetcher: async (url: URL, options: RequestInit) => {
+      const response = await mf.dispatchFetch(url.href, {
+        method: options.method, headers: Object.fromEntries(new Headers(options.headers)),
+        ...(typeof options.body === 'string' ? { body: options.body } : {}),
+      })
+      if (response.ok && typeof options.body === 'string') afterWrite(url.pathname, JSON.parse(options.body))
+      return response
+    },
     socketFactory: () => { const socket = new ExternalSocket(); sockets.push(socket); return socket },
     deliver, emit: (event: unknown) => errors.push(event),
   })
@@ -300,4 +304,35 @@ test('Worker reserves delivery for one consumer and cannot rewind a terminal rec
     }
     assert.equal((await saved(snapshot.id)).requests[0].delivery?.status, terminal)
   }
+})
+
+
+test('a lost durable reservation response resumes with the same command and never delivers twice', async () => {
+  const { snapshot, proof } = await newCase('haas')
+  const events: CompletedEvent[] = []
+  const reservations: unknown[] = []
+  let loseResponse = true
+  const { bridge } = adapter(async event => { events.push(event); return { status: 'live_submitted' } }, (path, body) => {
+    if (!path.endsWith('/delivery') || body.status !== 'queued') return
+    reservations.push(body.commandId)
+    if (loseResponse) { loseResponse = false; throw new Error('Synthetic lost response after durable reservation') }
+  })
+  const handoffId = `handoff-${randomUUID()}`
+  try {
+    await bridge.attachCase(snapshot.id, proof)
+    await bridge.humanEvent(human(snapshot.id, handoffId), 'haas')
+    await bridge.humanEvent(human(snapshot.id, handoffId, 'human.completed', { text: 'Saved before response loss', language: 'en' }), 'haas')
+    const state = bridge.cases.get(snapshot.id)
+    await state.deliveries.get(handoffId)
+    assert.equal((await saved(snapshot.id)).requests[0].delivery?.status, 'queued')
+    assert.equal(events.length, 0)
+    await bridge.syncCase(snapshot.id, proof)
+    await state.deliveries.get(handoffId)
+    assert.equal(events.length, 1)
+    assert.equal(reservations.length, 2)
+    assert.equal(reservations[0], reservations[1])
+    assert.equal((await saved(snapshot.id)).requests[0].delivery?.status, 'live_submitted')
+    await bridge.syncCase(snapshot.id, proof)
+    assert.equal(events.length, 1)
+  } finally { bridge.close() }
 })

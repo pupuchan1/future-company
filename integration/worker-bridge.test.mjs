@@ -119,9 +119,12 @@ test('two Node consumers use distinct durable reservation IDs and dispatch only 
   await Promise.all([f.bridge.humanEvent(requested(), 'recruiting'), second.humanEvent(requested(), 'recruiting')]);
   Object.assign(f.snapshots.get('case-one').requests[0], { status: 'answered', result, simulated: true, delivery: { status: 'pending' } });
   const receipt = f.receipt();
-  await Promise.all([f.bridge.syncCase('case-one', proof), second.syncCase('case-one', proof)]);
+  // Both consumers see the same pending snapshot, before either durable claim.
+  // A later GET may already see queued and legitimately skip the second attempt.
+  const frame = Buffer.from(JSON.stringify({ type: 'case.snapshot', snapshot: structuredClone(f.snapshots.get('case-one')) }));
+  f.sockets.forEach(socket => socket.emit('message', frame));
   await receipt;
-  await nextTurn();
+  await Promise.all([f.bridge.cases.get('case-one').deliveries.get('handoff-one'), second.cases.get('case-one').deliveries.get('handoff-one')]);
   assert.equal(f.deliveries.length, 1);
   const reservations = f.calls.filter(c => c.path.endsWith('/delivery') && c.body.status === 'queued');
   assert.equal(new Set(reservations.map(c => c.body.commandId)).size, 2);

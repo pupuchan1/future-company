@@ -34,7 +34,7 @@ export class WorkerBridge {
     const { case: snapshot } = await this.api(`/staff/cases/${caseId}`);
     if (snapshot.id !== caseId || snapshot.status === 'resolved') throw Object.assign(new Error('Worker case is unavailable.'), { status: 409 });
     if (this.cases.has(caseId)) throw Object.assign(new Error('Case bridge already exists.'), { status: 409 });
-    const state = { id: caseId, closed: false, queue: Promise.resolve(), handoffs: new Map(), deliveries: new Map(), retryableDeliveries: new Set() };
+    const state = { id: caseId, closed: false, queue: Promise.resolve(), handoffs: new Map(), deliveries: new Map(), retryableDeliveries: new Set(), reservationIds: new Map() };
     this.cases.set(caseId, state);
     const url = new URL(`/api/v1/staff/cases/${caseId}/ws`, this.url);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -139,7 +139,13 @@ export class WorkerBridge {
     const origin = request.origin;
     const valid = () => !state.closed && !state.handoffs.get(origin.handoffId)?.cancelled;
     const path = `/staff/cases/${state.id}/handoffs/${origin.handoffId}/delivery`;
-    const reservationId = `bridge-queued-${randomUUID()}`;
+    // A different Node needs a different reservation, while an HTTP retry by
+    // this Node must recover the same durable write after a lost response.
+    let reservationId = state.reservationIds.get(origin.handoffId);
+    if (!reservationId) {
+      reservationId = `bridge-queued-${randomUUID()}`;
+      state.reservationIds.set(origin.handoffId, reservationId);
+    }
     await this.enqueue(state, () => this.command(state, path, reservationId, { status: 'queued' }));
     if (!valid()) return;
     // Recheck durable cancellation after queue reservation and before the Agent receives data.
