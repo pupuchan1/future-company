@@ -56,6 +56,7 @@ async function fixture(t, options = {}) {
     if (req.url === '/api/worker/results') return reply(res, 202, { accepted: true });
     if (req.url.endsWith('/handoff')) return reply(res, 200, { case_id: data.case_id, session: { id: `next-${data.case_id}` }, old_session_id: `live-${data.case_id}`, handoff_token: 'fake-ticket', transport: { sdp: 'v=0\nanswer' } });
     if (req.url.endsWith('/activate')) return reply(res, 200, { case_id: data.case_id, session: { id: `next-${data.case_id}` }, active: true });
+    if (req.url.endsWith('/language')) return reply(res, 200, { case_id: data.case_id, language: data.language, language_preference: data.language_preference });
     if (req.method === 'DELETE') return reply(res, 200, { closed: true });
     if (req.url === '/mcp') return reply(res, 200, { jsonrpc: '2.0', id: 1, result: { ok: true } });
     return reply(res, 404, { error: 'missing' });
@@ -103,6 +104,16 @@ test('Worker authorizes the cookie on the case prefix and preserves #19 proof th
   assert.deepEqual(f.authorizeCalls, ['case-a']);
   assert.equal(response.headers.get('x-future-signature'), null);
   assert.equal(response.headers.get('set-cookie'), null);
+});
+
+test('language selection traverses the scoped relay and cannot target another case session', async t => {
+  const f = await fixture(t);
+  await (await f.browser('case-a', '/session', { method: 'POST', data: { sdp: 'v=0' } })).json();
+  const result = await f.browser('case-a', '/session/live-case-a/language', { method: 'POST', data: { language: 'en', language_preference: 'en' } });
+  assert.equal(result.status, 200);
+  assert.deepEqual(await result.json(), { case_id: 'case-a', language: 'en', language_preference: 'en' });
+  assert.equal((await f.browser('case-b', '/session/live-case-a/language', { method: 'POST', data: { language: 'ja', language_preference: 'ja' } })).status, 404);
+  assert.equal((await f.browser('case-a', '/session/live-case-a/language', { method: 'POST', data: { case_id: 'case-b', language: 'ja', language_preference: 'ja' } })).status, 403);
 });
 
 test('cross-origin, foreign case, mismatching body and arbitrary relay routes are rejected before upstream', async (t) => {

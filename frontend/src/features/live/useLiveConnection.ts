@@ -2,14 +2,19 @@ import { VoiceActivityStore } from '../voice/activity.ts'
 import { useEffect, useRef, useState } from 'react'
 import { LiveClient } from './client.ts'
 import { initialSnapshot } from './types.ts'
-import type { LiveLanguage, LiveRoute } from './types.ts'
+import type { LiveLanguage, LiveLanguagePreference, LiveRoute } from './types.ts'
 
-export function useLiveConnection({ caseId, language }: { caseId: string; language: LiveLanguage }) {
+export function useLiveConnection({ caseId, language, languagePreference = 'auto' }: { caseId: string; language: LiveLanguage; languagePreference?: LiveLanguagePreference }) {
   const [snapshot, setSnapshot] = useState(() => initialSnapshot(caseId, language))
   const [voice, setVoice] = useState(() => new VoiceActivityStore())
   const client = useRef<LiveClient | null>(null)
   const languageRef = useRef(language)
+  const preferenceRef = useRef(languagePreference)
   useEffect(() => { languageRef.current = language }, [language])
+  useEffect(() => { preferenceRef.current = languagePreference }, [languagePreference])
+  useEffect(() => {
+    if (snapshot.phase === 'connected') void client.current?.setLanguage(language, languagePreference)
+  }, [language, languagePreference, snapshot.phase])
   useEffect(() => {
     const next = new LiveClient(caseId, languageRef.current)
     client.current = next
@@ -32,7 +37,8 @@ export function useLiveConnection({ caseId, language }: { caseId: string; langua
   return {
     snapshot,
     voice,
-    start: (route?: LiveRoute, bridgeToken?: string) => client.current?.start(languageRef.current, route, bridgeToken),
+    retryLanguage: () => client.current?.setLanguage(languageRef.current, preferenceRef.current),
+    start: (route?: LiveRoute, bridgeToken?: string) => client.current?.start(languageRef.current, route, bridgeToken, preferenceRef.current),
     switchDepartment: (route: LiveRoute) => client.current?.switchDepartment(route),
     stop: () => client.current?.stop(),
     toggleMuted: () => client.current?.setMuted(!client.current.getSnapshot().muted),

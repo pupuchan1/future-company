@@ -16,7 +16,7 @@ export function voiceRoute(path, method) {
   if (path === '/events' && method === 'GET') return { kind: 'events', upstream: '/api/events' };
   if (path === '/results' && method === 'POST') return { kind: 'results', upstream: '/api/worker/results' };
   if (path === '/session' && method === 'POST') return { kind: 'create', upstream: '/api/live/session' };
-  const match = new RegExp(`^/session/(${SESSION_PATTERN})(?:/(handoff|activate))?$`).exec(path);
+  const match = new RegExp(`^/session/(${SESSION_PATTERN})(?:/(handoff|activate|language))?$`).exec(path);
   if (!match) return null;
   if (!match[2] && method === 'DELETE') return { kind: 'close', sessionId: match[1], upstream: `/api/live/session/${match[1]}` };
   if (match[2] && method === 'POST') return { kind: match[2], sessionId: match[1], upstream: `/api/live/session/${match[1]}/${match[2]}` };

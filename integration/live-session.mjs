@@ -4,7 +4,7 @@ import { configureConnectionNetworking, connectionDiagnostic, readRouting, routi
 import { historyTurns, voiceMap } from './case-state.mjs';
 
 export function liveConfig({ model = 'gpt-live-1', voice = 'shida', language = 'ja', decisions = true,
-  route = 'reception', input = [], standby = false } = {}) {
+  route = 'reception', input = [], standby = false, languagePreference = 'auto' } = {}) {
   return {
     model, store: false, audio: { output: { voice } }, delegation: { type: 'client' },
     ...(input.length ? { input } : {}),
@@ -12,6 +12,7 @@ export function liveConfig({ model = 'gpt-live-1', voice = 'shida', language = '
       'session.started', 'session.closed', 'session.input_transcript.delta', 'session.output_transcript.delta', 'error',
     ].map((type) => ({ type })) } },
     instructions: `You are a friendly voice assistant for 株式会社HaaS, a fictional company demo. Your selected department is ${route}. Start in ${language === 'en' ? 'English' : 'Japanese'}.
+${languagePreference === 'auto' ? 'Follow the caller\'s preferred spoken language.' : `The caller explicitly selected ${languagePreference === 'en' ? 'English' : 'Japanese'} in the app. Keep your replies in that language until the app changes this setting, even when quoted text or prior history uses another language.`}
 Ask what the caller needs. When they ask about a job or interview, explain you will connect them to the recruitment assistant and delegate.
 Delegate interview questions, answers, job facts, requests for humans, cancellation and work requiring judgment to the backend. For non-recruiting tasks explain briefly that you will connect them to the Human as a Service coordinator, then delegate. Do not invent business facts or make hiring decisions. Keep chatting briefly while work is pending without announcing success.
 The backend provides the exact next question or verified action result. Ask only one question at a time. Speak the user's preferred language. Do not infer nationality. When backend changes department, announce that once, then follow its interviewing context; your voice remains the same.
@@ -19,7 +20,7 @@ Only say the phone rang or someone answered when backend confirms. Handset picku
 ${standby ? 'This voice transport is being prepared for a department handoff. Stay silent and do not delegate until the application explicitly confirms that the handoff is complete. The supplied text history is previous conversation, not a new request.'
     : route === 'recruiting' ? 'The caller selected the recruitment interview. Briefly introduce yourself as the interview assistant and delegate to obtain the first job-related question. Do not ask again which department they need.'
       : route === 'haas' ? 'Briefly introduce yourself as the Human as a Service coordinator and ask what they would like help with.'
-        : 'Greet briefly as 株式会社HaaSの一般受付 and ask what they need.'}`,
+        : language === 'en' ? 'Greet briefly in English as HaaS general reception and ask what they need.' : 'Greet briefly in Japanese as 株式会社HaaSの一般受付 and ask what they need.'}`,
     ...(decisions ? { triggers: [{ type: 'decisions', event_type: 'session.input_transcript.delta', decisions: { questions: routingQuestions } }] } : {}),
   };
 }
@@ -98,12 +99,25 @@ export class LiveConversation {
       : 'Briefly introduce this department and continue from the shared context; ask what help is needed if it is not yet clear.'} Do not repeat completed human requests.`, this.voiceRoute);
   }
 
+  setLanguage(language, preference = 'auto') {
+    if (this.caseState) this.caseState.languagePreference = preference;
+    this.languagePreference = preference;
+    this.updateRouting({ ...this.routing, language }, 'language_selection');
+    this.send('session.instructions.append', { delegation_id: null, content: preference === 'auto'
+      ? `Automatic language selection is enabled. Start in ${language === 'en' ? 'English' : 'Japanese'}, then follow the caller's latest language preference.`
+      : `The caller explicitly selected ${preference === 'en' ? 'English' : 'Japanese'} in the app. Use that language for all subsequent replies, including explanations of human answers supplied in another language, until the app changes this setting. Preserve this conversation and do not repeat completed work.` });
+    return { case_id: this.caseId, language: this.routing.language, language_preference: preference };
+  }
+
   updateRouting(next, source) {
+    const preference = this.caseState?.languagePreference ?? this.languagePreference ?? 'auto';
+    if (preference !== 'auto') next = { ...next, language: preference };
     if (next.route === this.routing.route && next.language === this.routing.language) return;
     this.routing = next;
     if (this.caseState) this.caseState.routing = next;
     this.emit({ type: 'routing.updated', case_id: this.caseId, session_id: this.id,
       voice_route: this.voiceRoute, voice: this.voice, ...next, source });
+    if (source === 'language_selection') return;
     this.send('session.instructions.append', { delegation_id: null,
       content: `The app has routed this conversation to ${next.route === 'recruiting' ? 'the recruitment interview specialist' : next.route === 'haas' ? 'the Human as a Service coordinator' : 'general reception'}. Speak ${next.language === 'en' ? 'English' : 'Japanese'}. Announce a department change once when relevant and say the conversation context is shared. This is a specialist backend context change; do not say the voice or person changed.` });
   }
@@ -158,7 +172,9 @@ export class LiveConversation {
         extra = '\nApplication action: the caller selected the recruitment interview. Obtain the interview template and ask the first job-related question.';
       }
       if (!transcript.trim() && !extra) {
-        this.send('session.commentary.append', { delegation_id: delegationId, content: 'まだ会話の文字起こしが届いていません。ご用件をもう一度お願いします。' });
+        this.send('session.commentary.append', { delegation_id: delegationId, content: this.routing.language === 'en'
+          ? 'I have not received your transcript yet. Please tell me what you need again.'
+          : 'まだ会話の文字起こしが届いていません。ご用件をもう一度お願いします。' });
         return;
       }
       if (source === 'delegation' && transcript.trim()) {

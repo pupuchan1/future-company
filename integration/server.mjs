@@ -189,9 +189,11 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         if (!provider || !backend?.mcpUrl) return json(res, 503, { error: 'Server-side API key and HUMAN_MCP_URL are required.' });
         const input = await body(req);
         if (typeof input.sdp !== 'string' || !input.sdp.startsWith('v=0')) return json(res, 400, { error: 'A WebRTC SDP offer is required.' });
+        if (input.language_preference !== undefined && !['auto', 'ja', 'en'].includes(input.language_preference)) return json(res, 400, { error: 'Unsupported language preference.' });
         if (input.route !== undefined && !isVoiceRoute(input.route)) return json(res, 400, { error: 'Unknown voice department.', code: 'invalid_route' });
         const route = input.route || 'reception';
-        const language = input.language === 'en' ? 'en' : 'ja';
+        const languagePreference = input.language_preference ?? 'auto';
+        const language = languagePreference === 'auto' ? (input.language === 'en' ? 'en' : 'ja') : languagePreference;
         const caseId = identifier(input.case_id) ? input.case_id : `case-${randomUUID()}`;
         if (cases.size + pendingCreates >= 3) return json(res, 429, { error: 'Close an existing session first.' });
         if (pendingCaseIds.has(caseId) || cases.has(caseId)) return json(res, 409, { error: 'This case already has a voice session.' });
@@ -200,9 +202,9 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         try {
           if (workerBridge) await workerBridge.attachCase(caseId, input.bridge_token);
           const result = await createLive({ session: liveConfig({ model: env.LIVE_MODEL || 'gpt-live-1',
-            voice: voiceMap[route], route, language, decisions: env.LIVE_DECISIONS_ENABLED !== 'false' }),
+            voice: voiceMap[route], route, language, languagePreference, decisions: env.LIVE_DECISIONS_ENABLED !== 'false' }),
             transport: { type: 'webrtc', sdp: input.sdp } });
-          const state = createCaseState(caseId, language, route);
+          const state = createCaseState(caseId, language, route, languagePreference);
           state.activeSessionId = result.session.id;
           cases.set(caseId, state);
           const session = observeSession(result, state);
@@ -217,6 +219,19 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         const input = await body(req);
         if (!identifier(input.case_id)) return json(res, 400, { error: 'A valid case_id is required.' });
         return json(res, 202, await workerBridge.syncCase(input.case_id, input.bridge_token));
+      }
+      const languageMatch = path.match(/^\/api\/live\/session\/([^/]+)\/language$/);
+      if (req.method === 'POST' && languageMatch) {
+        const session = sessions.get(decodeURIComponent(languageMatch[1]));
+        if (!session || session.closed || session.closing) return json(res, 404, { error: 'Voice session not found.' });
+        const input = await body(req);
+        const state = session.caseState;
+        if (input.case_id !== session.caseId) return json(res, 403, { error: 'Voice case does not match.' });
+        if (state.closed || state.activeSessionId !== session.id) return json(res, 409, { error: 'This voice session is no longer active.' });
+        if (session.ws.readyState !== 1) return json(res, 409, { error: 'Voice connection is not ready.' });
+        if (!['ja', 'en'].includes(input.language) || !['auto', 'ja', 'en'].includes(input.language_preference)
+          || (input.language_preference !== 'auto' && input.language_preference !== input.language)) return json(res, 400, { error: 'Unsupported language preference.' });
+        return json(res, 200, session.setLanguage(input.language, input.language_preference));
       }
       const handoffMatch = path.match(/^\/api\/live\/session\/([^/]+)\/handoff$/);
       if (req.method === 'POST' && handoffMatch) {
@@ -237,7 +252,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         ticket.timer.unref?.();
         try {
           const result = await createLive({ session: liveConfig({ model: env.LIVE_MODEL || 'gpt-live-1',
-            voice: voiceMap[input.route], route: input.route, language: state.routing.language,
+            voice: voiceMap[input.route], route: input.route, language: state.routing.language, languagePreference: state.languagePreference,
             input: initialHistory(state.history), standby: true, decisions: env.LIVE_DECISIONS_ENABLED !== 'false' }),
             transport: { type: 'webrtc', sdp: input.sdp } });
           ticket.newId = result.session.id;

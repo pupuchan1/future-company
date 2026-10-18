@@ -27,6 +27,7 @@ Black phone -- Bearer WSS --> relay /bridge   --> same integration gateway
 | `/session` | POST | `/api/live/session` |
 | `/session/{id}/handoff` | POST | `/api/live/session/{id}/handoff` |
 | `/session/{id}/activate` | POST | `/api/live/session/{id}/activate` |
+| `/session/{id}/language` | POST | `/api/live/session/{id}/language` |
 | `/session/{id}` | DELETE | `/api/live/session/{id}` |
 
 POST/DELETE は同一originを要求する。Worker が `authorizeVisitorCase` で毎回cookie所有者を検証し、case ID・method・path・body hash・時刻・nonceをHMAC署名する。署名は30秒有効。同じnonceの再送は409、新しいHTTP要求は新しいnonceになる。自動的なPOST再試行は追加していない。秘密は `NODE_RELAY_SECRET` として Worker/Node のサーバー側だけに置く。

@@ -3,6 +3,9 @@ import { useReceptionConnection } from "@/features/worker/useReceptionConnection
 import { VoiceOrb } from "@/features/voice/VoiceOrb";
 import type { LiveLanguage, LiveRoute } from "@/features/live/types";
 import { useDisplayLanguage } from "@/lib/useDisplayLanguage";
+import { LanguageSelector } from "@/components/LanguageSelector";
+import { systemMessage } from "@/lib/system-message";
+import { LANGUAGE_CHANGE_ERROR } from "@/features/live/types";
 
 const phrase = (language: LiveLanguage, ja: string, en: string) =>
   language === "ja" ? ja : en;
@@ -37,7 +40,7 @@ function Mic({ off = false }: { off?: boolean }) {
 }
 export function ReceptionPage() {
   const { language, preference, selectLanguage } = useDisplayLanguage();
-  const live = useReceptionConnection(language);
+  const live = useReceptionConnection(language, preference);
   const caseId = live.caseId;
   const s = live.snapshot;
   const text = (ja: string, en: string) => phrase(language, ja, en);
@@ -79,19 +82,7 @@ export function ReceptionPage() {
         <span className="reception-header-label">
           {text("AI総合受付", "AI RECEPTION")}
         </span>
-        <div className="language-switch" role="group" aria-label={text("表示言語", "Display language")}>
-          <button type="button" aria-pressed={preference === "auto"} onClick={() => selectLanguage("auto")}>
-            {text("自動", "Auto")}
-          </button>
-          <span aria-hidden="true">/</span>
-          <button type="button" lang="ja" aria-label="日本語" aria-pressed={preference === "ja"} onClick={() => selectLanguage("ja")}>
-            JP
-          </button>
-          <span aria-hidden="true">/</span>
-          <button type="button" lang="en" aria-label="English" aria-pressed={preference === "en"} onClick={() => selectLanguage("en")}>
-            EN
-          </button>
-        </div>
+        <LanguageSelector language={language} preference={preference} onChange={selectLanguage} />
       </header>
       <main id="main" className="page-width reception-main">
         <section className="reception-hero">
@@ -190,8 +181,13 @@ export function ReceptionPage() {
             )}
             {(s.error || s.cleanupWarning || live.worker.error) && (
               <p role="alert" className="inline-error">
-                {s.error || s.cleanupWarning || live.worker.error}
+                {systemMessage(s.error || s.cleanupWarning || live.worker.error, language)}
               </p>
+            )}
+            {s.error === LANGUAGE_CHANGE_ERROR && (
+              <button type="button" className="text-button" onClick={() => void live.retryLanguage()}>
+                {text("言語の変更を再試行", "Retry language change")}
+              </button>
             )}
           </section>
         </section>
