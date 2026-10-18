@@ -29,10 +29,31 @@
 
 ## チーム結合として残るもの
 
-- pupuのReact4画面と、r74techのWorker/DO/D1への接続。相手のローカルコードは未push時点の報告であり、このPRとの結合試験はまだ。
+- pupuのReact画面と、r74techのWorker/DO/D1への接続。15時台にはPR #15/#12としてコード共有済み。画面はpupuの実装を採用し、案件ID・認証境界と結果返却の結合は #18/#19 で進める。
 - Node handoff_idとWorker requestIdの対応、社員認証/claim/revisionを通した結果APIアダプター。
 - 実機ベル、受話器からの実回答、人間の音声経路。
 - 実ChatGPT Work/dotsのMCP Events購読と、購読後の業務実行。
 - 公開Web、アプリ認証、本番リポジトリへの移管、永続case復旧。
 
 PRはDraftのまま共有し、これらの境界・受入範囲をマージ時に判断する。
+
+## 2026-10-18 15時台: 担当別の声切替
+
+最新のNode試験は52/52成功。既知のAPI接続例外はHTTP 502として返し、statusのない例外も許可したクラス名と原因コードだけをprivateなerrors.jsonlに記録する。例外本文・入力・キーはこの診断に含めない。診断追加後の実API再試行は行っておらず、以下の汎用400の原因を遡って確定したものではない。
+
+aiortcで同じケースの一般受付→採用→HaaSを試験した。入力はmacOSの合成音声PCMだけを使用し、実マイクやユーザー録音は使用していない。受付→採用の実接続までは確認できたが、その後の業務Agent接続失敗により、3担当を通した結合成功とはしていない。
+
+| 確認 | 結果 |
+| --- | --- |
+| 起動時履歴の実APIスキーマ | 最初の切替でuser履歴の`type: text`が400となった。`user: input_text` / `assistant: output_text`に修正し、型の回帰を含む局所10/10テスト成功。その後の候補作成は成功 |
+| 受付の合成入力・応答 | 「テスト太郎」と受付確認の入力を認識し、株式会社HaaSの一般受付として音声応答 |
+| 受付→採用の2段階切替 | 同じ`case_id`でhandoff→新WebRTC接続→activate成功。`session.started`で`shida`→`harema`を確認 |
+| 音声の受信 | 成功した切替試行で受付1,370フレーム（非無音193）、採用1,202フレーム（非無音603）、音声受信エラー0。採用側のactivate前は非無音0 |
+| activate再送 | 同じ候補IDとtokenで200・同一結果を確認。tokenは証跡へ保存していない |
+| 採用Agentへの業務引継ぎ | `department_selection`の開始後に`Connection error.`。この試行の面談質問、元Agent復帰、名前の意味的な保持は未確認 |
+| 限定した再試行 | キーなしのOpenAI到達確認は401・3.53秒。その後の再試行は候補作成前の汎用400で終了。候補IDやprovider status付き診断はなく、同じ接続障害か別の例外かは未確定 |
+| HaaSの`marin`音声・3担当結合 | この声切替試行では未到達。14:42のHaaS経路単独検証とは区別する |
+| 終了 | 返された全Live IDへ終了要求を実施し、全WebRTC peerを閉じた。`cleanup_pending`はすべて空。型エラー試行の受付は`session.closed`確認済み。他の試行は`close_requested`でfinalization応答未確認。今回の業務Agent作成IDは返っていない |
+| 接続直後の自動挨拶 | 入力前の25秒は無音。合成入力後の挨拶は確認。入力なしでの自動発話は未確認 |
+
+ローカル証跡は`/Users/limo/Documents/Codex/2026-10-18/moj/work/`の`webrtc-handoff.py`、`voice-handoff-1792303785.json`（型エラー・正常終了）、`voice-handoff-1792303855.json`（受付→採用の実切替）、`voice-handoff-1792303986.json`（限定再試行）。局所テストログは`/Users/limo/Documents/Development/logs/dev-runs/2026-10-18/run-15i9lleu.log`。受信フレームとサーバーのvoice設定を検証したもので、人による音色・聞き取りやすさの評価ではない。

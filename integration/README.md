@@ -41,7 +41,7 @@ flowchart LR
     E --> W[ChatGPT Work・dots等の購読者]
 ```
 
-`reception` / `recruiting` / `haas` はそれぞれ別のAgents sessionです。言語と会話履歴を引き継ぎ、Liveの声は維持して担当変更を案内します。声そのものを変えるには新しいLive sessionが必要です。
+`reception` / `recruiting` / `haas` はそれぞれ別のAgents sessionです。業務の自動振り分けでは声を維持します。UIから明示的に声を交代する場合は、同じcase・Agents・履歴を保持した新しいLive sessionへ2段階で切り替えます。受付は `shida`、採用は `harema`、HaaSは `marin` です。
 
 Decisionsは `route=reception|recruiting|haas` と `language=ja|en` を分類します。native triggerの部分発話は `routing.candidate` として表示用に通知し、担当を確定するのは委譲時の全文分類です。国籍、能力評価、候補者ランキング、採否は判断しません。採用担当は架空求人の質問・回答整理・人間相談までです。
 
@@ -51,13 +51,19 @@ Decisionsは `route=reception|recruiting|haas` と `language=ja|en` を分類し
 
 | API | 用途 |
 | --- | --- |
-| `GET /api/status` | 設定有無・接続機器・相談状態 |
-| `POST /api/live/session` `{sdp, language, case_id?}` | WebRTC offer → `{session:{id}, transport:{sdp}, case_id}` |
+| `GET /api/status` | 設定有無・接続機器・相談状態・`handoff_configured`・`voice_map` |
+| `POST /api/live/session` `{sdp, language, case_id?, route?}` | WebRTC offer → `{session:{id}, transport:{sdp}, case_id, route, voice}`。route省略はreception |
+| `POST /api/live/session/:oldId/handoff` `{sdp, route}` | 候補を準備。`session/transport/case_id/route/voice/old_session_id/handoff_token` を返す |
+| `POST /api/live/session/:newId/activate` `{handoff_token}` | 候補へ切替。`session/case_id/route/voice/old_session_id/active:true` を返す。同じtokenで冪等再試行可能 |
 | `DELETE /api/live/session/:id` | Live 終了と Agents のキャンセル・削除 |
 | `GET /api/events` | SSE: routing.updated、backend.*、human.*、文字起こし |
 | `POST /api/demo/handoff` | 手動配線試験。AI判断デモではない。実MCP toolを呼ぶ |
 
 WebRTC の HTTP 作成で session は開始済み。`oai-events` で `session.started` を待ち、`session.start` を重ねて送らない。権限のある sideband だけが業務結果を Live に送ります。
+
+声の交代では候補の `session.started` とWebRTC connectedを両方確認してからactivateします。業務処理中や別の切替中は409。候補は30秒で期限切れとなり元の会話を維持します。確定失敗なら候補だけをDELETEします。activateの応答が失われた場合は同じtokenで再試行し、未確定のまま候補を削除しないでください。旧セッションの `live.closed` は `session_id` で識別します。旧セッションの終了ではcaseやAgentsを削除せず、最終終話だけで削除します。切替待ち中の人間回答はキューし、確定した会話へ一度だけ返します。
+
+会社トップのUI差分は #16。既存フロントを維持し、開始入口を1つにする方針は #22。Workersのcase ID・認証境界は #18、保存した人間回答のAgent/Live返却は #19 を接続窓口とします。
 
 ## バックエンド・実機チームへ
 
