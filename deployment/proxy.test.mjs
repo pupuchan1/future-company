@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createProductionVoiceProxy } from './worker-proxy.mjs';
-import { createProductionRelay } from './relay.mjs';
+import { createProductionRelay, filterStatus } from './relay.mjs';
 import { MAX_BODY_BYTES, signRelayRequest } from './protocol.mjs';
 import { createHumanGateway } from '../integration/human/gateway.mjs';
 import { mcpCall } from '../integration/mcp-client.mjs';
@@ -33,7 +33,7 @@ async function fixture(t, options = {}) {
     assert.equal(req.headers['x-forwarded-for'], undefined);
     assert.equal(req.headers['x-future-signature'], undefined);
     if (req.url === '/api/status') return reply(res, 200, {
-      live_configured: true, mcp_configured: true, decisions_enabled: true, handoff_configured: true,
+      live_configured: true, mcp_configured: true, decisions_enabled: true, handoff_configured: true, prewarm_configured: true,
       recruiting_human_transport: 'slack', slack_configured: true, slack_replies_configured: true,
       voice_map: { reception: 'shida', recruiting: 'harema' }, internal_secret: 'must-not-escape',
       requests: [{ case_id: 'case-a', device_id: 'phone-a', summary: 'ours' }, { case_id: 'case-b', device_id: 'phone-b', summary: 'private' }],
@@ -153,6 +153,9 @@ test('status and fragmented SSE expose only the authorized case', async (t) => {
   assert.equal(status.recruiting_human_transport, 'slack');
   assert.equal(status.slack_configured, true);
   assert.equal(status.slack_replies_configured, true);
+  assert.equal(status.prewarm_configured, true);
+  assert.equal(filterStatus({ handoff_configured: true }, 'case-a').prewarm_configured, false);
+  assert.equal(filterStatus({ prewarm_configured: 'true' }, 'case-a').prewarm_configured, false);
   assert.deepEqual(status.requests.map((item) => item.case_id), ['case-a']);
   assert.deepEqual(status.devices, [{ device_id: 'phone-a', online: true, simulated: true }]);
   const response = await f.browser('case-a', '/events');
@@ -169,8 +172,10 @@ test('voice ownership survives a handoff and rejects foreign IDs and IDs after r
   const f = await fixture(t);
   await (await f.browser('case-a', '/session', { method: 'POST', data: { sdp: 'v=0' } })).json();
   assert.equal((await f.browser('case-b', '/session/live-case-a', { method: 'DELETE' })).status, 404);
-  const handoff = await f.browser('case-a', '/session/live-case-a/handoff', { method: 'POST', data: { sdp: 'v=0', case_proof: 'still-preserved', route: 'haas' } });
+  const handoff = await f.browser('case-a', '/session/live-case-a/handoff', { method: 'POST', data: { sdp: 'v=0', case_proof: 'still-preserved', route: 'haas', automatic: true, prewarm: true } });
   assert.equal((await handoff.json()).session.id, 'next-case-a');
+  assert.equal(f.calls.at(-1).data.prewarm, true);
+  assert.equal(f.calls.at(-1).data.automatic, true);
   assert.equal((await f.browser('case-a', '/session/next-case-a/activate', { method: 'POST', data: { handoff_token: 'fake-ticket' } })).status, 200);
   assert.equal((await f.browser('case-a', '/session/next-case-a', { method: 'DELETE' })).status, 200);
   assert.equal((await f.browser('case-a', '/session/next-case-a', { method: 'DELETE' })).status, 404);

@@ -376,6 +376,7 @@ test('specialist routes keep distinct Agents sessions and resume the original se
   const created = [];
   const resumed = [];
   const deleted = [];
+  const emitted = [];
   const completed = (id) => ({
     controller: { abort() {} },
     withResultCollection() {},
@@ -392,15 +393,25 @@ test('specialist routes keep distinct Agents sessions and resume the original se
     async delete(id) { deleted.push(id); },
     events: { async create() {} },
   } } } };
-  const backend = new BusinessBackend({ client, mcpUrl: 'https://mcp.example.invalid/mcp', token });
-  const common = { caseId: 'case-specialists', language: 'ja', transcript: '担当へ相談します。' };
+  const backend = new BusinessBackend({ client, mcpUrl: 'https://mcp.example.invalid/mcp', token,
+    emit: (event) => emitted.push(event) });
+  const common = { caseId: 'case-specialists', liveSessionId: 'live-first', language: 'ja', transcript: '担当へ相談します。' };
   try {
     await backend.run({ ...common, route: 'recruiting' });
     await backend.run({ ...common, route: 'haas' });
-    await backend.run({ ...common, route: 'recruiting', source: 'human_event', transcript: '人間からの回答を受け、面談を再開します。' });
+    await backend.run({ ...common, liveSessionId: 'live-second', route: 'recruiting', source: 'human_event', transcript: '人間からの回答を受け、面談を再開します。' });
     assert.deepEqual(created.map(({ id }) => id), ['session-recruiting', 'session-haas']);
     assert.deepEqual(resumed.map(({ id }) => id), ['session-recruiting']);
     assert.equal(backend.sessions.size, 2);
+    assert.deepEqual(emitted.filter(event => event.type === 'backend.started')
+      .map(event => [event.live_session_id, event.agent_session_id]), [
+      ['live-first', null], ['live-first', null], ['live-second', 'session-recruiting'],
+    ]);
+    const result = emitted.at(-1);
+    assert.equal(result.live_session_id, 'live-second');
+    assert.equal(result.agent_session_id, 'session-recruiting');
+    assert.equal(result.session_id, result.agent_session_id);
+    assert.equal(new Set(emitted.map(event => event.event_id)).size, emitted.length);
   } finally { await backend.close(); }
   assert.deepEqual(deleted.sort(), ['session-haas', 'session-recruiting']);
 });
