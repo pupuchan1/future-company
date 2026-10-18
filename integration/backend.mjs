@@ -103,7 +103,7 @@ export class BusinessBackend {
     }
   }
 
-  async run({ caseId, route, language, transcript, handoffs = [], source = 'delegation' }) {
+  async run({ caseId, liveSessionId, route, language, transcript, handoffs = [], source = 'delegation' }) {
     if (this.closed) throw new Error('Backend is closed.');
     if (!this.mcpUrl) throw new Error('HUMAN_MCP_URL is not configured.');
     const key = `${caseId}:${route}`;
@@ -113,7 +113,8 @@ export class BusinessBackend {
     this.sessions.set(key, state);
     state.active = true;
     state.settled = new Promise((resolve) => { state.resolveSettled = resolve; });
-    this.emit({ type: 'backend.started', case_id: caseId, route, language, source });
+    this.emit({ type: 'backend.started', event_id: randomUUID(), case_id: caseId,
+      live_session_id: liveSessionId, agent_session_id: state.id, route, language, source });
     const input = JSON.stringify({ case_id: caseId, language, route, source, transcript: transcript.slice(-14000), verified_handoffs: handoffs });
     let stream;
     let deadline;
@@ -159,7 +160,10 @@ export class BusinessBackend {
           .flatMap((item) => item.content || []).filter((part) => part.type === 'output_text').map((part) => part.text).join('');
       }
       if (!content) throw new Error('Agent turn completed without a speakable result.');
-      this.emit({ type: 'backend.result', case_id: caseId, route, language, source, content, session_id: state.id, turn_id: state.turnId });
+      // session_id remains the legacy Agent ID; Live consumers use live_session_id.
+      this.emit({ type: 'backend.result', event_id: randomUUID(), case_id: caseId,
+        live_session_id: liveSessionId, agent_session_id: state.id,
+        route, language, source, content, session_id: state.id, turn_id: state.turnId });
       return content;
     } catch (error) {
       this.remember({ type: 'provider_error', operation: 'agents.turn', case_id: caseId, role: route, ...connectionDiagnostic(error) });

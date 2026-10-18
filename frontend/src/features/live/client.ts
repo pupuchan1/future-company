@@ -396,7 +396,8 @@ export class LiveClient {
     // Lifecycle events from the shared SSE may belong to another browser/case.
     if (source === 'server' && body.case_id !== this.state.caseId && object(body.request).case_id !== this.state.caseId && object(body.handoff).case_id !== this.state.caseId) return
     if (body.case_id !== undefined && body.case_id !== this.state.caseId) return
-    const sessionId = object(body.session).id ?? body.session_id
+    // backend.result.session_id is the legacy Agent ID, not the voice transport.
+    const sessionId = body.live_session_id ?? object(body.session).id ?? body.session_id
     const closed = type === 'session.closed' || type === 'session.ended' || type === 'live.closed'
     const lifecycle = type === 'session.started' || closed
     let current = connection ?? this.connection
