@@ -90,6 +90,10 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     },
     onError: () => emit({ type: 'mcp.error', message: 'MCP transport error.' }),
   });
+  function currentHumanRequests() {
+    const records = gateway.service.listRequests();
+    return workerBridge ? workerBridge.overlayRequests(records) : records;
+  }
   function drainHuman(state) {
     const active = sessions.get(state.activeSessionId);
     if (!active || state.closed || state.switching) return 0;
@@ -119,7 +123,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     const session = new LiveConversation({ id, caseId: state.id, language: state.routing.language,
       apiKey: env.OPENAI_API_KEY, backend, emit, caseState: state, route, standby,
       socketFactory, closeTimeoutMs,
-      handoffs: () => gateway.service.listRequests().filter((record) => record.case_id === state.id),
+      handoffs: () => currentHumanRequests().filter((record) => record.case_id === state.id),
       onClosing: (closingId, { preserveCase }) => {
         if (!preserveCase) {
           state.closed = true;
@@ -150,7 +154,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       const path = new URL(req.url, 'http://localhost').pathname;
       if (req.method === 'GET' && path === '/api/status') return json(res, 200, {
         live_configured: Boolean(provider), mcp_configured: Boolean(env.HUMAN_MCP_URL),
-        devices: gateway.service.listDevices(), requests: gateway.service.listRequests(),
+        devices: gateway.service.listDevices(), requests: currentHumanRequests(),
         decisions_enabled: env.LIVE_DECISIONS_ENABLED !== 'false',
         handoff_configured: true, voice_map: voiceMap,
       });
