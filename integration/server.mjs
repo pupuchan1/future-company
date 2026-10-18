@@ -10,6 +10,7 @@ import { BusinessBackend, connectionDiagnostic, retryConnection } from './backen
 import { LiveConversation, liveConfig } from './live-session.mjs';
 import { mcpCall } from './mcp-client.mjs';
 import { createCaseState, initialHistory, isVoiceRoute, voiceMap } from './case-state.mjs';
+import { WorkerBridge } from './worker-bridge.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 function json(res, status, data) {
@@ -39,7 +40,7 @@ export function isLocalRequest(req) {
 }
 
 export function createIntegration({ env = process.env, client, stateDir = resolve(root, '../.integration-state'),
-  socketFactory, closeTimeoutMs, handoffTimeoutMs = 30000 } = {}) {
+  socketFactory, workerFetch, workerSocketFactory, closeTimeoutMs, handoffTimeoutMs = 30000 } = {}) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const remember = (record) => appendFileSync(join(stateDir, 'resources.jsonl'), JSON.stringify({ at: new Date().toISOString(), ...record }) + '\n', { mode: 0o600 });
   const clients = new Set();
@@ -59,20 +60,33 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
   const createLive = (input) => retryConnection(() => provider.live.create(input), {
     onRetry: (diagnostic) => remember({ type: 'provider_retry', operation: 'live.create', ...diagnostic }),
   });
+  function receiveHuman(event) {
+    emit({ ...event, type: event.name });
+    const state = cases.get(event.data.case_id);
+    if (!state || state.closed || event.isValid?.() === false) return Promise.resolve({ status: 'cancelled' });
+    const active = sessions.get(state.activeSessionId);
+    if (state.switching || !active) return new Promise(resolve => state.pendingHumanEvents.push({ ...event, onProcessed: resolve }));
+    return Promise.resolve(active.humanEvent(event));
+  }
+  const workerBridge = env.WORKER_API_URL ? new WorkerBridge({ url: env.WORKER_API_URL, token: env.STAFF_API_TOKEN,
+    accessClientId: env.WORKER_ACCESS_CLIENT_ID, accessClientSecret: env.WORKER_ACCESS_CLIENT_SECRET,
+    fetcher: workerFetch, socketFactory: workerSocketFactory, deliver: receiveHuman, emit }) : null;
   const gateway = createHumanGateway({ token: env.HUMAN_MCP_TOKEN || '',
     handleEventRpc: (rpc) => events.handleRpc(rpc),
     onEvent: (event) => {
-      emit({ ...event, type: event.name });
       void events.publish(event).catch(() => emit({ type: 'events.error', message: 'MCP event could not be queued.' }));
       const state = cases.get(event.data.case_id);
-      if (!state || state.closed) return;
+      if (!state || state.closed) { emit({ ...event, type: event.name }); return; }
       // Capture the request's original specialist before a voice switch changes it.
       if (event.name === 'human.requested' && !state.handoffRoutes.has(event.data.handoff_id)) {
         state.handoffRoutes.set(event.data.handoff_id, state.routing.route);
       }
-      const active = sessions.get(state.activeSessionId);
-      if (state.switching || !active) state.pendingHumanEvents.push(event);
-      else active.humanEvent(event);
+      if (workerBridge) {
+        const route = state.handoffRoutes.get(event.data.handoff_id) || state.routing.route;
+        void workerBridge.humanEvent(event, route).then(linked => {
+          if (!linked || event.name !== 'human.completed') return receiveHuman(event);
+        }).catch(() => emit({ type: 'worker.error', case_id: state.id, message: 'Human result was not saved or synchronized; no Agent success is confirmed.' }));
+      } else void receiveHuman(event);
     },
     onError: () => emit({ type: 'mcp.error', message: 'MCP transport error.' }),
   });
@@ -80,7 +94,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     const active = sessions.get(state.activeSessionId);
     if (!active || state.closed || state.switching) return 0;
     const pending = state.pendingHumanEvents.splice(0);
-    for (const event of pending) active.humanEvent(event);
+    for (const event of pending) Promise.resolve(active.humanEvent(event)).then(event.onProcessed || (() => {}));
     return pending.filter((event) => ['human.completed', 'human.unavailable', 'human.cancelled'].includes(event.name)).length;
   }
   function abandonHandoff(state, ticket) {
@@ -109,9 +123,10 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       onClosing: (closingId, { preserveCase }) => {
         if (!preserveCase) {
           state.closed = true;
+          workerBridge?.closeCase(state.id);
           const ticket = state.switching;
           if (ticket) abandonHandoff(state, ticket);
-          state.pendingHumanEvents.length = 0;
+          for (const event of state.pendingHumanEvents.splice(0)) event.onProcessed?.({ status: 'cancelled' });
         } else if (state.switching?.newId === closingId) {
           abandonHandoff(state, state.switching);
         }
@@ -168,6 +183,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         pendingCaseIds.add(caseId);
         pendingCreates++;
         try {
+          if (workerBridge) await workerBridge.attachCase(caseId, input.bridge_token);
           const result = await createLive({ session: liveConfig({ model: env.LIVE_MODEL || 'gpt-live-1',
             voice: voiceMap[route], route, language, decisions: env.LIVE_DECISIONS_ENABLED !== 'false' }),
             transport: { type: 'webrtc', sdp: input.sdp } });
@@ -178,7 +194,14 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
           try { await session.ready; } catch (error) { await session.close(); throw error; }
           if (res.destroyed) { await session.close(); return; }
           return json(res, 200, { ...connectionInfo(session), transport: result.transport });
-        } finally { pendingCreates--; pendingCaseIds.delete(caseId); }
+        } catch (error) { workerBridge?.closeCase(caseId); throw error; }
+        finally { pendingCreates--; pendingCaseIds.delete(caseId); }
+      }
+      if (req.method === 'POST' && path === '/api/worker/results') {
+        if (!workerBridge) return json(res, 503, { error: 'Worker bridge is not configured.' });
+        const input = await body(req);
+        if (!identifier(input.case_id)) return json(res, 400, { error: 'A valid case_id is required.' });
+        return json(res, 202, await workerBridge.syncCase(input.case_id, input.bridge_token));
       }
       const handoffMatch = path.match(/^\/api\/live\/session\/([^/]+)\/handoff$/);
       if (req.method === 'POST' && handoffMatch) {
@@ -276,7 +299,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         appendFileSync(join(stateDir, 'errors.jsonl'), JSON.stringify({ at: new Date().toISOString(),
           ...diagnostic }) + '\n', { mode: 0o600 });
       }
-      if (!res.headersSent) json(res, connectionError || error.status && error.status >= 400 ? 502 : 400,
+      if (!res.headersSent) json(res, error.status === 403 ? 403 : connectionError || error.status && error.status >= 400 ? 502 : 400,
         { error: connectionError ? 'Provider connection failed. Please retry.'
           : error.status ? `Provider HTTP ${error.status}` : 'Request failed. Check server configuration and input.' });
       else res.end();
@@ -284,6 +307,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
   });
   server.on('upgrade', (req, socket, head) => { if (!gateway.handleUpgrade(req, socket, head)) socket.destroy(); });
   return { server, gateway, backend, events, async close() {
+    workerBridge?.close();
     for (const res of clients) res.end();
     await Promise.allSettled([...sessions.values()].map((session) => session.close()));
     await backend?.close(); await gateway.close(); await events.close();
