@@ -124,11 +124,21 @@ export interface LiveRuntime {
   fetch: typeof fetch
   microphone: () => Promise<MediaStream>
   peer: () => RTCPeerConnection
-  events: () => EventSource
+  events: (url?: string) => EventSource
   audio: () => HTMLAudioElement
   supported: () => boolean
   /** Optional so existing transports and non-Web-Audio runtimes still work. */
   metering?: (onLevels: (levels: LiveAudioLevels) => void) => LiveAudioMeter | null
+}
+
+export interface LiveClientOptions {
+  /** Omit only for the loopback development API. */
+  apiPrefix?: string
+}
+
+export function caseVoicePrefix(caseId: string): string {
+  if (!/^[A-Za-z0-9_-]{1,200}$/.test(caseId)) throw new Error('Invalid Worker case ID.')
+  return `/api/v1/cases/${encodeURIComponent(caseId)}/voice`
 }
 
 interface Connection {
@@ -171,7 +181,7 @@ const browserRuntime = (): LiveRuntime => ({
   fetch: (...args) => fetch(...args),
   microphone: () => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false }),
   peer: () => new RTCPeerConnection(),
-  events: () => new EventSource('/api/events'),
+  events: (url = '/api/events') => new EventSource(url),
   audio: () => { const audio = new Audio(); audio.autoplay = true; return audio },
   supported: () => window.isSecureContext && typeof navigator.mediaDevices?.getUserMedia === 'function' && typeof window.RTCPeerConnection === 'function',
   metering: createAudioMeter,
@@ -189,11 +199,17 @@ export class LiveClient {
   private poll?: ReturnType<typeof setInterval>
   private reconnectTimer?: ReturnType<typeof setTimeout>
   private statusBusy = false
+  private statusError = ''
   private observing = false
   private disposed = false
   private closing: Promise<void> | null = null
+  private endpoints: { status: string; events: string; session: string }
 
-  constructor(caseId: string, language: LiveLanguage, runtime = browserRuntime()) {
+  constructor(caseId: string, language: LiveLanguage, runtime = browserRuntime(), options: LiveClientOptions = {}) {
+    const prefix = options.apiPrefix
+    if (prefix !== undefined && prefix !== caseVoicePrefix(caseId)) throw new Error('Voice API must use this Worker case on the same origin.')
+    this.endpoints = prefix ? { status: `${prefix}/status`, events: `${prefix}/events`, session: `${prefix}/session` }
+      : { status: '/api/status', events: '/api/events', session: '/api/live/session' }
     this.state = initialSnapshot(caseId, language)
     this.runtime = runtime
   }
@@ -231,9 +247,11 @@ export class LiveClient {
       headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers },
       signal: options.signal ?? AbortSignal.timeout(35000),
     })
-    const data = object(await response.json().catch(() => null))
+    let data: JsonObject
+    try { data = object(await response.json()) }
+    catch { throw new LiveApiError('受付の応答を確認できません。認証・接続先を確認してください。 / Invalid reception response. Check access and the endpoint.', response.status) }
     if (!response.ok) {
-      const detail = typeof data.error === 'string' ? data.error : object(data.error).message
+      const detail = typeof data.detail === 'string' ? data.detail : typeof data.error === 'string' ? data.error : object(data.error).message
       throw new LiveApiError(`${typeof detail === 'string' ? detail : '接続失敗 / Connection failed'} (HTTP ${response.status})`, response.status)
     }
     return data
@@ -250,7 +268,7 @@ export class LiveClient {
   private openEvents() {
     if (this.disposed || this.source) return
     try {
-      const source = this.runtime.events()
+      const source = this.runtime.events(this.endpoints.events)
       this.source = source
       source.onopen = () => { this.patch({ events: 'connected' }); void this.refreshStatus() }
       source.onmessage = event => {
@@ -273,19 +291,24 @@ export class LiveClient {
     if (this.disposed || this.statusBusy) return
     this.statusBusy = true
     try {
-      const data = await this.api('/api/status', { signal: AbortSignal.timeout(8000) })
+      const data = await this.api(this.endpoints.status, { signal: AbortSignal.timeout(8000) })
       if (this.disposed) return
       if (typeof data.live_configured !== 'boolean' || typeof data.mcp_configured !== 'boolean') throw new Error('接続先の応答が不正です。 / Invalid server status.')
       const voiceMap: LiveSnapshot['voiceMap'] = {}
       for (const [route, voice] of Object.entries(object(data.voice_map))) if (isRoute(route) && typeof voice === 'string') voiceMap[route] = voice
-      let next: LiveSnapshot = { ...this.state, configured: data.live_configured, mcpConfigured: data.mcp_configured, switchConfigured: data.handoff_configured === true, voiceMap }
+      let next: LiveSnapshot = { ...this.state, configured: data.live_configured, mcpConfigured: data.mcp_configured, switchConfigured: data.handoff_configured === true, voiceMap,
+        error: this.state.error === this.statusError ? '' : this.state.error }
+      this.statusError = ''
       for (const record of Array.isArray(data.requests) ? data.requests : []) {
         const parsed = readHumanRequest(record, next.caseId)
         if (parsed) next = putRequest(next, parsed)
       }
       this.publish(next)
-    } catch {
-      this.patch({ configured: null, mcpConfigured: null, switchConfigured: false })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '受付へ接続できません。 / Cannot reach reception.'
+      const replaceError = !this.state.error || this.state.error === this.statusError
+      this.statusError = message
+      this.patch({ configured: null, mcpConfigured: null, switchConfigured: false, error: replaceError ? message : this.state.error })
     } finally { this.statusBusy = false }
   }
 
@@ -427,7 +450,7 @@ export class LiveClient {
       const sdp = await this.offer(connection)
       if (!sdp || this.connection !== connection) return
       // Do not abort this request on Stop: a late response still needs DELETE.
-      const created = await this.api('/api/live/session', { method: 'POST', body: JSON.stringify({ sdp, language, case_id: this.state.caseId, ...(route === 'reception' ? {} : { route }) }) })
+      const created = await this.api(this.endpoints.session, { method: 'POST', body: JSON.stringify({ sdp, language, case_id: this.state.caseId, ...(route === 'reception' ? {} : { route }) }) })
       const id = object(created.session).id ?? created.session_id
       if (typeof id === 'string') connection.sessionId = id
       if (this.connection !== connection) { await this.finalize(connection); return }
@@ -462,7 +485,7 @@ export class LiveClient {
     for (let retry = 0; retry < 3; retry++) {
       if (attempt.cancelled || this.voiceSwitch !== attempt) throw new Error('Voice switch cancelled')
       try {
-        const result = await this.api(`/api/live/session/${encodeURIComponent(attempt.candidate.sessionId!)}/activate`, {
+        const result = await this.api(`${this.endpoints.session}/${encodeURIComponent(attempt.candidate.sessionId!)}/activate`, {
           method: 'POST', body: JSON.stringify({ handoff_token: attempt.token }),
         })
         if (result.active !== true || object(result.session).id !== attempt.candidate.sessionId || result.old_session_id !== attempt.previous.sessionId || result.case_id !== this.state.caseId || result.route !== attempt.route) {
@@ -499,7 +522,7 @@ export class LiveClient {
       candidate.meter?.setInput(previous.stream)
       const sdp = await this.offer(candidate)
       if (!sdp || attempt.cancelled || this.voiceSwitch !== attempt) return
-      const created = await this.api(`/api/live/session/${encodeURIComponent(previous.sessionId)}/handoff`, {
+      const created = await this.api(`${this.endpoints.session}/${encodeURIComponent(previous.sessionId)}/handoff`, {
         method: 'POST', body: JSON.stringify({ sdp, route }),
       })
       const id = object(created.session).id
@@ -593,7 +616,7 @@ export class LiveClient {
 
   private async deleteSession(id: string, keepalive = false) {
     try {
-      const result = await this.api(`/api/live/session/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive })
+      const result = await this.api(`${this.endpoints.session}/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive })
       const warnings = []
       if (result.live_finalized !== true) warnings.push('音声セッションの最終応答は未確認です。 / Live finalization is unconfirmed.')
       if (Array.isArray(result.cleanup_pending) && result.cleanup_pending.length) warnings.push('サーバーで終了処理が残っています。 / Server cleanup is pending.')

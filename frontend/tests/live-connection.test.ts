@@ -198,6 +198,27 @@ test('unconfigured or unreachable servers cannot request a microphone', async ()
   client.dispose()
 })
 
+test('Worker authentication and non-JSON responses are visible and can recover without a microphone', async () => {
+  const f = fixture()
+  let microphoneCalls = 0
+  f.setMicrophone(async () => { microphoneCalls++; return f.stream })
+  let response = Response.json({ title: 'visitor_session_required', detail: 'Authentication required.' }, { status: 401 })
+  f.runtime.fetch = async () => response
+  const client = new LiveClient('case-a', 'ja', f.runtime, { apiPrefix: '/api/v1/cases/case-a/voice' })
+  await client.refreshStatus()
+  assert.match(client.getSnapshot().error, /Authentication required.*401/)
+  assert.equal(client.getSnapshot().configured, null)
+  response = new Response('<html>Sign in</html>', { headers: { 'Content-Type': 'text/html' } })
+  await client.refreshStatus()
+  assert.match(client.getSnapshot().error, /Check access/)
+  response = Response.json({ live_configured: true, mcp_configured: true })
+  await client.refreshStatus()
+  assert.equal(client.getSnapshot().configured, true)
+  assert.equal(client.getSnapshot().error, '')
+  assert.equal(microphoneCalls, 0)
+  client.dispose()
+})
+
 test('stop mutes capture immediately, waits for backend finalization before closing RTC and blocks a new call', async () => {
   const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
   const fetchApi = f.runtime.fetch

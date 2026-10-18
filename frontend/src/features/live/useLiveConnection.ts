@@ -3,13 +3,14 @@ import { LiveClient } from './client.ts'
 import { initialSnapshot } from './types.ts'
 import type { LiveLanguage, LiveRoute } from './types.ts'
 
-export function useLiveConnection({ caseId, language }: { caseId: string; language: LiveLanguage }) {
+export function useLiveConnection({ caseId, language, apiPrefix, enabled = true }: { caseId: string; language: LiveLanguage; apiPrefix?: string; enabled?: boolean }) {
   const [snapshot, setSnapshot] = useState(() => initialSnapshot(caseId, language))
   const client = useRef<LiveClient | null>(null)
   const languageRef = useRef(language)
   useEffect(() => { languageRef.current = language }, [language])
   useEffect(() => {
-    const next = new LiveClient(caseId, languageRef.current)
+    if (!enabled) return
+    const next = new LiveClient(caseId, languageRef.current, undefined, { apiPrefix })
     client.current = next
     setSnapshot(next.getSnapshot())
     const unsubscribe = next.subscribe(setSnapshot)
@@ -25,7 +26,7 @@ export function useLiveConnection({ caseId, language }: { caseId: string; langua
       window.removeEventListener('pagehide', pagehide)
       window.removeEventListener('pageshow', pageshow)
     }
-  }, [caseId])
+  }, [caseId, apiPrefix, enabled])
   return {
     snapshot,
     start: (route?: LiveRoute) => client.current?.start(languageRef.current, route),

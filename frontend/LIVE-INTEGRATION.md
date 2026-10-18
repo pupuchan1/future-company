@@ -100,3 +100,11 @@ npm run build
 `ReceptionPage` の既存レイアウトを保ち、信号表示を `AudioOrb` へ差し替えています。入力は既存マイクの時間領域データを48点へ縮約した実波形、出力は再生成功と再生状態を確認したRMSに連動する青いリングです。更新は最大10Hzで、音量だけから波形を生成しません。無音・ミュート・担当交代・終了時には波形を止めます。`prefers-reduced-motion` では補間と待機アニメーションを止めます。
 
 通話中にオーブが画面外へ出た場合は、小さな音声表示と終了操作を残します。業務担当が変わった場合にのみ、その担当の声へ切り替える明示ボタンを表示します。写真・App・共通CSSのデザインは変更していません（#29 / #30）。実音声と実機の検証は、このブラウザ表示・モック試験とは別です。
+
+## Worker認可を通す音声経路
+
+`useLiveConnection({caseId, language, apiPrefix: caseVoicePrefix(caseId)})` は、同一originの `/api/v1/cases/:caseId/voice` 配下に `status`・`events`・`session`・`session/:id/handoff`・`session/:id/activate`・`DELETE session/:id` をまとめます。Workerが既存の来訪者cookieで認可してNodeへ中継する契約です。ブラウザへ社員トークンやNodeの秘密値を渡しません。別caseや外部originのprefixは拒否します。`apiPrefix`省略時はローカル開発用の従来 `/api` 経路です。
+
+`useWorkerLiveConnection({conversationKey, language, kind})` は `POST /api/v1/cases` が返した実IDでのみ音声hookを有効にします。kindはWorkerの確定契約を呼び出し側が指定します。作成前・認証失敗・保存失敗・AccessのHTML応答を実案件として表示しません。再試行は同じcommandIdと初回localeを使用し、React Strict Modeの重複effectでも作成リクエストは一つです。音声のマイク許可は引き続き利用者の開始操作後です。
+
+この段階では共通受付用kindの確定待ちで、ReceptionPageは従来hookのままです。接続時は同ページのローカルUUIDをconversationKeyとして渡し、表示IDには `snapshot.caseId` を使います。Worker/Nodeの返却adapterと公開proxyの実装・通し試験は別の統合点です。
