@@ -156,6 +156,7 @@ interface Connection {
   peer?: RTCPeerConnection
   channel?: RTCDataChannel
   sessionId?: string
+  pendingLifecycle?: { event: JsonObject; source: 'server' | 'datachannel' }[]
   started: boolean
   startTimer?: ReturnType<typeof setTimeout>
   disconnectTimer?: ReturnType<typeof setTimeout>
@@ -399,9 +400,21 @@ export class LiveClient {
     const closed = type === 'session.closed' || type === 'session.ended' || type === 'live.closed'
     const lifecycle = type === 'session.started' || closed
     let current = connection ?? this.connection
-    if (!connection && sessionId && sessionId === this.voiceSwitch?.candidate.sessionId) current = this.voiceSwitch.candidate
-    if (lifecycle && sessionId && current?.sessionId && sessionId !== current.sessionId) return
-    if (closed && source === 'server' && !sessionId) return
+    if (!connection && sessionId && this.voiceSwitch) {
+      const candidate = this.voiceSwitch.candidate
+      if (sessionId === candidate.sessionId || (lifecycle && !candidate.sessionId && sessionId !== current?.sessionId)) current = candidate
+    }
+    if (lifecycle) {
+      // SSE is shared across this case's transports; its lifecycle needs an ID.
+      if (!current || (source === 'server' && (typeof sessionId !== 'string' || !sessionId))) return
+      if (!current.sessionId) {
+        // HTTP owns the identity. Retain early starts/closes in arrival order,
+        // then discard events for old sessions once creation confirms the ID.
+        current.pendingLifecycle = [...(current.pendingLifecycle ?? []), { event, source }].slice(-64)
+        return
+      }
+      if (sessionId && sessionId !== current.sessionId) return
+    }
     if (type === 'session.started' && current) {
       current.started = true
       if (this.voiceSwitch?.candidate === current) this.checkCandidateReady(current)
@@ -456,6 +469,12 @@ export class LiveClient {
 
   private tracked(connection: Connection) {
     return this.connection === connection || this.voiceSwitch?.candidate === connection
+  }
+
+  private flushLifecycle(connection: Connection) {
+    const pending = connection.pendingLifecycle ?? []
+    connection.pendingLifecycle = undefined
+    for (const { event, source } of pending) this.receive(event, source, connection)
   }
 
   private createMeter(connection: Connection) {
@@ -573,6 +592,8 @@ export class LiveClient {
       if (this.connection !== connection) { await this.finalize(connection); return }
       const answer = object(created.transport).sdp
       if (!connection.sessionId || typeof answer !== 'string' || (created.case_id !== undefined && created.case_id !== this.state.caseId)) throw new Error('音声サーバーの応答が不正です。 / Invalid voice session response.')
+      this.flushLifecycle(connection)
+      if (this.connection !== connection) { await this.finalize(connection); return }
       this.patch({ voiceRoute: isRoute(created.route) ? created.route : route, voice: typeof created.voice === 'string' ? created.voice : '' })
       await connection.peer!.setRemoteDescription({ type: 'answer', sdp: answer })
       if (this.connection !== connection) return
@@ -658,6 +679,8 @@ export class LiveClient {
         throw new Error('担当の声の切替情報が不正です。 / Invalid voice handoff response.')
       }
       attempt.token = created.handoff_token
+      this.flushLifecycle(candidate)
+      if (candidate.failure) throw candidate.failure
       await candidate.peer!.setRemoteDescription({ type: 'answer', sdp: answer })
       if (attempt.cancelled || this.voiceSwitch !== attempt) return
       await this.waitForCandidate(candidate)
@@ -808,6 +831,7 @@ export class LiveClient {
   }
 
   private releaseTransport(connection: Connection) {
+    connection.pendingLifecycle = undefined
     connection.outputPlaying = false
     clearTimeout(connection.startTimer)
     clearTimeout(connection.disconnectTimer)
