@@ -96,6 +96,7 @@ export function ReceptionPage() {
             aria-label={text("共通音声受付", "Shared voice reception")}
           >
             <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} />
+            <div className="reception-controls">
             <button
               className="button primary reception-start"
               onClick={() => void toggleCall()}
@@ -179,6 +180,7 @@ export function ReceptionPage() {
                 {text("言語の変更を再試行", "Retry language change")}
               </button>
             )}
+            </div>
           </section>
         </section>
         {!hasConversation && <ReceptionCapabilities language={language} />}
