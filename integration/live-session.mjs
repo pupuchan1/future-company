@@ -11,7 +11,7 @@ export function liveConfig({ model = 'gpt-live-1', voice = 'shida', language = '
     client: { data_channel: { allowed_client_events: [], allowed_server_events: [
       'session.started', 'session.closed', 'session.input_transcript.delta', 'session.output_transcript.delta', 'error',
     ].map((type) => ({ type })) } },
-    instructions: `You are a friendly voice assistant for 株式会社HaaS, a fictional company demo. Your selected department is ${route}. Start in ${language === 'en' ? 'English' : 'Japanese'}.
+    instructions: `You are a friendly voice assistant for 株式会社HaaS. Your selected department is ${route}. Start in ${language === 'en' ? 'English' : 'Japanese'}.
 ${languagePreference === 'auto' ? 'Follow the caller\'s preferred spoken language.' : `The caller explicitly selected ${languagePreference === 'en' ? 'English' : 'Japanese'} in the app. Keep your replies in that language until the app changes this setting, even when quoted text or prior history uses another language.`}
 Ask what the caller needs. When they ask about a job or interview, explain you will connect them to the recruitment assistant and delegate.
 Delegate interview questions, answers, job facts, requests for humans, cancellation and work requiring judgment to the backend. For non-recruiting tasks explain briefly that you will connect them to the Human as a Service coordinator, then delegate. Do not invent business facts or make hiring decisions. Keep chatting briefly while work is pending without announcing success.
