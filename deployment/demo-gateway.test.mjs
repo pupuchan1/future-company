@@ -49,6 +49,7 @@ test('only the unauthenticated root renders a login form; assets and APIs stay p
   const f = await fixture(t, (_req, res) => res.end('private app'));
   const root = await fetch(f.origin);
   assert.equal(root.status, 200); assert.equal(root.headers.get('www-authenticate'), null);
+  assert.equal(root.headers.get('referrer-policy'), 'same-origin');
   const html = await root.text();
   assert.match(html, /<form action="\/auth" method="post">/);
   assert.equal(html.includes(password), false); assert.equal(html.includes('private app'), false);
@@ -80,6 +81,7 @@ test('form login rejects wrong credentials, cross-origin forms and oversized req
   assert.equal((await wrong.text()).includes('incorrect'), false);
   assert.equal((await login(f, { username, password }, { Origin: 'https://elsewhere.test' })).status, 403);
   assert.equal((await login(f, { username, password }, { Origin: '' })).status, 403);
+  assert.equal((await login(f, { username, password }, { Origin: 'null' })).status, 403);
   assert.equal((await login(f, { username, password: 'x'.repeat(5000) })).status, 413);
   assert.equal(f.requests.length, 0);
 });
