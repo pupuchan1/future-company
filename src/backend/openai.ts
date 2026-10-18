@@ -275,14 +275,16 @@ export function createOpenAIApi(options: OpenAIApiOptions): Hono<{ Bindings: Bac
     const tools = await options.agentTools?.(c.env, snapshot)
     if (!tools?.length) throw new ApiError(503, 'agents_tools_unconfigured', 'Agents business tools are not configured.')
     const room = c.env.CASES.getByName(caseId)
-    const context = caseContext(snapshot)
-    const reserved = await room.reserveIntegration(actor, input.commandId, input.expectedRevision, 'agent', context)
+    // Reservation and later messages change the snapshot, not the original HTTP request.
+    const fingerprint = JSON.stringify({ expectedRevision: input.expectedRevision })
+    const reserved = await room.reserveIntegration(actor, input.commandId, input.expectedRevision, 'agent', fingerprint)
     if (!reserved.ok) throw new ApiError(reserved.status, reserved.code, reserved.detail)
     if (reserved.operation.status === 'completed' && reserved.operation.sessionId) {
       await options.projectCase(c.env, caseId, actor)
       return c.json({ sessionId: reserved.operation.sessionId, accepted: true }, 202)
     }
     if (reserved.operation.status !== 'reserved') throw new ApiError(409, 'session_request_pending', 'This session request already started. It will not be sent again.')
+    const context = caseContext(snapshot)
     let result: AgentSession
     try { result = await createOpenAIClient(c.env, { fetch: options.fetch }).startAgent({ caseId, text: context, instructions: businessInstructions(snapshot.kind), tools }) } catch (error) {
       unwrapRoom(await room.failIntegration(actor, input.commandId, error instanceof ApiError ? error.code : 'openai_request_failed'))
