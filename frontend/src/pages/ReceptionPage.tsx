@@ -114,7 +114,7 @@ export function ReceptionPage() {
             className="reception-voice"
             aria-label={text("共通音声受付", "Shared voice reception")}
           >
-            <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} />
+            <VoiceOrb activity={live.voice} conversation={s.conversation} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} />
             <button
               className="button primary reception-start"
               onClick={() => void toggleCall()}

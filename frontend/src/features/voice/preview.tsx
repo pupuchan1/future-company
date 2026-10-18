@@ -7,7 +7,7 @@ import type { LiveAudioMeter } from '../live/client.ts'
 import { SILENT_SIGNAL } from './activity.ts'
 import '../../styles/global.css'
 
-type Mode = 'microphone' | 'input' | 'output' | 'both' | 'silence' | 'muted' | 'blocked' | 'stopped'
+type Mode = 'microphone' | 'input' | 'output' | 'both' | 'waiting' | 'silence' | 'muted' | 'blocked' | 'stopped'
 export function Preview() {
   const [store] = useState(() => new VoiceActivityStore())
   const [volume, setVolume] = useState(.14)
@@ -77,7 +77,7 @@ export function Preview() {
       }
     }
   }
-  const names: [Mode, string][] = [['microphone', '自分のマイクで試す'], ['input', 'ユーザー入力'], ['output', 'AI出力'], ['both', '同時発話'], ['silence', '無音'], ['muted', 'マイクOFF・AI出力'], ['blocked', 'AI再生ブロック'], ['stopped', '終了']]
+  const names: [Mode, string][] = [['microphone', '自分のマイクで試す'], ['input', 'ユーザー入力'], ['output', 'AI出力'], ['both', '同時発話'], ['waiting', '応答待ち'], ['silence', '無音'], ['muted', 'マイクOFF・AI出力'], ['blocked', 'AI再生ブロック'], ['stopped', '終了']]
   return <main className="page-width" style={{ paddingTop: 36, paddingBottom: 80 }}>
     <p className="eyebrow">VOICE EFFECTS / DEVELOPMENT TEST</p><h1 style={{ fontSize: '2rem' }}>音声の入力と出力を、見分ける。</h1>
     <p>マイクまたは合成音声の実音量でオーブが変化します。音声は端末内で解析し、AIへの送信・録音の保存・スピーカー再生は行いません。</p>
@@ -91,7 +91,7 @@ export function Preview() {
       }
     }} /></label>}
     {error && <p role="alert">{error}</p>}
-    <VoiceOrb activity={store} phase={mode === 'stopped' ? 'ended' : 'connected'} muted={mode === 'muted'} playbackBlocked={mode === 'blocked'} />
+    <VoiceOrb activity={store} conversation={mode === 'waiting' ? 'waiting' : undefined} phase={mode === 'stopped' ? 'ended' : 'connected'} muted={mode === 'muted'} playbackBlocked={mode === 'blocked'} />
     <section style={{ minHeight: 700, paddingTop: 80 }}><h2>スクロールして常駐表示を確認</h2><p>大きなオーブが画面外になると、右下に同じ入出力の状態が残ります。右下の受付を押すと元の位置へ戻ります。</p></section>
   </main>
 }

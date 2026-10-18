@@ -1,3 +1,4 @@
+import type { ConversationState } from '../voice/conversation.ts'
 export type LiveLanguage = 'ja' | 'en'
 export type LiveRoute = 'reception' | 'recruiting' | 'haas'
 export type LivePhase = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'switching' | 'stopping' | 'ended' | 'error'
@@ -43,6 +44,7 @@ export interface LiveSnapshot {
   /** Measured RMS amplitude, 0..1; transcripts never change these values. */
   inputLevel: number
   outputLevel: number
+  conversation: ConversationState
   speaking: LiveSpeaking
   meteringAvailable: boolean
   transcripts: LiveTranscript[]
@@ -61,7 +63,7 @@ export function initialSnapshot(caseId: string, language: LiveLanguage): LiveSna
   return {
     caseId, language, route: 'reception', voiceRoute: 'reception', voice: '', switchConfigured: false, voiceMap: {}, phase: 'idle', events: 'connecting',
     configured: null, mcpConfigured: null, muted: false, playbackBlocked: false,
-    inputLevel: 0, outputLevel: 0, speaking: 'silent', meteringAvailable: false,
+    inputLevel: 0, outputLevel: 0, speaking: 'silent', conversation: 'listening', meteringAvailable: false,
     transcripts: [], requests: [], backend: 'idle', backendResult: '', error: '', cleanupWarning: '',
   }
 }
