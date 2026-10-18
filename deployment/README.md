@@ -1,7 +1,7 @@
 # Worker と Node 音声の配置
 
 既存の本人限定本番の配備版と接続先は[配備記録](../docs/demo-deployment.md)、起動、再起動と復帰は[本番運用手順](PRODUCTION.md)を参照する。
-以下の4330/4340は一般向けの既定値。本番は4350/4351を使う。
+起動スクリプトの既定値はNode4340/relay4330。本番はNode4350/relay4351を明示して使う。
 
 最新の一般公開入口は **Codex Sites**。pupuのビルド済み画面を `sites/export-site.mjs` で登録済みSitesのVinext checkoutへ反映する。`sites/proxy.mjs` はvisitor APIだけを既存Workerへ中継する。Sites側に `CF_ACCESS_CLIENT_ID` と `CF_ACCESS_CLIENT_SECRET` をsecretで設定し、全員が音声会話できるpublic audienceで公開する。これは既存Worker・Node・Slack認証の設定を置き換えない。r74techは下記の既存backend配置を担当する。
 
