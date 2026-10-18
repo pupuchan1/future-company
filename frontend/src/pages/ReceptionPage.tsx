@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useReceptionConnection } from "@/features/worker/useReceptionConnection";
 import { VoiceOrb } from "@/features/voice/VoiceOrb";
+import { ConversationRecord } from "@/features/recording/ConversationRecord";
+import { LanguageSelector } from "@/components/LanguageSelector";
+import { systemMessage } from "@/lib/system-message";
+import { ReceptionIntro, ReceptionOffice, ReceptionCapabilities } from "@/components/ReceptionHome";
 import type { LiveLanguage, LiveRoute } from "@/features/live/types";
 import { useDisplayLanguage } from "@/lib/useDisplayLanguage";
 
@@ -42,7 +46,6 @@ export function ReceptionPage() {
   const s = live.snapshot;
   const text = (ja: string, en: string) => phrase(language, ja, en);
   const [showDetails, setShowDetails] = useState(false);
-  const log = useRef<HTMLDivElement>(null);
   const active = live.preparing || [
     "connecting",
     "connected",
@@ -53,68 +56,43 @@ export function ReceptionPage() {
   const available = !caseId || Boolean(s.configured && s.mcpConfigured);
   const isEnglish = language === "en";
   const hasConversation = Boolean(s.transcripts.length || s.requests.length || s.backendResult || s.phase === "connected");
-  useEffect(() => {
-    if (log.current) log.current.scrollTop = log.current.scrollHeight;
-  }, [s.transcripts]);
   async function toggleCall() {
     if (active) await live.stop();
     else await live.start();
   }
   return (
-    <div className="app-shell reception-shell">
+    <div className={`app-shell reception-shell haas-homepage${hasConversation ? " haas-in-conversation" : ""}`}>
       <a className="skip-link" href="#main">
         {text("本文へ移動", "Skip to content")}
       </a>
       <header className="site-header">
-        <a className="brand" href="/">
-          <span className="brand-mark" aria-hidden="true">
-            F<span>↗</span>
+        <a className="brand" href="/" aria-label={text("株式会社HaaS ホーム", "HaaS home")}>
+          <span className="brand-mark brand-reserved" aria-hidden="true">
+            H<span>↗</span>
           </span>
-          <span>
-            FUTURE
-            <br />
-            COMPANY
+          <span className="haas-brand-name brand-reserved" aria-hidden="true">
+            {text("株式会社HaaS", "HaaS, Inc.")}
+            <small lang="en">Human as a Service.</small>
           </span>
+          <svg className="haas-brand-logo" viewBox="190 165 1608 450" aria-hidden="true">
+            <image href="/images/haas-logo.png" width="1983" height="793" />
+          </svg>
         </a>
         <span className="reception-header-label">
           {text("AI総合受付", "AI RECEPTION")}
         </span>
-        <div className="language-switch" role="group" aria-label={text("表示言語", "Display language")}>
-          <button type="button" aria-pressed={preference === "auto"} onClick={() => selectLanguage("auto")}>
-            {text("自動", "Auto")}
-          </button>
-          <span aria-hidden="true">/</span>
-          <button type="button" lang="ja" aria-label="日本語" aria-pressed={preference === "ja"} onClick={() => selectLanguage("ja")}>
-            JP
-          </button>
-          <span aria-hidden="true">/</span>
-          <button type="button" lang="en" aria-label="English" aria-pressed={preference === "en"} onClick={() => selectLanguage("en")}>
-            EN
-          </button>
-        </div>
+        <LanguageSelector language={language} preference={preference} onChange={selectLanguage} />
       </header>
       <main id="main" className="page-width reception-main">
         <section className="reception-hero">
-          <div className="reception-intro">
-            <p className="eyebrow">{text("ひとつの会話から、必要なサポートへ。", "ONE CONVERSATION. THE RIGHT HELP.")}</p>
-            <h1>
-              {text("まずは、", "Start with")}
-              <br />
-              <span>{text("話してください。", "a conversation.")}</span>
-            </h1>
-            <p className="hero-description">
-              {text(
-                "仕事の相談も、人への確認も。\n話した内容に合わせて、AIが必要な担当につなぎます。",
-                "A question about work. A request for a person.\nTell the AI what you need, and it will find the right help.",
-              )}
-            </p>
-
-          </div>
+          <ReceptionIntro language={language} />
+          {!hasConversation && <ReceptionOffice language={language} />}
           <section
             className="reception-voice"
             aria-label={text("共通音声受付", "Shared voice reception")}
           >
             <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} />
+            <div className="reception-controls">
             <button
               className="button primary reception-start"
               onClick={() => void toggleCall()}
@@ -147,8 +125,8 @@ export function ReceptionPage() {
             )}
             <p className="small reception-consent">
               {text(
-                "開始するとマイクを使用し、音声をAIに送信します。",
-                "Starting uses your microphone and sends audio to the AI.",
+                "開始するとマイクを使用し、音声をAIに送信します。会話はこの端末内にも記録され、終了後にMP3で保存できます。",
+                "Starting uses your microphone and sends audio to the AI. The conversation is also recorded on this device so you can save an MP3 when it ends.",
               )}
             </p>
             {!available && !active && (
@@ -190,11 +168,13 @@ export function ReceptionPage() {
             )}
             {(s.error || s.cleanupWarning || live.worker.error) && (
               <p role="alert" className="inline-error">
-                {s.error || s.cleanupWarning || live.worker.error}
+                {systemMessage(s.error || s.cleanupWarning || live.worker.error, language)}
               </p>
             )}
+            </div>
           </section>
         </section>
+        {!hasConversation && <ReceptionCapabilities language={language} />}
         {hasConversation && <section
           className="reception-progress"
           aria-label={text("仕事の進行", "Work progress")}
@@ -237,58 +217,7 @@ export function ReceptionPage() {
           </div>
         </section>}
         {hasConversation && <div className="reception-content">
-          <section className="panel reception-transcript">
-            <h2 className="panel-heading">
-              {text("会話", "Conversation")}
-              <span>
-                {text(
-                  "話した内容とAIの回答",
-                  "Your words and the AI’s replies",
-                )}
-              </span>
-            </h2>
-            <div
-              ref={log}
-              className="transcript"
-              role="log"
-              aria-live="polite"
-              aria-label={text("会話の文字起こし", "Conversation transcript")}
-            >
-              {s.transcripts.length ? (
-                s.transcripts.map((m) => (
-                  <article key={m.id} className={`message message-${m.role}`}>
-                    <div className="message-label">
-                      {m.role === "user"
-                        ? text("あなた", "You")
-                        : m.role === "system"
-                          ? text("お知らせ", "Notice")
-                          : "AI"}
-                      {!m.final && (
-                        <span>{text("聞き取り中", "In progress")}</span>
-                      )}
-                    </div>
-                    <p>{m.text}</p>
-                  </article>
-                ))
-              ) : (
-                <div className="reception-empty">
-                  <Mic />
-                  <p>
-                    {text(
-                      "会話を始めると、ここに内容が表示されます。",
-                      "Your conversation will appear here once you start.",
-                    )}
-                  </p>
-                  <span className="small">
-                    {text(
-                      "どんな用件でも、同じ入口からどうぞ。",
-                      "Whatever you need, start in the same place.",
-                    )}
-                  </span>
-                </div>
-              )}
-            </div>
-          </section>
+          <ConversationRecord entries={s.transcripts} recording={live.recording} language={language} active={active} />
           <aside className="reception-work">
             <section className="panel">
               <h2 className="panel-heading">
@@ -322,19 +251,11 @@ export function ReceptionPage() {
                             {request.expectedResult}
                           </p>
                         )}
-                        {request.simulated === true && (
-                          <p className="small">
-                            {text(
-                              "模擬デバイスによるデモ",
-                              "Simulated device demo",
-                            )}
-                          </p>
-                        )}
                         {request.status === "accepted" && (
                           <p className="small">
                             {text(
-                              "受話器が応答しました。音声通話の接続とは別の状態です。",
-                              "The handset answered. This is separate from a voice connection.",
+                              "受話器から応答を受信しました。",
+                              "The handset acknowledged the request.",
                             )}
                           </p>
                         )}
@@ -342,8 +263,8 @@ export function ReceptionPage() {
                           <div className="answer">
                             <strong>
                               {text(
-                                "担当者の回答（原文）",
-                                "Team reply (original)",
+                                "確認結果（原文）",
+                                "Response (original)",
                               )}
                             </strong>
                             <p>{request.result.text}</p>
@@ -429,11 +350,11 @@ export function ReceptionPage() {
         )}
       </main>
       <footer className="site-footer">
-        <span>FUTURE COMPANY</span>
+        <span>{text("株式会社HaaS", "HaaS, Inc.")}</span>
         <span>
           {text(
-            "ひとつの会話から、仕事を前へ。",
-            "One conversation. Moving work forward.",
+            "Human as a Service.",
+            "Human as a Service.",
           )}
         </span>
         <span>DEVDAY 2026</span>

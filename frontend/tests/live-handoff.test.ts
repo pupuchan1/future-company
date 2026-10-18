@@ -3,11 +3,12 @@ import test from 'node:test'
 import { LiveClient, caseVoicePrefix } from '../src/features/live/client.ts'
 import type { LiveRuntime } from '../src/features/live/client.ts'
 import type { LiveRoute } from '../src/features/live/types.ts'
+import type { LiveMediaObserver } from '../src/features/recording/types.ts'
 
 const voices = { reception: 'shida', recruiting: 'harema', haas: 'marin' }
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
-function fixture(apiPrefix?: string) {
+function fixture(apiPrefix?: string, media?: LiveMediaObserver) {
   const calls: { path: string; body: Record<string, unknown>; method?: string }[] = []
   const eventUrls: (string | undefined)[] = []
   const track = { enabled: true, stopped: 0, readyState: 'live', stop() { this.stopped++; this.readyState = 'ended' } }
@@ -65,7 +66,7 @@ function fixture(apiPrefix?: string) {
     supported: () => true,
     metering(onLevels: (levels: { inputLevel: number; outputLevel: number }) => void) { const meter = { disposed: 0, dispose() { this.disposed++ }, setInput() {}, setOutput() {}, levels(inputLevel: number, outputLevel: number) { onLevels({ inputLevel, outputLevel }) } }; meters.push(meter); return meter },
   } as unknown as LiveRuntime
-  const client = new LiveClient('case-a', 'ja', runtime, { apiPrefix })
+  const client = new LiveClient('case-a', 'ja', runtime, { apiPrefix, media })
   async function start(initialRoute: LiveRoute = 'reception') {
     client.observe(); await tick()
     await client.start('ja', initialRoute)
@@ -406,5 +407,45 @@ test('manual selection and Stop cancel a pending automatic handoff', async t => 
     await f.client.stop()
     t.mock.timers.tick(3000); await tick()
     assert.equal(f.peers.length, 1)
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+test('recording keeps one microphone, excludes candidate audio until activation and stops once', async () => {
+  const inputs: MediaStream[] = []; const outputs: (MediaStream | null)[] = []; const enabled: boolean[][] = []
+  let stopped = 0
+  const media: LiveMediaObserver = { setInput: stream => inputs.push(stream), setOutput: stream => outputs.push(stream), setEnabled: (input, output) => enabled.push([input, output]), stop: () => { stopped++ } }
+  const f = fixture(undefined, media); await f.start()
+  let activate!: (response: Response) => void
+  f.setActivate(() => new Promise(resolve => { activate = resolve }))
+  try {
+    assert.deepEqual(inputs, [f.stream]); assert.equal(outputs.at(-1), f.stream)
+    const switching = f.client.switchDepartment('haas')
+    assert.deepEqual(enabled.at(-1), [false, false])
+    await f.readyCandidate(); await tick()
+    const candidateAudio = { name: 'candidate' } as unknown as MediaStream
+    f.peers[1].ontrack!({ streams: [candidateAudio] })
+    assert.equal(outputs.includes(candidateAudio), false)
+    assert.equal(stopped, 0); assert.equal(f.track.stopped, 0)
+    activate(f.activationResponse()); await switching
+    assert.equal(outputs.at(-1), candidateAudio)
+    assert.deepEqual(enabled.at(-1), [true, true])
+    assert.equal(inputs.length, 1); assert.equal(f.microphoneCalls(), 1)
+    f.client.setMuted(true); assert.deepEqual(enabled.at(-1), [false, true])
+    await f.client.stop(); f.client.dispose()
+    assert.equal(stopped, 1); assert.equal(f.track.stopped, 1)
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+test('recording resumes the old call after a failed switch without restarting or finalizing its capture', async () => {
+  const outputs: (MediaStream | null)[] = []; const enabled: boolean[][] = []
+  let inputs = 0; let stopped = 0
+  const media: LiveMediaObserver = { setInput: () => { inputs++ }, setOutput: stream => outputs.push(stream), setEnabled: (input, output) => enabled.push([input, output]), stop: () => { stopped++ } }
+  const f = fixture(undefined, media); await f.start()
+  f.setHandoff(async () => Response.json({ error: 'busy' }, { status: 409 }))
+  try {
+    await f.client.switchDepartment('haas')
+    assert.equal(outputs.at(-1), f.stream)
+    assert.deepEqual(enabled.at(-1), [true, true])
+    assert.equal(inputs, 1); assert.equal(stopped, 0); assert.equal(f.track.stopped, 0)
   } finally { await f.client.stop(); f.client.dispose() }
 })

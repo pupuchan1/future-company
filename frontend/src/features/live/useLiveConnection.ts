@@ -1,5 +1,6 @@
 import { VoiceActivityStore } from '../voice/activity.ts'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { LocalConversationRecorder } from '../recording/recorder.ts'
 import { LiveClient } from './client.ts'
 import type { LiveClientOptions } from './client.ts'
 import { initialSnapshot } from './types.ts'
@@ -8,12 +9,14 @@ import type { LiveLanguage, LiveRoute } from './types.ts'
 export function useLiveConnection({ caseId, language, apiPrefix, bridgeToken, enabled = true }: { caseId: string; language: LiveLanguage; enabled?: boolean } & LiveClientOptions) {
   const [snapshot, setSnapshot] = useState(() => initialSnapshot(caseId, language))
   const [voice, setVoice] = useState(() => new VoiceActivityStore())
+  const [recorder] = useState(() => new LocalConversationRecorder())
+  const recording = useSyncExternalStore(recorder.subscribe, recorder.getSnapshot)
   const client = useRef<LiveClient | null>(null)
   const languageRef = useRef(language)
   useEffect(() => { languageRef.current = language }, [language])
   useEffect(() => {
     if (!enabled) return
-    const next = new LiveClient(caseId, languageRef.current, undefined, { apiPrefix, bridgeToken })
+    const next = new LiveClient(caseId, languageRef.current, undefined, { apiPrefix, bridgeToken, media: recorder })
     client.current = next
     setSnapshot(next.getSnapshot())
     setVoice(next.voice)
@@ -30,10 +33,12 @@ export function useLiveConnection({ caseId, language, apiPrefix, bridgeToken, en
       window.removeEventListener('pagehide', pagehide)
       window.removeEventListener('pageshow', pageshow)
     }
-  }, [caseId, apiPrefix, bridgeToken, enabled])
+  }, [caseId, apiPrefix, bridgeToken, enabled, recorder])
+  useEffect(() => () => recorder.dispose(), [recorder])
   return {
     snapshot: enabled && snapshot.caseId === caseId ? snapshot : initialSnapshot(caseId, language),
     voice,
+    recording,
     start: (route?: LiveRoute, bridgeToken?: string) => client.current?.start(languageRef.current, route, bridgeToken),
     switchDepartment: (route: LiveRoute) => client.current?.switchDepartment(route),
     stop: () => client.current?.stop(),

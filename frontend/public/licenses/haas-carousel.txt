@@ -1,0 +1,11 @@
+HaaS carousel illustrations
+
+Created with built-in image_gen on 2026-10-18 for this project. Fictional office and coworkers, not represented as real company premises or employees.
+The existing haas-office photograph was used only as a photography-style reference.
+Assets: haas-craft-960.jpg, haas-craft-1440.jpg, haas-studio-960.jpg, haas-studio-1440.jpg.
+
+Generation prompt 1:
+Use case: photorealistic-natural. Use the attached image only as a reference for consistent office materials, warm daylight and documentary photography style. Generate a NEW landscape 3:2 editorial photograph for a fictional HaaS technology company's homepage background carousel. Different composition: a close view across a light oak worktable, two adult coworkers' natural hands discussing a small electronics prototype and an unbranded laptop, a notebook with no legible writing, black classic rotary telephone near the far side of the table, green plants and bright industrial-style office windows in the softly blurred background. Focus on real human collaboration and physical work. Broad composition with plenty of workspace, soft natural colors, no studio posing. Clean professional corporate editorial photo. No UI, no text, no logos, no watermark. No collage. Natural anatomy and credible electronics. This is a fictional illustrative office scene.
+
+Generation prompt 2:
+Use case: photorealistic-natural. Use the attached photo as a style reference for the same warm daylight Japanese technology studio, not as an edit target. Generate a NEW wide landscape 3:2 editorial photograph of this office from a different wider viewpoint. An airy small company's shared work space with oak desks, plants, ceiling lamps and tall windows; two coworkers are having a quiet conversation in the middle distance near a whiteboard that has no legible text. A workstation with an unbranded laptop and books in the foreground. A natural candid image that conveys a real workplace, welcoming, modest, human, premium documentary photography, muted natural colors. Compose it to work as a broad hero background. No UI, no letters, no logos, no futuristic graphics, no staged handshake, no collage, no watermark. The office and coworkers are fictional illustrative subjects.

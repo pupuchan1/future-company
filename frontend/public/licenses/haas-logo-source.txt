@@ -1,0 +1,11 @@
+HaaS logo source
+
+User-provided reference: ミライの会社 HaaS
+https://docs.google.com/presentation/d/1KRTMFYQiLugfNoKXPJWCc3JFyjXT8NkxEPqvpC5EvUY/edit
+
+Extracted without pixel changes from ppt/media/image3.png in the reference PPTX export.
+The SVG viewport hides transparent outer padding; the original PNG is preserved.
+SHA-256: f3dc05999027a19ea3ab00d6005df560b91152b3d42fa1838f83560cd586ee19
+
+Reference slide text/accent colors: #12293B, #00757D.
+Reference pale surface: #F0F5F7.
