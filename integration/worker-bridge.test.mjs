@@ -7,8 +7,8 @@ import { issueBridgeProof } from '../src/backend/bridge-proof.ts';
 
 const token = 'test-server-credential-'.padEnd(64, 'a');
 const result = { text: '【模擬回答】TypeScriptを使います。', language: 'ja' };
-const requested = (caseId = 'case-one', id = 'handoff-one') => ({ name: 'human.requested', data: { case_id: caseId, handoff_id: id, summary: '開発環境を確認', task: '開発環境は？', target_role: 'Engineer', expected_result: '回答本文' } });
-const completed = (caseId = 'case-one', id = 'handoff-one') => ({ name: 'human.completed', data: { case_id: caseId, handoff_id: id, result, simulated: true } });
+const requested = (caseId = 'case-one', id = 'handoff-one') => ({ name: 'human.requested', data: { case_id: caseId, handoff_id: id, status: 'requested', revision: 1, summary: '開発環境を確認', task: '開発環境は？', target_role: 'Engineer', expected_result: '回答本文' } });
+const completed = (caseId = 'case-one', id = 'handoff-one') => ({ name: 'human.completed', data: { case_id: caseId, handoff_id: id, status: 'completed', revision: 4, result, simulated: true } });
 
 function fixture({ deliver = async () => ({ status: 'live_submitted' }), conflict = false } = {}) {
   const snapshots = new Map(['case-one', 'case-two'].map(id => [id, { id, revision: 0, status: 'active', requests: [] }]));
@@ -35,7 +35,7 @@ function fixture({ deliver = async () => ({ status: 'live_submitted' }), conflic
     if (conflict && path.endsWith('/handoffs')) { conflict = false; state.revision++; return error(409, 'revision_conflict'); }
     if (body.expectedRevision !== state.revision) return error(409, 'revision_conflict');
     if (path.endsWith('/handoffs')) {
-      state.requests.push({ id: `request-${body.handoffId}`, status: 'pending', origin: { nodeCaseId: body.nodeCaseId, handoffId: body.handoffId, route: body.route }, summary: body.summary });
+      state.requests.push({ id: `request-${body.handoffId}`, status: 'pending', origin: { nodeCaseId: body.nodeCaseId, handoffId: body.handoffId, route: body.route, targetRole: body.targetRole, expectedResult: body.expectedResult }, summary: body.summary, question: body.task });
     } else if (path.endsWith('/claim')) {
       const request = state.requests.find(r => path.includes(`/${r.id}/`));
       if (request.status !== 'pending') return error(409, 'already_claimed');
@@ -115,7 +115,9 @@ test('two Node consumers use distinct durable reservation IDs and dispatch only 
   await Promise.all([f.bridge.humanEvent(requested(), 'recruiting'), second.humanEvent(requested(), 'recruiting')]);
   Object.assign(f.snapshots.get('case-one').requests[0], { status: 'answered', result, simulated: true, delivery: { status: 'pending' } });
   const receipt = f.receipt();
-  await Promise.all([f.bridge.syncCase('case-one', proof), second.syncCase('case-one', proof)]);
+  const payload = Buffer.from(JSON.stringify({ type: 'case.snapshot', snapshot: structuredClone(f.snapshots.get('case-one')) }));
+  f.sockets[0].emit('message', payload);
+  f.sockets[1].emit('message', payload);
   await receipt;
   await nextTurn();
   assert.equal(f.deliveries.length, 1);
@@ -168,6 +170,38 @@ test('an employee saved answer remains authoritative and thrown delivery records
   assert.equal(f.deliveries[0].data.simulated, false);
   assert.equal(f.calls.filter(call => call.path.endsWith('/answer')).length, 0);
   assert.equal(JSON.stringify(f.events).includes('credentials'), false);
+  f.bridge.close();
+});
+
+test('synthetic revision and cached reload keep the verified employee answer above stale phone data', async () => {
+  const f = fixture();
+  await f.attach();
+  await f.bridge.humanEvent(requested(), 'recruiting');
+  await f.bridge.humanEvent({ name: 'human.accepted', data: { ...requested().data, status: 'accepted', revision: 100 } }, 'haas');
+  const snapshot = f.snapshots.get('case-one');
+  Object.assign(snapshot.requests[0], { status: 'answered', result: { text: 'Verified employee answer', language: 'en' }, simulated: false, delivery: { status: 'pending' } });
+  snapshot.revision++;
+  const receipt = f.receipt();
+  await f.bridge.humanEvent({ ...completed(), data: { ...completed().data, revision: 101 } }, 'haas');
+  await receipt;
+  const data = f.deliveries[0].data;
+  assert.ok(data.revision > 101);
+  assert.equal(data.source_route, 'recruiting');
+  assert.equal(data.summary, '開発環境を確認');
+  assert.equal(data.task, '開発環境は？');
+  assert.equal(data.target_role, 'Engineer');
+  assert.equal(data.expected_result, '回答本文');
+  assert.equal(data.result.text, 'Verified employee answer');
+  assert.equal(data.simulated, false);
+  const stale = { ...completed().data, revision: 101 };
+  const reload = f.bridge.records([stale])[0];
+  assert.equal(reload.result.text, 'Verified employee answer');
+  assert.equal(reload.simulated, false);
+  assert.ok(reload.revision > stale.revision);
+  assert.equal(reload.worker_revision, f.snapshots.get('case-one').revision);
+  f.sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'case.snapshot', snapshot: { id: 'case-one', revision: 0, requests: [] } })));
+  assert.equal(f.bridge.requests('case-one', [stale])[0].result.text, 'Verified employee answer');
+  assert.equal(f.bridge.records([{ ...stale, case_id: 'case-two' }])[0].result.text, stale.result.text);
   f.bridge.close();
 });
 

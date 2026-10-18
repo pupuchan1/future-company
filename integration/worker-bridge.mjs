@@ -34,8 +34,9 @@ export class WorkerBridge {
     const { case: snapshot } = await this.api(`/staff/cases/${caseId}`);
     if (snapshot.id !== caseId || snapshot.status === 'resolved') throw Object.assign(new Error('Worker case is unavailable.'), { status: 409 });
     if (this.cases.has(caseId)) throw Object.assign(new Error('Case bridge already exists.'), { status: 409 });
-    const state = { id: caseId, closed: false, queue: Promise.resolve(), handoffs: new Map(), deliveries: new Map() };
+    const state = { id: caseId, closed: false, queue: Promise.resolve(), handoffs: new Map(), deliveries: new Map(), snapshot: null };
     this.cases.set(caseId, state);
+    this.cacheSnapshot(state, snapshot);
     const url = new URL(`/api/v1/staff/cases/${caseId}/ws`, this.url);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     try { state.socket = this.socketFactory(url, { headers: this.headers, handshakeTimeout: 10000 }); }
@@ -58,7 +59,11 @@ export class WorkerBridge {
     for (let attempt = 0; attempt < 2; attempt++) {
       if (state.closed) throw new Error('Case bridge is closed.');
       const { case: snapshot } = await this.api(`/staff/cases/${state.id}`);
-      try { return (await this.api(suffix, { commandId, expectedRevision: snapshot.revision, ...fields })).case; }
+      try {
+        const saved = (await this.api(suffix, { commandId, expectedRevision: snapshot.revision, ...fields })).case;
+        this.cacheSnapshot(state, saved);
+        return saved;
+      }
       catch (error) { if (attempt || !['revision_conflict', 'projection_failed'].includes(error.code)) throw error; }
     }
   }
@@ -68,7 +73,12 @@ export class WorkerBridge {
     if (!state || state.closed) return false;
     const id = event.data.handoff_id;
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(id)) throw new Error('A valid handoff_id is required.');
-    if (event.name === 'human.requested' && !state.handoffs.has(id)) state.handoffs.set(id, { route, cancelled: false });
+    if (event.name === 'human.requested' && !state.handoffs.has(id)) state.handoffs.set(id, { route, cancelled: false, revision: 0, record: structuredClone(event.data) });
+    const known = state.handoffs.get(id);
+    if (known) {
+      if (Number.isSafeInteger(event.data.revision) && event.data.revision >= 0) known.revision = Math.max(known.revision, event.data.revision);
+      known.record = { ...known.record, ...structuredClone(event.data) };
+    }
     // Cancellation invalidates queued delivery immediately, before any HTTP await.
     if (['human.cancelled', 'human.unavailable'].includes(event.name)) {
       const handoff = state.handoffs.get(id);
@@ -103,8 +113,46 @@ export class WorkerBridge {
     return true;
   }
 
+  cacheSnapshot(state, snapshot) {
+    if (state.closed || snapshot?.id !== state.id || !Number.isSafeInteger(snapshot.revision) || snapshot.revision < 0
+      || !Array.isArray(snapshot.requests) || (state.snapshot && snapshot.revision < state.snapshot.revision)) return false;
+    state.snapshot = structuredClone(snapshot);
+    for (const request of snapshot.requests) {
+      const known = request.origin && state.handoffs.get(request.origin.handoffId);
+      if (!known || request.origin.nodeCaseId !== state.id || request.origin.route !== known.route) continue;
+      if (request.status === 'cancelled') known.cancelled = true;
+    }
+    return true;
+  }
+
+  requests(caseId, records) {
+    const state = this.cases.get(caseId);
+    if (!state || state.closed || !state.snapshot) return records;
+    return records.map(record => {
+      if (record.case_id !== caseId) return record;
+      const known = state.handoffs.get(record.handoff_id);
+      const request = state.snapshot.requests.find(r => r.origin?.handoffId === record.handoff_id && r.origin.nodeCaseId === caseId && r.origin.route === known?.route);
+      if (!known || !request) return record;
+      const { result: _oldResult, ...base } = record;
+      const terminal = request.status === 'answered' || request.status === 'cancelled';
+      if (terminal) known.resultRevision = Math.max(known.resultRevision || 0, known.revision + 1);
+      const metadata = { ...base, request_id: request.id, summary: request.summary || base.summary,
+        task: request.question || base.task, target_role: request.origin.targetRole || base.target_role,
+        expected_result: request.origin.expectedResult || base.expected_result, source_route: request.origin.route,
+        worker_revision: state.snapshot.revision, worker_delivery: request.delivery?.status,
+        revision: terminal ? known.resultRevision : Math.max(known.revision, record.revision || 0) };
+      if (request.status === 'answered' && request.result && typeof request.simulated === 'boolean') return { ...metadata, status: 'completed', result: structuredClone(request.result), simulated: request.simulated };
+      if (request.status === 'cancelled') return { ...metadata, status: 'cancelled' };
+      return { ...metadata, status: record.status === 'completed' ? (request.status === 'claimed' ? 'accepted' : 'requested') : record.status };
+    });
+  }
+
+  records(records) {
+    return records.map(record => this.requests(record.case_id, [record])[0]);
+  }
+
   observe(state, snapshot) {
-    if (state.closed || snapshot.id !== state.id) return;
+    if (!this.cacheSnapshot(state, snapshot)) return;
     for (const request of snapshot.requests || []) {
       const origin = request.origin;
       const known = origin && state.handoffs.get(origin.handoffId);
@@ -127,8 +175,11 @@ export class WorkerBridge {
     // Recheck durable cancellation after queue reservation and before the Agent receives data.
     const { case: latest } = await this.api(`/staff/cases/${state.id}`);
     if (latest.requests.find(r => r.id === request.id)?.status !== 'answered') return;
+    this.cacheSnapshot(state, latest);
+    const known = state.handoffs.get(origin.handoffId);
+    const data = this.requests(state.id, [known.record])[0];
     const event = { name: 'human.completed', eventId: `worker-result-${state.id}-${origin.handoffId}`, isValid: valid,
-      data: { case_id: origin.nodeCaseId, handoff_id: origin.handoffId, request_id: request.id, status: 'completed', result: request.result, simulated: request.simulated, source_route: origin.route } };
+      data };
     let result;
     try { result = await this.deliver(event); }
     catch { result = { status: 'failed' }; }
