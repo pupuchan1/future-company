@@ -1,6 +1,5 @@
 // Development-only fixture: no microphone, network connection, or real conversation.
 import { useRef, useState } from 'react'
-import { createRoot } from 'react-dom/client'
 import { ReceptionPageView } from '../../src/pages/ReceptionPage'
 import { initialSnapshot } from '../../src/features/live/types'
 import { LiveEventReducer } from '../../src/features/live/events'
@@ -45,5 +44,3 @@ export function Fixture() {
     }} />
   </>
 }
-
-createRoot(document.getElementById('root')!).render(<Fixture />)
