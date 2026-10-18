@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLiveConnection } from "@/features/live/useLiveConnection";
+import { AudioOrb } from "@/features/live/AudioOrb";
 import type { LiveLanguage, LivePhase, LiveRoute } from "@/features/live/types";
 
 const phrase = (language: LiveLanguage, ja: string, en: string) =>
@@ -14,6 +15,7 @@ const phases: Record<LivePhase, [string, string]> = {
   connecting: ["接続しています", "Connecting"],
   connected: ["会話中", "Connected"],
   reconnecting: ["再接続を待っています", "Reconnecting"],
+  switching: ["担当の声に切り替えています", "Switching the assistant voice"],
   stopping: ["会話を終了しています", "Ending conversation"],
   ended: ["会話を終了しました", "Conversation ended"],
   error: ["接続を確認してください", "Check the connection"],
@@ -44,10 +46,13 @@ export function ReceptionPage() {
   const text = (ja: string, en: string) => phrase(language, ja, en);
   const [showDetails, setShowDetails] = useState(false);
   const log = useRef<HTMLDivElement>(null);
+  const orb = useRef<HTMLDivElement>(null);
+  const [orbVisible, setOrbVisible] = useState(true);
   const active = [
     "connecting",
     "connected",
     "reconnecting",
+    "switching",
     "stopping",
   ].includes(s.phase);
   const available = Boolean(s.configured && s.mcpConfigured);
@@ -62,6 +67,12 @@ export function ReceptionPage() {
   useEffect(() => {
     if (log.current) log.current.scrollTop = log.current.scrollHeight;
   }, [s.transcripts]);
+  useEffect(() => {
+    if (!orb.current || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(([entry]) => setOrbVisible(entry.isIntersecting));
+    observer.observe(orb.current);
+    return () => observer.disconnect();
+  }, []);
   async function toggleCall() {
     if (active) await live.stop();
     else await live.start();
@@ -154,18 +165,8 @@ export function ReceptionPage() {
                   : text("準備中", "Preparing")}
               </span>
             </div>
-            <div
-              className={`reception-signal ${s.phase === "connected" && !s.muted ? "is-active" : ""}`}
-              aria-hidden="true"
-            >
-              {[16, 28, 44, 64, 40, 78, 54, 34, 66, 46, 26, 40, 16].map(
-                (height, i) => (
-                  <i
-                    key={i}
-                    style={{ height, animationDelay: `${i * 0.07}s` }}
-                  />
-                ),
-              )}
+            <div ref={orb}>
+              <AudioOrb {...s} language={language} />
             </div>
             <h2>
               {active
@@ -207,12 +208,23 @@ export function ReceptionPage() {
                 className="text-button reception-mute"
                 aria-pressed={s.muted}
                 onClick={live.toggleMuted}
+                disabled={s.phase === "switching"}
               >
                 <Mic off={s.muted} />
                 {s.muted
                   ? text("マイクをオンにする", "Unmute microphone")
                   : text("マイクをオフにする", "Mute microphone")}
               </button>
+            )}
+            {active && s.voice && (
+              <div className="reception-voice-switch">
+                <p className="small">{text("現在の声", "Current voice")}: {routes[s.voiceRoute][isEnglish ? 1 : 0]}</p>
+                {s.switchConfigured && s.voiceRoute !== s.route && s.phase === "connected" && (
+                  <button className="button secondary full" onClick={() => void live.switchDepartment(s.route)}>
+                    {text(`${routes[s.route][0]}の声に切り替える`, `Switch to the ${routes[s.route][1]} voice`)}
+                  </button>
+                )}
+              </div>
             )}
             <p className="small reception-consent">
               {text(
@@ -492,6 +504,15 @@ export function ReceptionPage() {
           </dl>
         )}
       </main>
+      {active && !orbVisible && (
+        <div className="reception-floating-voice" aria-label={text("音声通話", "Voice call")}>
+          <AudioOrb {...s} language={language} compact />
+          <span>{phases[s.phase][isEnglish ? 1 : 0]}</span>
+          <button className="button secondary" disabled={s.phase === "stopping"} onClick={() => void live.stop()}>
+            {text("終了", "End")}
+          </button>
+        </div>
+      )}
       <footer className="site-footer">
         <span>FUTURE COMPANY</span>
         <span>

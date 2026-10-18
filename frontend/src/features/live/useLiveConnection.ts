@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { LiveClient } from './client.ts'
 import { initialSnapshot } from './types.ts'
-import type { LiveLanguage } from './types.ts'
+import type { LiveLanguage, LiveRoute } from './types.ts'
 
 export function useLiveConnection({ caseId, language }: { caseId: string; language: LiveLanguage }) {
   const [snapshot, setSnapshot] = useState(() => initialSnapshot(caseId, language))
@@ -28,7 +28,8 @@ export function useLiveConnection({ caseId, language }: { caseId: string; langua
   }, [caseId])
   return {
     snapshot,
-    start: () => client.current?.start(languageRef.current),
+    start: (route?: LiveRoute) => client.current?.start(languageRef.current, route),
+    switchDepartment: (route: LiveRoute) => client.current?.switchDepartment(route),
     stop: () => client.current?.stop(),
     toggleMuted: () => client.current?.setMuted(!client.current.getSnapshot().muted),
     playAudio: () => client.current?.playAudio(),

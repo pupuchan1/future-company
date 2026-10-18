@@ -1,0 +1,24 @@
+.audio-orb { margin: 10px auto 20px; width: 190px; }
+.audio-orb-visual { position: relative; width: 100%; aspect-ratio: 1; }
+.audio-orb-visual svg { position: relative; width: 100%; height: 100%; overflow: visible; }
+.audio-orb-core { position: absolute; inset: 25%; border-radius: 50% !important; background: radial-gradient(circle at 33% 25%, #fff 0%, #87a8ff 5%, #2860ff 25%, #1744cc 54%, #050b1e 100%); box-shadow: inset -9px -11px 17px #0008, inset 4px 6px 12px #ffffff70, 0 10px 25px #1752ff26; transform: scale(var(--orb-scale, 1)); transition: transform 100ms linear; }
+.audio-orb-guide { fill: none; stroke: #1752ff18; stroke-width: 1; }
+.audio-orb-input { fill: none; stroke: #0c1530; stroke-width: 1.65; stroke-linejoin: round; }
+.audio-orb-output { fill: none; stroke: #1752ff; transition: r 100ms linear, opacity 100ms linear; }
+.audio-orb-output--outer { stroke-width: 1; }
+.audio-orb-legend { display: flex; justify-content: center; gap: 18px; color: #0008; font-size: 11px; letter-spacing: .03em; }
+.audio-orb-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.audio-orb-legend i { width: 6px; height: 6px; border: 1px solid currentColor; border-radius: 50%; }
+.audio-orb-legend .is-speaking { color: #000; }
+.audio-orb-legend .is-speaking i { background: currentColor; }
+.audio-orb-legend span:last-child.is-speaking { color: #1752ff; }
+.audio-orb--idle .audio-orb-core { animation: audio-orb-rest 6s ease-in-out infinite; }
+.audio-orb--compact { width: 68px; margin: 0; flex-shrink: 0; }
+.reception-voice-switch { display: grid; gap: 8px; margin-top: 14px; }
+.reception-voice-switch .small { margin: 0; }
+.reception-floating-voice { position: fixed; z-index: 30; bottom: 24px; right: 24px; display: flex; align-items: center; gap: 10px; padding: 4px 12px 4px 4px; border: 1px solid #000; background: #fff; box-shadow: 0 8px 32px #0002; }
+.reception-floating-voice > span { font-size: 12px; }
+.reception-floating-voice button { padding: 8px 12px; }
+@keyframes audio-orb-rest { 0%, 100% { opacity: .86; } 50% { opacity: 1; } }
+@media (max-width: 600px) { .reception-floating-voice { bottom: 14px; right: 14px; gap: 6px; } }
+@media (prefers-reduced-motion: reduce) { .audio-orb-core, .audio-orb-output { transition: none; animation: none !important; } }
