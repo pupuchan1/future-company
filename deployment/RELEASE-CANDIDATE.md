@@ -1,12 +1,13 @@
 # 配備候補と受入状況
 
-2026-10-18 16:41 JSTまでのGitHub・配備記録の確認をまとめる。配備前に[PR #39](https://github.com/pupuchan1/future-company/pull/39)のHEADと[全体管理 #94](https://github.com/pupuchan1/future-company/issues/94)を読み直す。
+2026-10-18 16:47 JSTまでのGitHub・配備記録の確認をまとめる。配備前に[PR #39](https://github.com/pupuchan1/future-company/pull/39)のHEADと[全体管理 #94](https://github.com/pupuchan1/future-company/issues/94)を読み直す。
 
 ## 実配備版
 
-実配備commitは`73eb9ba4c8713e862068388845be432f67c63f62`。[PR #110](https://github.com/pupuchan1/future-company/pull/110)で共有されている。
-同PRが記録する配備チャットの追加指定により、PR #28のFE `3e036ab`を改変せず、BE `6176125`と組み合わせた版である。
-この文書の担当でもGit差分を取得し、`frontend`が`3e036ab`と差分0、`integration`・`deployment`・`src`が`6176125`と差分0であることを確認した。
+実配備commitは`ab9cedb9d9fe2fea5abd245bdf9da90bc0ee4c47`。[PR #113](https://github.com/pupuchan1/future-company/pull/113)で共有されている。
+前の実配備版[PR #110の`73eb9ba`](https://github.com/pupuchan1/future-company/pull/110)へ、WorkerとNodeの時計差でLive開始が403になる問題の修正を加えた版である。
+Git差分は`src/backend/bridge-proof.ts`と`src/backend/bridge.test.ts`の2ファイル。FEはPR #28の`3e036ab`を維持し、BEは`6176125`基点の構成にこの修正を加えている。
+PR #113は署名・case一致・期限切れ拒否を維持し、期限上限に30秒の時計差許容を追加する。約2.2秒の時計差という原因の根拠と回帰試験は同PRにある。
 以下の#39候補と#76/#87/#101の統合条件は、実配備版の記録と分けて扱う。
 
 ## #39の統合候補
@@ -50,18 +51,19 @@ Orbは同じ`backend.result`を再受信すると、音声応答終了後に`lis
 
 ## 本番への受渡し
 
-16:41 JSTのGitHub再確認で#39は`6176125`、#76は`f0572a5`、#87は`d2f208b`。#101は未マージ。
+16:47 JSTのGitHub再確認で#39は`6176125`、#87は`d2f208b`。16:41 JSTに確認した#76は`f0572a5`、#101は未マージ。
 [#87のレビュー指摘](https://github.com/pupuchan1/future-company/pull/87#discussion_r4306171872)は未解決で、修正後の最終配備commitはまだ確定していない。
 候補と受入範囲は[PR #103](https://github.com/pupuchan1/future-company/pull/103)、Node・Workerの配備記録は[PR #104](https://github.com/pupuchan1/future-company/pull/104)で扱う。別チャット「PR #39を本番デプロイ」で実際の切替と追加統合が進行しているため、この文書の値を固定した現在状態として扱わない。
 
-### 16:41 JSTまでに確認した配備状態とsmoke
+### 16:47 JSTに確認した配備状態とsmoke
 
-- 配備担当が16:40 JSTに取得したCloudflare API記録を読み、Worker version `1a928084-a992-416c-9c7b-3761dd3df3d1`の100%配信とpreview無効を確認した。取得記録は手元の`production-refresh-after.json`。本チャットからAPIを再実行した結果ではない。
-- ローカルの`.local/production-runtime/state.json`はNode側の`sourceCommit=617612592fda658304fe87f68d2166ceeac5f9c7`、relay `https://ellen-grid-entrance-mails.trycloudflare.com`、Node4350・relay4351を記録している。FE/Workerの統合配備commit `73eb9ba`とNodeのBEソースを混同しない。Node4350はPID9055を保持するとの配備担当報告。
-- 配備担当の16:41 JSTの`production-refresh-smoke.json`は`source=73eb9ba`。採用・HaaSとも案件作成201、証明・status・SSE200、所有者なし401・別Origin403、社員引受・回答と再送200、revision3・answered・simulated=trueを記録している。
+- 配備担当が16:47 JSTに取得したCloudflare API記録を読み、Worker version `cb9d228d-56cd-48a3-8682-0f2213d8147a`の100%配信とpreview無効を確認した。取得記録は手元の`bridge-skew-after.json`。本チャットからAPIを再実行した結果ではない。
+- ローカルの`.local/production-runtime/state.json`は`sourceCommit=ab9cedb9d9fe2fea5abd245bdf9da90bc0ee4c47`、relay `https://rep-butter-obligations-vehicles.trycloudflare.com`、Node4350・relay4351を記録している。Node4350の待受PID42397も確認した。
+- 配備担当の`bridge-skew-proof-check.json`は新規本番証明で旧検証false・修正後true、別case・署名改ざん・期限切れ拒否を記録している。これは証明検証の確認であり、Live開始成功の実測ではない。
+- 同担当の16:47 JSTの`bridge-skew-smoke.json`は`source=ab9cedb`。採用・HaaSとも案件作成201、証明・status・SSE200、所有者なし401・別Origin403、社員引受・回答と再送200、revision3・answered・simulated=trueを記録している。
 - 同smokeの`liveSessionsCreated=0`。実Live往復・全文字幕/TXT/MP3・自動声交代・実マイク・黒電話の本番受入はこの試験に含まれない。
 
-`6176125`から`73eb9ba`への配備更新、#76最新差分・#87修正・#101を揃えた統合版の確定、実音声の受入成功はそれぞれ別に記録する。
+`ab9cedb`への配備更新、#76最新差分・#87修正・#101を揃えた統合版の確定、実音声の受入成功はそれぞれ別に記録する。
 
 配備担当はr74tech。Worker・Node・relayの版を一組として記録し、次のNode更新は稼働中の通話を終了してから行う。
 stateDir・D1・CaseRoom・Access・secretを保持し、再配置前に実際のrelay originとWorker設定を照合する。以前のjamie URLへ記録だけを根拠に戻さない。
