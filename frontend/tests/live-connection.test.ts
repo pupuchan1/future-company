@@ -16,6 +16,7 @@ function fixture() {
     send() { assert.fail('PR #4 does not allow frontend Live commands') },
   }
   const source = {
+    readyState: 0,
     onopen: null as (() => void) | null,
     onmessage: null as ((event: { data: string }) => void) | null,
     onerror: null as (() => void) | null,
@@ -216,4 +217,22 @@ test('stop mutes capture immediately, waits for backend finalization before clos
   assert.equal(client.getSnapshot().phase, 'ended')
   assert.match(client.getSnapshot().cleanupWarning, /finalization is unconfirmed/)
   client.dispose()
+})
+
+test('a permanently closed SSE after proxy failure is recreated, and dispose cancels retry', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = fixture()
+  let opened = 0
+  f.runtime.events = () => { opened++; return f.source as unknown as EventSource }
+  const client = new LiveClient('case-a', 'ja', f.runtime)
+  client.observe()
+  f.source.readyState = 2; f.source.onerror!()
+  assert.equal(f.source.closed, true)
+  assert.equal(client.getSnapshot().events, 'reconnecting')
+  t.mock.timers.tick(3000)
+  assert.equal(opened, 2)
+  f.source.onerror!()
+  client.dispose()
+  t.mock.timers.tick(3000)
+  assert.equal(opened, 2)
 })

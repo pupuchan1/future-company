@@ -41,6 +41,7 @@ export class LiveClient {
   private source: EventSource | null = null
   private audio: HTMLAudioElement | null = null
   private poll?: ReturnType<typeof setInterval>
+  private reconnectTimer?: ReturnType<typeof setTimeout>
   private statusBusy = false
   private observing = false
   private disposed = false
@@ -82,6 +83,12 @@ export class LiveClient {
     if (this.disposed || this.observing) return
     this.observing = true
     void this.refreshStatus()
+    this.openEvents()
+    this.poll = setInterval(() => void this.refreshStatus(), 10000)
+  }
+
+  private openEvents() {
+    if (this.disposed || this.source) return
     try {
       const source = this.runtime.events()
       this.source = source
@@ -89,9 +96,17 @@ export class LiveClient {
       source.onmessage = event => {
         try { this.receive(JSON.parse(event.data), 'server') } catch { /* Ignore malformed SSE frames. */ }
       }
-      source.onerror = () => this.patch({ events: 'reconnecting' })
+      source.onerror = () => {
+        this.patch({ events: 'reconnecting' })
+        // A proxy 5xx can close EventSource permanently rather than retry it.
+        if (source.readyState === 2) {
+          source.onopen = null; source.onmessage = null; source.onerror = null
+          source.close()
+          this.source = null
+          this.reconnectTimer = setTimeout(() => { this.reconnectTimer = undefined; this.openEvents() }, 3000)
+        }
+      }
     } catch { this.patch({ events: 'closed', error: 'イベント接続を開始できません。 / Cannot connect to events.' }) }
-    this.poll = setInterval(() => void this.refreshStatus(), 10000)
   }
 
   async refreshStatus() {
@@ -264,6 +279,7 @@ export class LiveClient {
     this.source?.close()
     if (this.source) { this.source.onopen = null; this.source.onmessage = null; this.source.onerror = null }
     clearInterval(this.poll)
+    clearTimeout(this.reconnectTimer)
     void this.stop('', true)
     this.disposed = true
     this.listeners.clear()
