@@ -6,10 +6,9 @@ type Props = { language: LiveLanguage };
 
 const copy = {
   ja: {
-    eyebrow: "ミライの会社",
-    introduction: "AIが一次対応し、必要なときに人を呼ぶ。",
+    eyebrow: "いつでも、どこからでも。人の力につながる。",
     photoAlt: "明るいオフィスで、仲間と試作品について話し合うチームのイメージ",
-    photoCaption: "AIと人が連携する、ミライの会社。",
+    photoCaption: "AIと人が連携し、必要な力を届ける。",
     photoCredit: "写真はイメージです",
     servicesLabel: "この受付でできること",
     servicesTitle: "Webから始める、AI総合受付",
@@ -22,8 +21,8 @@ const copy = {
     ],
     storySummary: "HaaS：必要なときに、人の力を",
     storyLabel: "私たちについて",
-    storyTitle: "採用受付で試す、ミライの会社",
-    storyIntro: "私たちがつくるのは、株式会社HaaS。AIと人が連携する「ミライの会社」です。",
+    storyTitle: "採用受付から始める、AIと人の連携",
+    storyIntro: "私たちがつくるのは、株式会社HaaS。AIが用件を整理し、必要な人の力につなぐ会社です。",
     storyMission: "Human as a Service.（ハース）\n人の力を呼び出せる会社を目指します。",
     rolesTitle: "AIと人の役割",
     roles: [
@@ -36,10 +35,9 @@ const copy = {
     values: "Webから気軽に質問できる使いやすさ。担当者が個別の相談に集中できる有用性。AIが必要なときに人の力を呼ぶ独創性。商談や問い合わせ対応にも展開することを目指しています。",
   },
   en: {
-    eyebrow: "THE COMPANY OF TOMORROW",
-    introduction: "The AI welcomes you. A person helps when you need one.",
+    eyebrow: "Human expertise, anytime, anywhere.",
     photoAlt: "An illustrative team discussing a prototype in a bright office",
-    photoCaption: "A future where AI and people work together.",
+    photoCaption: "AI and people, bringing the right expertise together.",
     photoCredit: "Illustrative image",
     servicesLabel: "WHAT YOU CAN DO HERE",
     servicesTitle: "Your AI front desk, on the web",
@@ -52,7 +50,7 @@ const copy = {
     ],
     storySummary: "HaaS: a person, when it matters",
     storyLabel: "ABOUT US",
-    storyTitle: "Exploring the company of tomorrow through recruiting",
+    storyTitle: "Connecting AI and people through recruiting",
     storyIntro: "We are building HaaS, a company where AI and people work together.",
     storyMission: "Human as a Service.\nA company that can call on human expertise when needed.",
     rolesTitle: "The roles of AI and people",
@@ -73,7 +71,6 @@ export function ReceptionIntro({ language }: Props) {
     <div className="reception-intro haas-intro">
       <p className="eyebrow">{c.eyebrow}</p>
       <h1 lang="en" className="haas-headline-concept"><span>H</span>uman <span>a</span>s <span>a</span> <span>S</span>ervice.</h1>
-      <p className="hero-description">{c.introduction}</p>
     </div>
   );
 }

@@ -16,7 +16,7 @@ import { ReceptionIntro, ReceptionOffice, ReceptionCapabilities } from "@/compon
 const phrase = (language: LiveLanguage, ja: string, en: string) =>
   language === "ja" ? ja : en;
 const routes: Record<LiveRoute, [string, string]> = {
-  reception: ["AI受付", "AI reception"],
+  reception: ["ご相談窓口", "Reception"],
   recruiting: ["採用の相談", "Recruiting"],
   haas: ["仕事・人への依頼", "Work & human assistance"],
 };
@@ -122,7 +122,7 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
           </svg>
         </a>
         <span className="reception-header-label">
-          {text("AI総合受付", "AI RECEPTION")}
+          {text("ご相談窓口", "LET’S TALK")}
         </span>
         {(conversationScreen || hasConversation) && <a
           className="conversation-nav"
@@ -139,7 +139,8 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
             className="reception-voice"
             aria-label={text("共通音声受付", "Shared voice reception")}
           >
-            <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} />
+            <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} onOpenConversation={() => navigate("conversation")} />
+            <div className="reception-controls">
             <button
               className="button primary reception-start"
               onClick={() => void toggleCall()}
@@ -147,14 +148,14 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
               aria-label={
                 active
                   ? text("会話を終了", "End conversation")
-                  : text("AIに話しかける", "Talk to AI")
+                  : text("話してみる", "Let’s talk")
               }
             >
               <Mic off={active} />
               <span>
                 {active
                   ? text("会話を終了", "End conversation")
-                  : text("AIに話しかける", "Talk to AI")}
+                  : text("話してみる", "Let’s talk")}
               </span>
               <span aria-hidden="true">{active ? "■" : "→"}</span>
             </button>
@@ -223,6 +224,7 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
                 {text("言語の変更を再試行", "Retry language change")}
               </button>
             )}
+            </div>
           </section>
           {conversationScreen && <ConversationTranscript key={caseId ?? "new"} language={language} phase={s.phase} messages={s.transcripts} />}
         </section>

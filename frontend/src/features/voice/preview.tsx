@@ -92,7 +92,7 @@ export function Preview() {
     }} /></label>}
     {error && <p role="alert">{error}</p>}
     <VoiceOrb activity={store} phase={mode === 'stopped' ? 'ended' : 'connected'} muted={mode === 'muted'} playbackBlocked={mode === 'blocked'} />
-    <section style={{ minHeight: 700, paddingTop: 80 }}><h2>スクロールして常駐表示を確認</h2><p>大きなオーブが画面外になると、右下に同じ入出力の状態が残ります。右下の受付を押すと元の位置へ戻ります。</p></section>
+    <section style={{ minHeight: '120vh', paddingTop: 80 }}><h2>スクロールして常駐表示を確認</h2><p>大きなオーブが画面外になると、右下に同じ入出力の状態が残ります。右下の丸を押すと会話画面を開きます。</p></section>
   </main>
 }
 createRoot(document.getElementById('root')!).render(<Preview />)

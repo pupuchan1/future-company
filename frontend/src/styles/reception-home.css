@@ -123,9 +123,13 @@
   padding: 24px 0;
 }
 
-.haas-homepage .reception-start {
+.haas-homepage .reception-start,
+.haas-homepage .reception-start:disabled {
   margin-top: 15px;
   min-height: 60px;
+  background: var(--blue);
+  color: var(--white);
+  border-color: var(--blue);
 }
 
 .haas-capabilities {
@@ -530,5 +534,56 @@
 
   .haas-in-conversation .reception-hero {
     grid-template-areas: "intro" "voice";
+  }
+}
+
+
+@media (min-width: 1100px) {
+  .haas-homepage .reception-hero {
+    grid-template-areas: "intro intro" "voice voice";
+    align-items: start;
+    padding-bottom: 88px;
+  }
+
+  .haas-homepage .reception-voice {
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    align-items: center;
+    gap: 88px;
+    max-width: none;
+    padding: 0;
+  }
+
+  .haas-homepage .reception-voice > .voice-orb-stage {
+    grid-column: 1;
+    grid-row: 1;
+    padding: 0;
+    color: var(--black);
+  }
+
+  .haas-homepage .reception-voice > .voice-orb-stage .voice-orb-art {
+    width: 460px;
+    max-width: 100%;
+  }
+
+  .haas-homepage .reception-controls {
+    grid-column: 2;
+    grid-row: 1;
+    width: 100%;
+    max-width: none;
+    justify-self: center;
+  }
+
+  .haas-homepage .reception-start,
+  .haas-homepage .reception-start:disabled {
+    min-height: 96px;
+    padding: 24px 28px;
+    font-size: 22px;
+    font-weight: 600;
+  }
+
+  .haas-homepage .reception-start svg {
+    width: 28px;
+    height: 28px;
   }
 }
