@@ -61,7 +61,7 @@ SSEはHTTPで再購読した結果であり、ブラウザEventSourceの自動�
 期待値を実際の契約へ合わせて新規caseで再試験し、上記の結果を得た。
 最初の試行はvoice接続、機器接続や回答保存の成功に数えない。
 
-## 続けて確認する項目
+## 最初の実Live開始失敗
 
 16:41:15 JSTの実Live開始はcase`case-a5e9fe39bdada6aaa4ae048d7e4e0f2c0edafa00e9c2eb09cfae18310e9bd827`で403だった。
 bridge-tokenとvoice/status、SSEまでは200。Nodeのerrors.jsonlは`A valid case-scoped bridgeToken is required.`を記録した。
@@ -70,16 +70,10 @@ bridge-tokenとvoice/status、SSEまでは200。Nodeのerrors.jsonlは`A valid c
 独立に新規caseを作り、Worker発行証明を同じSTAFF_API_TOKENで検証した。
 HMACとcaseは一致し、ローカル自己発行の証明は検証成功したが、Worker発行証明は残存期限902,173msだった。
 共有verifyBridgeProofの上限900,000msを超え、発行元Workerと検証元Nodeの時計差で拒否されることを確認した。
-時計差を許容する修正と回帰試験を別PRで進める。
+時計差を許容する修正と回帰試験は[PR #113](https://github.com/pupuchan1/future-company/pull/113)にした。
 この開始失敗を自動声交代の成功には数えない。
 
-- 最新固定配備での自動声交代と、交代中に返る回答の1回の音声返却。
-- HaaSから採用への交代、候補接続失敗時の旧会話と終了操作の維持。
-- Live切断と再接続、ブラウザのSSE再購読、回答再送と遅着時の重複発話。
-- 実機接続後、新規依頼で実ベル、受諾、実人間回答の保存と音声返却。
-
-本記録作成時、本番Nodeの実機接続は未確認。
-試験専用機器は切断して終了した。
+その後の成功と未確認範囲は後節に記載する。
 
 ## 時計差修正後の本番試験
 
@@ -135,4 +129,73 @@ handoff/activate200、Worker回答保存、元Agentの再開までは通った�
 
 同じ成功caseでHaaSから採用への発話と候補接続故障の試験を開始したが、専用Chromeタブ122898402が操作セッションから消え、再取得でもnot foundとなった。
 Nodeログでは採用Agentの作成とLiveの終了を確認した。
-候補故障後のUIと採用への有効化を最終確認できなかったため、別の専用タブで新規試験する。
+候補故障後のUIと採用への有効化を最終確認できなかった。
+
+## 315720aでのHaaSから採用への接続試験
+
+別の専用タブと新規caseを使用した。
+Node sourceは`315720a5f96be310cf968ea346f8dee9175ca104`、Workerは`2e7acce6-dbfb-4789-8baf-667042896251`、relayは`queries-shopzilla-consequently-configure.trycloudflare.com`。
+最終照合時、runtimeのcheckout、sourceCommitとCloudflare配信一覧がこの組合せだった。
+
+開発用の計測からcaseのvoice/session、handoff、activate APIと実RTCPeerConnectionを操作した。
+Reactの自動交代コーディネータを通した試験ではない。
+
+| 項目 | 実測 |
+| --- | --- |
+| case | `case-010d15f4e10f9ad52e44b3ede1cc4ea27caacd3c548d6ef4b174b21f1aceefdf` |
+| 初期HaaS | marin、`live_u7_EaG52p3oMjnTUJr00HOqsiiYupeot8m3` |
+| 故障候補 | `live_u7_EaG5Jp3oNRPKYKncmZJKTwosmsJ3qbTA`、handoff200 |
+| 故障注入 | 不正なanswer SDPを設定し、ブラウザがOperationErrorを返した |
+| 候補の後始末 | DELETE200、closed=true、live_finalized=true、cleanup_pending=[] |
+| 故障後の旧接続 | connected。画面の会話終了ボタンも有効 |
+| 再試行候補 | `live_u7_EaG5Pp3oMxB9dFtBkT7Ft9JMfHxob2oo` |
+| 採用への有効化 | handoff200、activate200、active=true、recruiting/harema、peer connected |
+| caseと元Live | 同じcase、oldSessionが初期HaaSと一致 |
+| 引継ぎ後の字幕 | 採用チームが文脈を引き継いだ案内と、開発経験・担当・改善点についての最初の質問 |
+| 受信 | RTP3,416 packets、サンプル時間12.68秒、energy=0 |
+| 最終終了 | DELETE200、closed=true、live_finalized=true、cleanup_pending=[] |
+| 計測エラー | errors=[]、upstreamErrors=[] |
+
+字幕とAPI・接続を確認したが、energy=0であり、音声の聴取成功には数えない。
+手動候補をReactのLiveClientへ結び直していないため、元画面には会話終了・終了未確認の表示があった。
+この手動試験の画面表示から、製品の自動交代後のUI成否は判断しない。
+故障試験も候補を明示的に削除した結果であり、画面が候補失敗を自動処理する経路の成功とは扱わない。
+
+## 530の再現とログ
+
+case`case-434e2239213048dae63f614fc7be3438c77c96efffbe77735ca2bfeb532286a3`の試験中に530が再発した。
+この試験は93bc6b5/oilsで開始し、途中で別の配備処理が315720a/queriesへ切り替えた。
+自身の試験ではNode、Worker、トンネルを再起動・配備していない。
+
+| UTC時刻 | path | 結果 | CF-Ray |
+| --- | --- | --- | --- |
+| 07:56:32.167 | voice/session/live_u7_EaG1Ap3oMxB93bJKIZOeiHmrm4B7Ibhy DELETE | 530、text/plain、`error code: 1033` | `a4c5fcba9915d75a-NRT` |
+| 07:56:35.931 | voice/status | 同上 | `a4c5fcd21d83d75a-NRT` |
+| 07:56:45.654 | voice/status | 同上 | `a4c5fd0eebc3d75a-NRT` |
+| 07:56:55.674 | voice/status | 同上 | `a4c5fd4d69a0d75a-NRT` |
+
+これより前の07:55:26.771と07:55:55.645にもvoice/status530を計測したが、その2件の本文は取得していない。
+Worker tailの同caseのvoice/eventsには`voice_relay_failure`、name=Error、code=unknownが記録され、exceptionsは空だった。
+Nodeのerrors.jsonlにはこの530に対応する新規エントリはなかった。
+Nodeは07:56:34.923Zに旧Liveの終了を記録したが、ブラウザのDELETEは530だったため、画面からの終了確認は成功していない。
+
+runtimeの切替記録は07:56:47.423Z。
+切替後の07:56:52Zに旧oilsのhealthを直接取得すると530/1033、CF-Ray`a4c5fd283ec1e355-NRT`で、loopback healthは200だった。
+この取得は切替後なので、旧originの終了と更新後の接続先の障害を混同しない。
+配備担当の07:57–07:59の確認記録ではqueriesのhealth200、現originと設定の一致、新規caseのstatus3回200、HA接続1を確認している。
+
+[Cloudflareの説明](https://developers.cloudflare.com/tunnel/troubleshooting/)では1033は正常なcloudflared接続が見つからない状態を示す。
+今回の該当レスポンスがトンネル経由で失敗したことは確認したが、最初の未採取530との同一性、切替前に接続が失われた原因は確定していない。
+生のtailとHTMLはIP等を含むため公開せず、時刻・path・エラー番号・CF-Rayだけを上表へ抽出した。
+
+## 残る受入と後始末
+
+- 自動声交代と交代中回答の通し成功はab9cedb/d22bc34で確認した。315720aではNode/BE/FEにも差分があるため、最新版の全通し受入へ流用しない。
+- HaaS→採用と候補接続失敗は315720aのAPI・WebRTC試験まで。Reactからの自動交代、失敗時の自動復帰、利用者による聴取は未確認。
+- 取消、遅着拒否、再接続、回答再送、case別SSEとHTTP再購読はAPI試験で確認した。ブラウザEventSourceの自動再接続、Live切断後の再接続と再送を伴う重複発話は未確認。
+- 本記録の最終照合で本番Node4350の`/api/status`を開き、`devices=[]`を確認した。実機が未接続のため、新規依頼の実ベル・受諾・実人間回答と音声返却は未実施。過去のoffline依頼は成功に数えない。
+
+専用の模擬機器は切断し、最終試験のLiveは上記DELETE200で終了した。
+試験用peer、音声trackとAudioContextを閉じた。
+前の試行のログにはAgent削除のUnknownErrorとcleanup_pendingもあり、過去の全試行の解放完了までは主張しない。
+この記録だけで#32、#34、#35をcloseしない。
