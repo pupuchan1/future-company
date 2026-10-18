@@ -1,0 +1,494 @@
+.haas-homepage .reception-main {
+  width: min(1200px, calc(100% - 96px));
+  padding-bottom: 36px;
+}
+
+.haas-homepage .site-header {
+  height: 88px;
+  gap: 48px;
+}
+
+.haas-homepage .brand-mark {
+  font-size: 27px;
+  letter-spacing: -0.08em;
+}
+
+.haas-brand-name {
+  display: grid;
+  gap: 5px;
+  font-size: 17px;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+}
+
+.haas-brand-name small {
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  font-weight: 400;
+}
+
+.haas-homepage .reception-hero {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  grid-template-areas: "intro voice";
+  gap: 28px 88px;
+  align-items: center;
+  padding: 58px 0 48px;
+  min-height: 610px;
+}
+
+.haas-intro {
+  grid-area: intro;
+  position: relative;
+  z-index: 1;
+  align-self: start;
+}
+
+.haas-homepage:not(.haas-in-conversation) .haas-intro::before,
+.haas-homepage:not(.haas-in-conversation) .reception-voice::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -24px;
+  background: rgb(255 255 255 / 86%);
+  pointer-events: none;
+}
+
+.haas-homepage .haas-intro .eyebrow {
+  margin-bottom: 22px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+
+.haas-homepage .haas-intro h1 {
+  font-size: clamp(34px, 3.2vw, 44px);
+  line-height: 1.45;
+  letter-spacing: -0.035em;
+  font-weight: 600;
+}
+
+.haas-homepage .haas-intro .hero-description {
+  font-size: 14px;
+  line-height: 1.9;
+  margin: 22px 0 0;
+  max-width: 38em;
+}
+
+.haas-homepage .reception-voice {
+  position: relative;
+  z-index: 1;
+  grid-area: voice;
+  justify-self: center;
+  width: 100%;
+  max-width: 390px;
+  padding: 24px 0;
+}
+
+.haas-homepage .reception-start {
+  margin-top: 15px;
+  min-height: 60px;
+}
+
+.haas-capabilities {
+  border-top: 1px solid #111;
+  padding-top: 34px;
+}
+
+.haas-section-intro {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 24px 40px;
+}
+
+.haas-section-intro .eyebrow {
+  margin-bottom: 12px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
+.haas-section-intro h2 {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.haas-section-intro > p {
+  font-size: 12px;
+  line-height: 1.9;
+}
+
+.haas-services {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  list-style: none;
+  padding: 0;
+  margin: 30px 0 36px;
+}
+
+.haas-services li {
+  display: flex;
+  align-items: start;
+  gap: 18px;
+  margin: 0;
+  padding: 12px 24px;
+  border-left: 1px solid #d7d7d7;
+}
+
+.haas-services li:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.haas-service-number {
+  color: var(--blue);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  padding-top: 4px;
+}
+
+.haas-services h3 {
+  font-size: 14px;
+  line-height: 1.8;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.haas-services p {
+  font-size: 12px;
+  line-height: 1.9;
+  margin-top: 9px;
+  color: #444;
+}
+
+.haas-services-future {
+  margin: -12px 0 28px;
+  font-size: 12px;
+  line-height: 1.9;
+  color: #555;
+}
+
+.haas-story {
+  border-top: 1px solid #d7d7d7;
+}
+
+.haas-story > summary {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 24px 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.8;
+}
+
+.haas-story > summary::after {
+  float: none;
+  margin-left: 0;
+  color: var(--blue);
+}
+
+.haas-story-link {
+  margin-left: auto;
+  color: #555;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.haas-story-content {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 32px 60px;
+  padding: 8px 0 36px;
+}
+
+.haas-story-content h3 {
+  font-size: 15px;
+  line-height: 1.8;
+  margin-bottom: 14px;
+}
+
+.haas-story-content p,
+.haas-story-content dl {
+  font-size: 13px;
+  line-height: 2;
+}
+
+.haas-story-content p + p {
+  margin-top: 16px;
+}
+
+.haas-story-content dl {
+  margin: 0 0 16px;
+}
+
+.haas-story-content dl > div {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 12px;
+}
+
+.haas-story-content dd {
+  margin: 0;
+}
+
+.haas-values {
+  align-self: center;
+  color: #555;
+}
+
+.haas-homepage .reception-bottom {
+  padding-top: 8px;
+}
+
+.haas-homepage .site-footer {
+  font-size: 10px;
+  letter-spacing: 0.035em;
+}
+
+.haas-in-conversation .reception-hero {
+  grid-template-areas: "intro voice";
+  min-height: 0;
+}
+
+.haas-hero-backdrop {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 0;
+  left: calc((100% - 100vw) / 2);
+  width: 100vw;
+  overflow: hidden;
+  touch-action: pan-y;
+  background: #f5f5f5;
+}
+
+.haas-carousel-track {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+}
+
+.haas-carousel-track img {
+  flex: 0 0 100%;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 48%;
+  user-select: none;
+  pointer-events: none;
+}
+
+.haas-carousel-controls {
+  position: absolute;
+  left: max(24px, calc((100vw - 1200px) / 2));
+  right: max(24px, calc((100vw - 1200px) / 2));
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: fit-content;
+  max-width: calc(100% - 48px);
+  padding: 4px 12px;
+  background: rgb(255 255 255 / 94%);
+  color: #111;
+  font-size: 10px;
+}
+
+.haas-carousel-count {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  white-space: nowrap;
+}
+
+.haas-carousel-dots {
+  display: flex;
+  gap: 2px;
+}
+
+.haas-carousel-dots button,
+.haas-carousel-pause {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.haas-carousel-dots button span {
+  width: 18px;
+  height: 2px;
+  background: #777;
+}
+
+.haas-carousel-dots button[aria-pressed="true"] span {
+  background: var(--blue);
+  height: 3px;
+}
+
+.haas-carousel-pause {
+  color: var(--blue);
+  font-size: 12px;
+}
+
+.haas-carousel-credit {
+  padding-left: 4px;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+@media (max-width: 1000px) {
+  .haas-homepage .reception-main {
+    width: calc(100% - 48px);
+  }
+
+  .haas-homepage .reception-hero {
+    gap: 26px 40px;
+    padding-top: 46px;
+  }
+
+  .haas-services li {
+    padding-inline: 18px;
+    gap: 12px;
+  }
+
+  .haas-section-intro {
+    align-items: start;
+  }
+}
+
+@media (max-width: 720px) {
+  .haas-homepage .site-header {
+    height: 80px;
+    padding-inline: 20px;
+    gap: 16px;
+  }
+
+  .haas-brand-name {
+    font-size: 15px;
+    gap: 4px;
+  }
+
+  .haas-brand-name small {
+    font-size: 9px;
+  }
+
+  .haas-homepage .reception-header-label {
+    display: none;
+  }
+
+  .haas-homepage .language-switch {
+    gap: 7px;
+    font-size: 11px;
+  }
+
+  .haas-homepage .reception-main {
+    width: calc(100% - 40px);
+  }
+
+  .haas-homepage .reception-hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "intro" "voice";
+    gap: 30px;
+    padding: 38px 0 76px;
+    align-items: start;
+    min-height: 0;
+  }
+
+  .haas-homepage .haas-intro h1 {
+    font-size: 34px;
+    line-height: 1.45;
+  }
+
+  .haas-homepage .haas-intro .eyebrow {
+    font-size: 10px;
+    margin-bottom: 18px;
+  }
+
+  .haas-homepage .haas-intro .hero-description {
+    font-size: 13px;
+    margin-top: 18px;
+  }
+
+  .haas-homepage .reception-voice {
+    padding: 0 8px;
+    max-width: 400px;
+  }
+
+  .haas-homepage:not(.haas-in-conversation) .haas-intro::before,
+  .haas-homepage:not(.haas-in-conversation) .reception-voice::before { inset: -16px; }
+
+  .haas-carousel-controls { left: 20px; right: 20px; gap: 7px; padding-inline: 9px; max-width: calc(100% - 40px); }
+
+  .haas-carousel-credit { font-size: 8px; }
+
+  .haas-carousel-dots button { width: 23px; }
+
+  .haas-capabilities {
+    padding-top: 28px;
+  }
+
+  .haas-section-intro {
+    display: block;
+  }
+
+  .haas-section-intro h2 {
+    font-size: 20px;
+    line-height: 1.7;
+  }
+
+  .haas-section-intro > p {
+    margin-top: 14px;
+  }
+
+  .haas-services {
+    display: block;
+    margin: 24px 0 28px;
+  }
+
+  .haas-services li,
+  .haas-services li:first-child {
+    border-left: 0;
+    border-top: 1px solid #e0e0e0;
+    padding: 22px 0;
+    gap: 20px;
+  }
+
+  .haas-services h3 {
+    font-size: 14px;
+  }
+
+  .haas-services p {
+    margin-top: 7px;
+  }
+
+  .haas-story > summary {
+    gap: 12px;
+    font-size: 13px;
+    padding-block: 22px;
+  }
+
+  .haas-story-link {
+    display: none;
+  }
+
+  .haas-story > summary::after {
+    margin-left: auto;
+  }
+
+  .haas-story-content {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 28px;
+    padding-bottom: 24px;
+  }
+
+  .haas-in-conversation .reception-hero {
+    grid-template-areas: "intro" "voice";
+  }
+}

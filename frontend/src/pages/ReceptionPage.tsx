@@ -6,6 +6,7 @@ import { useDisplayLanguage } from "@/lib/useDisplayLanguage";
 import { LanguageSelector } from "@/components/LanguageSelector";
 import { systemMessage } from "@/lib/system-message";
 import { LANGUAGE_CHANGE_ERROR } from "@/features/live/types";
+import { ReceptionIntro, ReceptionOffice, ReceptionCapabilities } from "@/components/ReceptionHome";
 
 const phrase = (language: LiveLanguage, ja: string, en: string) =>
   language === "ja" ? ja : en;
@@ -64,19 +65,18 @@ export function ReceptionPage() {
     else await live.start();
   }
   return (
-    <div className="app-shell reception-shell">
+    <div className={`app-shell reception-shell haas-homepage${hasConversation ? " haas-in-conversation" : ""}`}>
       <a className="skip-link" href="#main">
         {text("本文へ移動", "Skip to content")}
       </a>
       <header className="site-header">
         <a className="brand" href="/">
           <span className="brand-mark" aria-hidden="true">
-            F<span>↗</span>
+            H<span>↗</span>
           </span>
-          <span>
-            FUTURE
-            <br />
-            COMPANY
+          <span className="haas-brand-name">
+            {text("株式会社HaaS", "HaaS, Inc.")}
+            <small lang="en">Human as a Service.</small>
           </span>
         </a>
         <span className="reception-header-label">
@@ -86,21 +86,8 @@ export function ReceptionPage() {
       </header>
       <main id="main" className="page-width reception-main">
         <section className="reception-hero">
-          <div className="reception-intro">
-            <p className="eyebrow">{text("ひとつの会話から、必要なサポートへ。", "ONE CONVERSATION. THE RIGHT HELP.")}</p>
-            <h1>
-              {text("まずは、", "Start with")}
-              <br />
-              <span>{text("話してください。", "a conversation.")}</span>
-            </h1>
-            <p className="hero-description">
-              {text(
-                "仕事の相談も、人への確認も。\n話した内容に合わせて、AIが必要な担当につなぎます。",
-                "A question about work. A request for a person.\nTell the AI what you need, and it will find the right help.",
-              )}
-            </p>
-
-          </div>
+          <ReceptionIntro language={language} />
+          {!hasConversation && <ReceptionOffice language={language} />}
           <section
             className="reception-voice"
             aria-label={text("共通音声受付", "Shared voice reception")}
@@ -191,6 +178,7 @@ export function ReceptionPage() {
             )}
           </section>
         </section>
+        {!hasConversation && <ReceptionCapabilities language={language} />}
         {hasConversation && <section
           className="reception-progress"
           aria-label={text("仕事の進行", "Work progress")}
@@ -425,14 +413,14 @@ export function ReceptionPage() {
         )}
       </main>
       <footer className="site-footer">
-        <span>FUTURE COMPANY</span>
+        <span>{text("株式会社HaaS", "HaaS, Inc.")}</span>
         <span>
           {text(
-            "ひとつの会話から、仕事を前へ。",
-            "One conversation. Moving work forward.",
+            "Human as a Service.",
+            "Human as a Service.",
           )}
         </span>
-        <span>DEVDAY 2026</span>
+        <span>{text("DEVDAY 2026 · プロジェクトデモ", "DEVDAY 2026 · PROJECT DEMO")}</span>
       </footer>
     </div>
   );
