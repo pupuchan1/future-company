@@ -14,6 +14,10 @@ test('a bare pasted key is server-only fallback; existing credentials are preser
     const env = {};
     loadServerEnvironment(root, env, () => assert.fail('A bare key is not a dotenv document.'));
     assert.equal(env.OPENAI_API_KEY, 'sk-fixture-not-a-real-key');
+    writeFileSync(join(dir, '.env'), '"sk-fixture-not-a-real-key"\n');
+    const quoted = {};
+    loadServerEnvironment(root, quoted, () => assert.fail('A quoted pasted key is still one server credential.'));
+    assert.equal(quoted.OPENAI_API_KEY, 'sk-fixture-not-a-real-key');
     loadServerEnvironment(root, env, () => {});
     assert.equal(env.OPENAI_API_KEY, 'sk-fixture-not-a-real-key');
     writeFileSync(join(dir, '.env.local'), 'OPENAI_API_KEY=local-fixture\n');
