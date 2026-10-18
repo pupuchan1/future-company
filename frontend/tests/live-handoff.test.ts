@@ -658,3 +658,90 @@ test('the latest manual language survives a delayed old-session reply across han
     assert.deepEqual(languageCalls.at(-1), { path: '/api/live/session/new/language', language: 'ja' })
   } finally { await f.client.stop(); f.client.dispose() }
 })
+
+test('saying only 採用担当 switches to harema without a routing or backend event', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const f = fixture(); await f.start()
+  try {
+    const input = { type: 'session.input_transcript.delta', event_id: 'spoken-recruiter', delta: '採用担当' }
+    f.peers[0].channel.onmessage!({ data: JSON.stringify(input) })
+    serverEvent(f, input)
+    t.mock.timers.tick(699); await tick()
+    assert.equal(f.peers.length, 1)
+    t.mock.timers.tick(1); await tick()
+    assert.equal(f.peers.length, 2)
+    assert.equal(f.calls.find(call => call.path.endsWith('/handoff'))!.body.route, 'recruiting')
+    assert.equal(f.calls.find(call => call.path.endsWith('/handoff'))!.body.automatic, undefined)
+    await f.readyCandidate(); await tick()
+    assert.equal(f.client.getSnapshot().voice, 'harema')
+    assert.equal(f.peers[0].closed, true)
+    assert.equal(f.audios[1].plays, 1)
+    t.mock.timers.tick(3000); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 1)
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+test('assistant speech and old transport input cannot select a department', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const f = fixture(); await f.start()
+  try {
+    serverEvent(f, { type: 'session.input_transcript.delta', session_id: 'another-session', event_id: 'old-input', delta: '採用担当' })
+    f.peers[0].channel.onmessage!({ data: JSON.stringify({ type: 'session.output_transcript.delta', event_id: 'assistant-mentions', delta: '採用担当' }) })
+    t.mock.timers.tick(1000); await tick()
+    assert.equal(f.peers.length, 1)
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+test('new caller fragments can cancel a short department selection before switching', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const f = fixture(); await f.start()
+  try {
+    const input = (id: string, delta: string) => f.peers[0].channel.onmessage!({ data: JSON.stringify({ type: 'session.input_transcript.delta', event_id: id, delta }) })
+    input('part-1', '採用担当'); t.mock.timers.tick(400)
+    input('part-2', 'にはつながないでください')
+    t.mock.timers.tick(1000); await tick()
+    assert.equal(f.peers.length, 1)
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+test('stopping clears a pending spoken department selection', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const f = fixture(); await f.start()
+  f.peers[0].channel.onmessage!({ data: JSON.stringify({ type: 'session.input_transcript.delta', event_id: 'before-stop', delta: '採用担当' }) })
+  await f.client.stop(); t.mock.timers.tick(1000); await tick()
+  assert.equal(f.peers.length, 1)
+  assert.equal(f.client.getSnapshot().phase, 'ended')
+  f.client.dispose()
+})
+
+test('a native recruiting turn owns the handoff while a spoken selection waits', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const f = fixture(); await f.start()
+  try {
+    f.peers[0].channel.onmessage!({ data: JSON.stringify({ type: 'session.input_transcript.delta', event_id: 'native-request', delta: '採用担当' }) })
+    serverEvent(f, { type: 'backend.started' })
+    t.mock.timers.tick(700); await tick()
+    assert.equal(f.peers.length, 1)
+    serverEvent(f, { ...routedToHaas, route: 'recruiting' })
+    serverEvent(f, { type: 'backend.result', content: 'Your first interview question.' })
+    t.mock.timers.tick(700); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 0)
+    f.meters[0].levels(0, .2); f.meters[0].levels(0, 0)
+    t.mock.timers.tick(1500); await tick()
+    await f.readyCandidate(); await tick()
+    assert.equal(f.client.getSnapshot().voice, 'harema')
+    assert.equal(f.calls.find(call => call.path.endsWith('/handoff'))!.body.automatic, true)
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+
+test('old transport fragments are excluded from a current spoken department request', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const f = fixture(); await f.start()
+  try {
+    serverEvent(f, { type: 'session.input_transcript.delta', session_id: 'old-session', event_id: 'old-fragment', delta: '採用担当' })
+    f.peers[0].channel.onmessage!({ data: JSON.stringify({ type: 'session.input_transcript.delta', event_id: 'current-fragment', delta: 'お願いします' }) })
+    t.mock.timers.tick(1000); await tick()
+    assert.equal(f.peers.length, 1)
+  } finally { await f.client.stop(); f.client.dispose() }
+})

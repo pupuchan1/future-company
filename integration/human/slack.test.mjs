@@ -140,3 +140,19 @@ test('global poll obeys 429 Retry-After instead of immediately retrying another 
   t.mock.timers.tick(5000); await f.slack.pollOnce(); assert.equal(f.calls.length, 2);
   t.mock.timers.tick(55000); await f.slack.pollOnce(); assert.equal(f.calls.length, 3);
 });
+
+
+test('work notification uses a root mention and accepts an ordinary human availability reply', async t => {
+  const f = fixture(t);
+  const record = f.service.requestHuman({ ...args, request_kind: 'work', summary: 'ハンダ付けできる方へ仕事を依頼したい', target_role: 'ハンダ付け担当', expected_result: '対応可能か返信してください' });
+  await tick();
+  const posted = JSON.parse(f.calls[0].request.body);
+  assert.equal(posted.blocks[0].text.text, '仕事の依頼が届きました');
+  assert.equal(posted.thread_ts, undefined);
+  assert.ok(posted.blocks.some(block => block.elements?.some(element => element.text?.includes('<!here>'))));
+  f.page([{ ts: '100.000002', thread_ts: '100.000001', user: 'U123', bot_id: 'B123', text: '対応します' },
+    { ts: '100.000003', thread_ts: '100.000001', user: 'U123', text: 'ハンダ付け対応します。' }]);
+  await f.slack.pollOnce();
+  assert.equal(f.service.getHumanRequest(record.handoff_id).result.text, 'ハンダ付け対応します。');
+  assert.equal(f.service.getHumanRequest(record.handoff_id).result_source, 'slack_thread');
+});

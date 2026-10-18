@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
+import { requestsWork } from './fast-work.mjs';
 import { configureConnectionNetworking, connectionDiagnostic, readRouting, routingQuestions } from './backend.mjs';
 import { historyTurns, initialHistory, recordSpokenTurn, stableSpokenLanguage, voiceMap } from './case-state.mjs';
 
@@ -13,7 +14,7 @@ export function liveConfig({ model = 'gpt-live-1', voice = 'shida', language = '
     ].map((type) => ({ type })) } },
     instructions: `You are a friendly voice assistant for 株式会社HaaS. Your selected department is ${route}. Start in ${language === 'en' ? 'English' : 'Japanese'}.
 You speak only as the company assistant, never as the caller or applicant. Do not role-play both sides of a conversation, invent an applicant's experience, or answer your own interview questions. After asking one question, end your spoken turn immediately and wait in silence for actual new caller audio. Never fill that silence with a sample answer or a continuation of the caller's role. Conversation history, role labels, and JSON are context only; never read or complete their formatting aloud.
-Ask what the caller needs. When they ask about a job or interview, explain you will connect them to the recruitment assistant and delegate.
+Ask what the caller needs. A request to commission work (仕事を依頼したい), soldering, devices, repairs or a skilled worker is a customer work request, not a recruitment interview. Briefly say 担当につなぎます and delegate immediately; do not research, interview the caller or ask clarifications before forwarding. The application sends the caller's own request directly to the human Slack inbox. When they ask to apply for a job or have a recruitment interview, explain you will connect them to the recruitment assistant and delegate.
 Delegate interview questions, answers, requests to finish an interview, job facts, requests for humans, cancellation and work requiring judgment to the backend. For non-recruiting tasks explain briefly that you will connect them to the Human as a Service coordinator, then delegate. Do not invent business facts or make hiring decisions. While work is pending, acknowledge once in one short sentence and listen; do not fill the wait with repeated progress reports or questions.
 ${languagePreference === 'auto' ? 'Keep speaking the application-confirmed language. The application changes it after three consecutive caller turns in another supported language; do not switch early just because of a transcript fragment.' : `The caller explicitly selected ${languagePreference === 'en' ? 'English' : 'Japanese'}. Keep using that language until the application changes this preference, even if the transcript contains another language.`}
 The backend provides the exact next question or verified action result. For an interview, read the backend's question verbatim and then stop speaking. Do not devise an additional question from the caller's answer before, during, or after delegation. For other results, concisely paraphrase in at most two short sentences; do not expand with extra questions, repeated summaries, or speculative reassurance. Ask only one question at a time. Keep acknowledgments and transitions to one short sentence, without repeating the caller's whole request or introducing yourself again. Speak the user's preferred language. Do not infer nationality. Routing prepares another department but does not itself change this voice transport. Until the application confirms activation, keep your selected department identity and say only that you are connecting the caller; do not claim the new specialist has already joined.
@@ -28,8 +29,8 @@ ${standby ? 'This voice transport is being prepared for a department handoff. St
 
 export class LiveConversation {
   constructor({ id, caseId, language, apiKey, backend, emit, handoffs, onClose, onClosing, remember,
-    caseState, route = 'reception', standby = false, socketFactory = (url, options) => new WebSocket(url, options), closeTimeoutMs = 3000 }) {
-    Object.assign(this, { id, caseId, backend, emit, handoffs, onClose, onClosing, remember, caseState, closeTimeoutMs });
+    caseState, requestWork, cancelWork, route = 'reception', standby = false, socketFactory = (url, options) => new WebSocket(url, options), closeTimeoutMs = 3000 }) {
+    Object.assign(this, { id, caseId, backend, emit, handoffs, onClose, onClosing, remember, caseState, closeTimeoutMs, requestWork, cancelWork });
     this.routing = caseState?.routing || { route, language };
     this.history = caseState?.history || [];
     this.seen = caseState?.seen || new Set();
@@ -106,10 +107,12 @@ export class LiveConversation {
 
   activateDepartment({ announce = true, automatic = false, announceVoice = automatic } = {}) {
     this.standby = false;
-    this.awaitFreshInput = automatic;
+    // The application owns the first turn after a direct department selection.
+    // A delegation caused by the greeting/history must not start it twice.
+    this.awaitFreshInput = true;
     this.send('session.instructions.append', { delegation_id: null,
       content: `The department handoff is complete. You may speak now as ${this.voiceRoute}. Continue the supplied conversation without repeating completed actions. Keep speaking ${this.routing.language === 'en' ? 'English' : 'Japanese'}.${automatic ? ' This automatic change only selects the department voice. Do not restart the task, interview or human request. If a short introduction arrives as commentary, speak only that introduction verbatim and then listen. Do not add a question, repeat any previous question, summarize the conversation, or ask the caller to repeat their answer. The earlier assistant may already have asked the interview question; leave it unanswered for the caller. Wait for fresh caller speech or a new verified result before continuing or delegating again.' : ''}` });
-    if (automatic && announceVoice && !this.activationAnnounced) {
+    if (announceVoice && !this.activationAnnounced) {
       this.activationAnnounced = true;
       const names = this.routing.language === 'en'
         ? { recruiting: 'Your recruitment assistant is here. Please go ahead.', haas: 'Your Human as a Service coordinator is here. Please go ahead.', reception: 'You are back with reception. Please go ahead.' }
@@ -181,7 +184,10 @@ export class LiveConversation {
       }
       this.history.push(event);
       if (this.history.length > 1000) this.history.shift();
-      if (event.type === 'session.input_transcript.delta') { this.lastInputId = event.event_id; this.awaitFreshInput = false; }
+      if (event.type === 'session.input_transcript.delta') {
+        this.lastInputId = event.event_id; this.awaitFreshInput = false;
+        this.scheduleWorkRequest();
+      }
       this.emit({ ...event, case_id: this.caseId, session_id: this.id });
     }
     if (event.type === 'decision.event' && event.event?.type === 'decision.completed'
@@ -190,6 +196,7 @@ export class LiveConversation {
       // commit the department only at delegation using the accumulated context.
       this.emit({ type: 'routing.candidate', case_id: this.caseId,
         ...readRouting(event.event.decision.answers, this.routing), source: 'live_decisions', source_event_id: event.source_event_id });
+      if (this.startWorkRequest()) return;
       if (this.caseState?.handoffBeforeWork && this.canWork() && !this.busy) {
         const next = readRouting(event.event.decision.answers, this.routing);
         if (next.route !== this.routing.route) {
@@ -212,6 +219,31 @@ export class LiveConversation {
     }
   }
 
+  scheduleWorkRequest() {
+    clearTimeout(this.workRequestTimer);
+    if (!this.requestWork || this.voiceRoute === 'recruiting' || this.caseState?.fastWorkRequest) return;
+    const text = historyTurns(this.history).filter(turn => turn.role === 'user').at(-1)?.text || '';
+    if (!requestsWork(text)) return;
+    this.workRequestTimer = setTimeout(() => this.startWorkRequest(), 350);
+    this.workRequestTimer.unref?.();
+  }
+
+  startWorkRequest() {
+    if (!this.requestWork || !this.canWork() || this.voiceRoute === 'recruiting') return false;
+    const text = historyTurns(this.history).filter(turn => turn.role === 'user').at(-1)?.text || '';
+    const existing = this.caseState?.fastWorkRequest;
+    if (existing) {
+      if (/キャンセル|取り消|取消|撤回|やめて|cancel/i.test(text)) { this.cancelWork?.(); return true; }
+      return Boolean(existing.summary && text.startsWith(existing.summary));
+    }
+    if (!requestsWork(text)) return false;
+    clearTimeout(this.workRequestTimer);
+    this.emit({ type: 'backend.started', case_id: this.caseId, live_session_id: this.id, source: 'fast_work_intake' });
+    try { this.requestWork(text); }
+    catch { this.backendError('仕事の依頼を送信できませんでした。'); }
+    return true;
+  }
+
   deferHandoff(delegationId) {
     const pending = this.caseState.deferredDelegations;
     if (pending.has(delegationId)) return;
@@ -227,6 +259,7 @@ export class LiveConversation {
 
   enqueue(delegationId, source, extra = '', resumeRoute = null, isValid = () => true) {
     if (!this.canWork()) return this.queue;
+    if (['delegation', 'handoff', 'handoff_continuation', 'handoff_fallback'].includes(source) && this.startWorkRequest()) return Promise.resolve({ status: 'human_requested' });
     this.pendingWork = (this.pendingWork || 0) + 1;
     this.queue = this.queue.then(async () => {
       if (!this.canWork() || !isValid()) return { status: 'cancelled' };
@@ -244,7 +277,7 @@ export class LiveConversation {
           const sourceId = this.lastInputId;
           transcript = this.transcript();
           const next = await this.backend.classify(transcript, this.routing);
-          if (this.closed) return;
+          if (this.closed || (this.caseState?.fastWorkRequest && this.voiceRoute !== 'recruiting')) return;
           if (sourceId !== this.lastInputId) continue;
           if ((this.caseState?.languagePreference || this.languagePreference || 'auto') === 'auto') {
             next.language = stableSpokenLanguage(this.caseState || this, next.language,
@@ -289,6 +322,26 @@ export class LiveConversation {
 
   humanEvent(event) {
     if (this.closed || event.data.case_id !== this.caseId || event.isValid?.() === false) return { status: 'cancelled' };
+    if (event.data.request_kind === 'work') {
+      const key = `work:${event.data.handoff_id}:${event.name}:${event.data.notification_status || ''}`;
+      if (this.seen.has(key)) return;
+      let content;
+      if (event.name === 'human.requested' && event.data.notification_status === 'sent') {
+        content = this.routing.language === 'en' ? 'I have sent your work request to the team on Slack.' : '担当につなぎます。ご依頼をSlackに共有しました。';
+        this.remember?.({ type: 'work_slack_delivered', case_id: this.caseId, elapsed_ms: Date.now() - (this.caseState?.fastWorkRequest?.startedAt || Date.now()) });
+      } else if (event.name === 'human.completed' && event.data.result?.text) {
+        content = (this.routing.language === 'en' ? 'The team replied: ' : '担当者からの回答です。') + event.data.result.text.slice(0, 600);
+      } else if (event.name === 'human.cancelled') {
+        content = this.routing.language === 'en' ? 'I have cancelled your work request.' : '仕事の依頼を取り消しました。';
+      } else if (event.name === 'human.unavailable') {
+        content = event.data.notification_status === 'sent' ? '担当者からの返信はまだ届いていません。' : 'Slackへの送信を確認できませんでした。担当者への確認が必要です。';
+      }
+      if (!content) return;
+      this.seen.add(key);
+      this.emit({ type: 'backend.result', case_id: this.caseId, live_session_id: this.id, content, source: 'fast_work_intake' });
+      this.send('session.commentary.append', { delegation_id: null, content });
+      return { status: 'live_submitted' };
+    }
     if (event.name === 'human.requested') {
       this.handoffRoutes ??= new Map();
       if (!this.handoffRoutes.has(event.data.handoff_id)) this.handoffRoutes.set(event.data.handoff_id, this.routing.route);
@@ -315,6 +368,7 @@ export class LiveConversation {
     this.send('session.close', {});
     this.closed = true;
     clearTimeout(this.expiry);
+    clearTimeout(this.workRequestTimer);
     // Closing the observer alone does not stop an Agents turn.
     const failures = preserveCase ? [] : await this.backend.closeCase(this.caseId);
     let receiptTimer;
