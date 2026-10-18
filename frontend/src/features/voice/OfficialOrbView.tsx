@@ -1,3 +1,4 @@
+import { orbVolumes } from './orb-volumes.ts'
 import { Component, lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AudioSignal } from './activity.ts'
@@ -18,13 +19,8 @@ export function OfficialOrbView({ input, output }: { input: AudioSignal; output:
   const levels = useRef({ input, output })
   const [enabled, setEnabled] = useState(true)
   useEffect(() => { levels.current = { input, output } }, [input, output])
-  const getInputVolume = useCallback(() => levels.current.input.active ? levels.current.input.level : 0, [])
-  // Upstream's Listening demo drives this flow parameter too (targetOut=.45).
-  // Drive it from measured input while listening; AI labels/rings still use real output only.
-  const getSurfaceFlow = useCallback(() => Math.max(
-    levels.current.input.active ? levels.current.input.level : 0,
-    levels.current.output.active ? levels.current.output.level : 0,
-  ), [])
+  const getInputVolume = useCallback(() => orbVolumes(levels.current.input, levels.current.output).deformation, [])
+  const getSurfaceFlow = useCallback(() => orbVolumes(levels.current.input, levels.current.output).flow, [])
   useEffect(() => {
     const preference = window.matchMedia('(prefers-reduced-motion: reduce)')
     let visible = true
