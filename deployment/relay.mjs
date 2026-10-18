@@ -51,7 +51,10 @@ export function filterStatus(value, caseId) {
   }
   return { case_id: caseId, live_configured: value?.live_configured === true,
     mcp_configured: value?.mcp_configured === true, decisions_enabled: value?.decisions_enabled === true,
-    handoff_configured: value?.handoff_configured === true, voice_map: voiceMap, requests, devices };
+    recruiting_human_transport: value?.recruiting_human_transport === 'slack' ? 'slack' : null,
+    slack_configured: value?.slack_configured === true, slack_replies_configured: value?.slack_replies_configured === true,
+    handoff_configured: value?.handoff_configured === true, prewarm_configured: value?.prewarm_configured === true,
+    voice_map: voiceMap, requests, devices };
 }
 
 /** Reject global and conflicting-case events; normalize the top-level case for clients. */
@@ -171,7 +174,12 @@ export function createProductionRelay({ target = 'http://127.0.0.1:4320', secret
           const id = value.session?.id;
           if (value.case_id !== caseId || !sessionPattern.test(id || '') || (sessionCases.has(id) && sessionCases.get(id) !== caseId)) throw new Error('Invalid upstream session binding.');
           if (['activate', 'language'].includes(route.kind) && id !== route.sessionId) throw new Error('Invalid activation response.');
-          sessionCases.set(id, caseId);
+          // Updates must not recreate a binding retired while the reply was in flight.
+          if (route.kind === 'create' || route.kind === 'handoff') sessionCases.set(id, caseId);
+          if (route.kind === 'activate' && value.active === true && value.old_session_id !== id
+            && sessionCases.get(value.old_session_id) === caseId) {
+            sessionCases.delete(value.old_session_id);
+          }
         } else if (route.kind === 'close') sessionCases.delete(route.sessionId);
       }
       json(res, response.status, value);

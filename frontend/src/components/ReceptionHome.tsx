@@ -13,6 +13,8 @@ const copy = {
     servicesLabel: "この受付でできること",
     servicesTitle: "Webから始める、AI総合受付",
     servicesIntro: "採用の相談も、仕事の依頼も。",
+    consultationTitle: "こんなことができます",
+    consultationWelcome: "ご相談をお待ちしています",
     servicesFuture: "用件に合わせて、商談や問い合わせの受付にも拡張していきます。",
     services: [
       { title: "採用・応募の相談", example: "「どんな仕事を募集していますか？」" },
@@ -42,6 +44,8 @@ const copy = {
     servicesLabel: "WHAT YOU CAN DO HERE",
     servicesTitle: "Your AI front desk, on the web",
     servicesIntro: "For job inquiries and work requests.",
+    consultationTitle: "Here’s what you can do",
+    consultationWelcome: "Ready when you are",
     servicesFuture: "We plan to extend the reception to business conversations and other inquiries.",
     services: [
       { title: "Explore roles and applications", example: "“What positions are you hiring for?”" },
@@ -77,6 +81,19 @@ export function ReceptionIntro({ language }: Props) {
 
 export function ReceptionOffice({ language }: Props) {
   return <ReceptionHeroCarousel language={language} />;
+}
+
+export function ReceptionConsultation({ language, showWelcome }: Props & { showWelcome: boolean }) {
+  const c = copy[language];
+  return (
+    <section className="haas-consultation" aria-labelledby="haas-consultation-title">
+      <h2 id="haas-consultation-title">{c.consultationTitle}</h2>
+      <ol className="haas-consultation-topics">
+        {c.services.map((service) => <li key={service.title}>{service.title}</li>)}
+      </ol>
+      {showWelcome && <p className="haas-consultation-welcome">{c.consultationWelcome}</p>}
+    </section>
+  );
 }
 
 export function ReceptionCapabilities({ language }: Props) {

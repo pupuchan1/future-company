@@ -18,6 +18,7 @@ export async function verifyBridgeProof(token: unknown, caseId: string, secret: 
     const claims: unknown = JSON.parse(new TextDecoder().decode(decode(payload)))
     return typeof claims === 'object' && claims !== null && 'caseId' in claims && claims.caseId === caseId
       && 'expiresAt' in claims && typeof claims.expiresAt === 'number' && Number.isSafeInteger(claims.expiresAt)
-      && claims.expiresAt > now && claims.expiresAt <= now + 900000
+      // The Worker issuer and Node verifier can have slightly different clocks.
+      && claims.expiresAt > now && claims.expiresAt <= now + 900000 + 30000
   } catch { return false }
 }

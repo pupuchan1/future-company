@@ -123,6 +123,43 @@
   padding: 24px 0;
 }
 
+.haas-consultation {
+  margin: 0 0 24px;
+}
+
+.reception-voice .haas-consultation h2 {
+  margin: 0 0 16px;
+  text-align: left;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.haas-consultation-topics {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding-left: 1.6em;
+  list-style: decimal;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.8;
+}
+
+.haas-consultation-topics li {
+  margin: 0;
+  padding-left: 0.4em;
+}
+
+.haas-consultation-welcome {
+  margin-top: 20px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.haas-homepage:not(.haas-in-conversation) .voice-orb-stage[data-phase="idle"] .voice-orb-status {
+  visibility: hidden;
+}
+
 .haas-homepage .reception-start,
 .haas-homepage .reception-start:disabled {
   margin-top: 15px;

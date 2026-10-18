@@ -1,6 +1,6 @@
-# 配備候補と受入状況
+# 過去の配備候補と受入状況（16:47 JST）
 
-2026-10-18 16:47 JSTまでのGitHub・配備記録の確認をまとめる。配備前に[PR #39](https://github.com/pupuchan1/future-company/pull/39)のHEADと[全体管理 #94](https://github.com/pupuchan1/future-company/issues/94)を読み直す。
+これは2026-10-18 16:47 JST時点の記録であり、現在の配備版や残件一覧ではない。その後クラウド本番へ移行した。現在の起動・配備・復帰は[本番運用手順](PRODUCTION.md)、配備commitとWorker/image版は[Issue #33](https://github.com/pupuchan1/future-company/issues/33)と[Issue #142](https://github.com/pupuchan1/future-company/issues/142)の最新報告を参照する。以下は当時の観測を履歴として保存する。
 
 ## 実配備版
 

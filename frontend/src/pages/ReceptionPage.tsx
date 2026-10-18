@@ -1,17 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { useReceptionScreen } from "@/lib/useReceptionScreen";
-import type { ReceptionScreen } from "@/lib/reception-navigation";
-import "@/styles/reception-conversation.css";
 import { useReceptionConnection } from "@/features/worker/useReceptionConnection";
-import { VoiceOrb } from "@/features/voice/VoiceOrb";
 import { ConversationRecord } from "@/features/recording/ConversationRecord";
-import { LanguageSelector } from "@/components/LanguageSelector";
-import { systemMessage } from "@/lib/system-message";
-import { ReceptionIntro, ReceptionOffice, ReceptionCapabilities } from "@/components/ReceptionHome";
-import { LANGUAGE_CHANGE_ERROR } from "@/features/live/types";
+import { VoiceOrb } from "@/features/voice/VoiceOrb";
 import type { LiveLanguage, LiveRoute } from "@/features/live/types";
 import { useDisplayLanguage } from "@/lib/useDisplayLanguage";
+import { LanguageSelector } from "@/components/LanguageSelector";
+import { systemMessage } from "@/lib/system-message";
+import { LANGUAGE_CHANGE_ERROR } from "@/features/live/types";
+import { ReceptionIntro, ReceptionOffice, ReceptionConsultation, ReceptionCapabilities } from "@/components/ReceptionHome";
+import "@/styles/reception-conversation.css";
 
 const phrase = (language: LiveLanguage, ja: string, en: string) =>
   language === "ja" ? ja : en;
@@ -51,16 +50,14 @@ export function ReceptionPage() {
 }
 
 type ViewProps = ReturnType<typeof useDisplayLanguage> & { live: ReturnType<typeof useReceptionConnection> };
-
 export function ReceptionPageView({ language, preference, selectLanguage, live }: ViewProps) {
-  const { screen, navigate } = useReceptionScreen();
-  const conversationScreen = screen === "conversation";
-  const startRequested = useRef(false);
-  const previousScreen = useRef(screen);
   const caseId = live.caseId;
   const s = live.snapshot;
   const text = (ja: string, en: string) => phrase(language, ja, en);
   const [showDetails, setShowDetails] = useState(false);
+  const { screen, navigate } = useReceptionScreen();
+  const conversationView = screen === "conversation";
+  const conversationHeading = useRef<HTMLHeadingElement>(null);
   const active = live.preparing || [
     "connecting",
     "connected",
@@ -70,46 +67,30 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
   ].includes(s.phase);
   const available = !caseId || Boolean(s.configured && s.mcpConfigured);
   const isEnglish = language === "en";
-  const hasConversation = Boolean(s.transcripts.length || s.requests.length || s.backendResult || s.phase === "connected");
+  const hasConversation = conversationView || Boolean(s.transcripts.length || s.requests.length || s.backendResult || s.phase === "connected");
   useEffect(() => {
-    if (startRequested.current && s.phase === "connected") {
-      startRequested.current = false;
-      navigate("conversation");
+    if (conversationView) {
+      conversationHeading.current?.focus({ preventScroll: true });
+      window.scrollTo({ top: 0, behavior: "instant" });
     }
-    if (s.phase === "error" || live.worker.error) startRequested.current = false;
-  }, [s.phase, live.worker.error, navigate]);
-  useEffect(() => {
-    if (previousScreen.current === screen) return;
-    previousScreen.current = screen;
-    document.getElementById(conversationScreen ? "conversation-title" : "main")?.focus();
-    window.scrollTo(0, 0);
-  }, [screen, conversationScreen]);
-  function navigateLink(event: MouseEvent<HTMLAnchorElement>, target: ReceptionScreen) {
+  }, [conversationView]);
+  function openConversation() { navigate("conversation"); }
+  function goHome(event: MouseEvent<HTMLAnchorElement>) {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    navigate(target);
+    event.preventDefault(); navigate("home");
   }
+  async function resetConversation() { await live.resetCase(); navigate("home"); }
   async function toggleCall() {
-    if (active) {
-      startRequested.current = false;
-      await live.stop();
-    } else {
-      startRequested.current = true;
-      await live.start();
-    }
-  }
-  async function newConversation() {
-    startRequested.current = false;
-    await live.resetCase();
-    navigate("home");
+    if (active) await live.stop();
+    else { openConversation(); await live.start(); }
   }
   return (
-    <div className={`app-shell reception-shell haas-homepage${conversationScreen ? " haas-in-conversation haas-conversation" : ""}`}>
-      <a className="skip-link" href="#main">
+    <div className={`app-shell reception-shell haas-homepage${hasConversation ? " haas-in-conversation" : ""}${conversationView ? " haas-conversation-view" : ""}`}>
+      <a className="skip-link" href={conversationView ? "#conversation" : "#main"}>
         {text("本文へ移動", "Skip to content")}
       </a>
       <header className="site-header">
-        <a className="brand" href="/" aria-label={text("株式会社HaaS ホーム", "HaaS home")} onClick={(event) => navigateLink(event, "home")}>
+        <a className="brand" href="/" onClick={goHome} aria-label={text("株式会社HaaS ホーム", "HaaS home")}>
           <span className="brand-mark brand-reserved" aria-hidden="true">
             H<span>↗</span>
           </span>
@@ -124,23 +105,23 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
         <span className="reception-header-label">
           {text("ご相談窓口", "LET’S TALK")}
         </span>
-        {(conversationScreen || hasConversation) && <a
-          className="conversation-nav"
-          href={conversationScreen ? "/" : "/conversation"}
-          onClick={(event) => navigateLink(event, conversationScreen ? "home" : "conversation")}
-        >{conversationScreen ? text("ホームへ戻る", "Home") : text("会話に戻る", "Conversation")}</a>}
         <LanguageSelector language={language} preference={preference} onChange={selectLanguage} />
       </header>
-      <main id="main" tabIndex={-1} className="page-width reception-main">
+      <main id="main" className="page-width reception-main">
+        {conversationView && <div className="reception-conversation-heading">
+          <a className="text-button" href="/" onClick={goHome}>← {text("ホームへ戻る", "Back to home")}</a>
+          <h1 id="conversation" ref={conversationHeading} tabIndex={-1}>{text("まずは、気軽に話してみませんか。", "Let’s start with a conversation.")}</h1>
+        </div>}
         <section className="reception-hero">
-          {!conversationScreen && <ReceptionIntro language={language} />}
-          {!conversationScreen && <ReceptionOffice language={language} />}
+          {!conversationView && <ReceptionIntro language={language} />}
+          {!hasConversation && <ReceptionOffice language={language} />}
           <section
             className="reception-voice"
             aria-label={text("共通音声受付", "Shared voice reception")}
           >
-            <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} onOpenConversation={() => navigate("conversation")} />
+            <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} conversation={s.conversation} onOpenConversation={openConversation} />
             <div className="reception-controls">
+            {!hasConversation && <ReceptionConsultation language={language} showWelcome={s.phase === "idle"} />}
             <button
               className="button primary reception-start"
               onClick={() => void toggleCall()}
@@ -173,14 +154,14 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
             )}
             <p className="small reception-consent">
               {text(
-                "開始するとマイクを使用し、音声をAIに送信します。会話はこの端末内にも記録され、終了後にMP3で保存できます。",
-                "Starting uses your microphone and sends audio to the AI. The conversation is also recorded on this device so you can save an MP3 when it ends.",
+                "開始するとマイクを使用し、音声をAIに送信します。",
+                "Starting uses your microphone and sends audio to the AI.",
               )}
             </p>
-            {caseId && !available && !active && (
+            {!available && !active && (
               <div className="reception-unavailable" role="status">
                 <p>
-                  {s.configured === null && !s.error
+                  {s.configured === null
                     ? text(
                         "受付への接続を確認しています。",
                         "Checking the reception connection.",
@@ -219,19 +200,16 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
                 {systemMessage(s.error || s.cleanupWarning || live.worker.error, language)}
               </p>
             )}
-            {s.error === LANGUAGE_CHANGE_ERROR && <button className="text-button" onClick={() => void live.retryLanguage()}>
-              {text("言語変更を再試行", "Retry language change")} ↻
-            </button>}
+            {s.error === LANGUAGE_CHANGE_ERROR && (
+              <button type="button" className="text-button" onClick={() => void live.retryLanguage()}>
+                {text("言語の変更を再試行", "Retry language change")}
+              </button>
+            )}
             </div>
           </section>
-          {conversationScreen && <ConversationRecord key={caseId ?? "new"} language={language} phase={s.phase} entries={s.transcripts} recording={live.recording} />}
         </section>
-        {!conversationScreen && hasConversation && <div className="conversation-return">
-          <span>{active ? text("会話は継続中です。", "Your conversation is still active.") : text("会話履歴を読み返せます。", "Your conversation is available to read.")}</span>
-          <a href="/conversation" onClick={(event) => navigateLink(event, "conversation")}>{text("会話履歴へ", "View conversation")} →</a>
-        </div>}
-        {!conversationScreen && <ReceptionCapabilities language={language} />}
-        {conversationScreen && <section
+        {!hasConversation && <ReceptionCapabilities language={language} />}
+        {hasConversation && <section
           className="reception-progress"
           aria-label={text("仕事の進行", "Work progress")}
         >
@@ -272,7 +250,9 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
             </strong>
           </div>
         </section>}
-        {conversationScreen && <aside className="reception-work">
+        {hasConversation && <div className="reception-content">
+          <ConversationRecord entries={s.transcripts} recording={live.recording} language={language} active={active} />
+          <aside className="reception-work">
             <section className="panel">
               <h2 className="panel-heading">
                 {text("担当への引き継ぎ", "Handoffs & results")}
@@ -305,11 +285,19 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
                             {request.expectedResult}
                           </p>
                         )}
+                        {request.simulated === true && (
+                          <p className="small">
+                            {text(
+                              "模擬デバイスによるデモ",
+                              "Simulated device demo",
+                            )}
+                          </p>
+                        )}
                         {request.status === "accepted" && (
                           <p className="small">
                             {text(
-                              "受話器から応答を受信しました。",
-                              "The handset acknowledged the request.",
+                              "受話器が応答しました。音声通話の接続とは別の状態です。",
+                              "The handset answered. This is separate from a voice connection.",
                             )}
                           </p>
                         )}
@@ -317,8 +305,8 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
                           <div className="answer">
                             <strong>
                               {text(
-                                "確認結果（原文）",
-                                "Response (original)",
+                                "担当者の回答（原文）",
+                                "Team reply (original)",
                               )}
                             </strong>
                             <p>{request.result.text}</p>
@@ -361,12 +349,13 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
                     )}
               </div>
             </section>
-        </aside>}
+          </aside>
+        </div>}
         <div className="reception-bottom">
           {["ended", "error"].includes(s.phase) && (
             <button
               className="text-button"
-              onClick={() => void newConversation()}
+              onClick={() => void resetConversation()}
             >
               {text("新しい会話を用意する", "Prepare a new conversation")} →
             </button>

@@ -1,6 +1,11 @@
 # Worker と Node 音声の配置
 
-配備するcommitと未検証項目は[配備候補と受入状況](./RELEASE-CANDIDATE.md)を確認する。
+既存の本人限定本番の配備版と接続先は[配備記録](../docs/demo-deployment.md)、起動、再起動と復帰は[本番運用手順](PRODUCTION.md)を参照する。
+起動スクリプトの既定値はNode4340/relay4330。本番はNode4350/relay4351を明示して使う。
+
+公開本番の入口は`https://future-company-voice-node.r74.workers.dev`。同じCloudflare Workerがpupuの画面とContainersのNodeへ接続する。起動・配備・復帰は[本番運用手順](PRODUCTION.md)を参照する。
+Codex Sitesは予備入口。pupuのビルド済み画面を `sites/export-site.mjs` で既存Sitesへ反映し、`sites/proxy.mjs`がvisitor APIだけを既存Workerへ中継する。Sites側のAccess secret、既存Worker・Node・Slack認証を保持する。
+16:47 JST時点の旧Mac配備候補と当時の未検証項目は[過去の配備候補記録](./RELEASE-CANDIDATE.md)に保存している。現在の配備先は上記のクラウド運用手順とIssue #33・#142を確認する。
 
 既存の Worker に React・DO・D1 を残し、Node 24 の音声・人間MCPを常駐プロセスで動かす。`server.mjs` の localhost guard はそのまま使う。Worker 側の既存 Access 本人限定設定と社員認証も変更しない。
 
@@ -61,6 +66,29 @@ relayの公開pathは `/relay/voice/*`（HMAC）、`/mcp`（Bearer）、`/bridge
 
 ## Workerの配置
 
+### 音声NodeのCloudflare Containers配置
+
+`deployment/cloud/wrangler.jsonc`は同じR74アカウントの`future-company-voice-node`へNode24を配置する。`production`という固定コンテナへ全案件を送り、既存relayのHMAC署名とMCP/bridgeのBearer認証を維持する。Node内部APIはloopbackのみ、認証付きrelayだけをコンテナの4351番ポートへ公開する。Dockerイメージへ秘密設定をコピーしない。
+
+同じWorkerからビルド済みFEも配信する。ブラウザーのvisitor APIは既存Sitesと同じ`proxyVisitorApi`を通して既存Workerへ転送し、サーバーのAccess認証と案件所有cookieを保持する。`https://future-company-voice-node.r74.workers.dev/`がMacに依存しない公開入口になる。
+
+```sh
+npx wrangler deploy --config deployment/cloud/wrangler.jsonc
+npx wrangler secret bulk /private/path/cloud-node-secrets.json --config deployment/cloud/wrangler.jsonc
+```
+
+secretファイルには既存の`OPENAI_API_KEY`、`STAFF_API_TOKEN`、`NODE_RELAY_SECRET`、`HUMAN_MCP_TOKEN`、`CF_ACCESS_CLIENT_ID`、`CF_ACCESS_CLIENT_SECRET`、`SLACK_BOT_TOKEN`をサーバー専用で渡す。返信取得用の`SLACK_USER_TOKEN`がある場合だけ追加する。ファイルはGit管理外の0700ディレクトリへ0600で置く。
+
+クラウドの`/health`と署名付きstatus、所有者のvoice/statusで`prewarm_configured`・Slack設定を確認した後、既存Workerの`NODE_RELAY_ORIGIN`を`https://future-company-voice-node.r74.workers.dev`へ変更する。Mac版は切替確認後に停止する。既存D1・CaseRoom・Access・サーバーsecretは維持する。
+
+30分の無通信でコンテナは停止し、次の要求で起動する。再起動時は進行中の通話・Slack thread対応・ローカルMCP Eventsの状態を復元しない。案件の正本は既存D1に保存する。稼働中の通話を保ったままコンテナの版を切り替えない。
+
+### 採用のSlack通知・人間回答
+
+r74techがNodeの私有環境に `SLACK_CHANNEL_ID=C0CA6A7F4E5` と `SLACK_BOT_TOKEN` を設定する。内部用Appに `chat:write`・`channels:history` を許可し、#aiに参加させる。取得した値をWorkerの公開変数やブラウザーへ渡さない。[設定と返信形式](../integration/human/SLACK.md)を参照。採用の人間確認はこのSlack経路を使う。
+
+Node・relay・Workerを同じ確定commitにそろえ、通話終了後に既存構成で再起動する。case別 `voice/status` の `recruiting_human_transport=slack`、`slack_configured=true`、`slack_replies_configured=true` は設定項目の存在を示す。実認証の成功は、採用通知とそのthreadへの `回答: …` が元の音声会話へ戻ったことで確認する。
+
 ### 現在の本番へ配置する場合
 
 `deployment/wrangler.production.jsonc` は既存の `future-company-demo.r74.workers.dev`、R74アカウント、D1、CaseRoomを指定している。配置担当はr74tech。既存アカウント・配置権限を使う。今回、新たな招待承諾やログイン、秘密のrotationは必須にしない。担当と本番受入条件は [Issue #94](https://github.com/pupuchan1/future-company/issues/94) を正本とする。
@@ -82,7 +110,7 @@ npx wrangler secret put NODE_RELAY_SECRET --config deployment/wrangler.productio
 npx wrangler secret put STAFF_API_TOKEN --config deployment/wrangler.production.jsonc
 ```
 
-`--keep-vars` は既存変数を保持する。relayのトンネルを変更する場合は、configの `NODE_RELAY_ORIGIN` と実際のWorker変数を一致させる。現在のrelay/MCPは `https://jamie-journey-redhead-smart.trycloudflare.com` / 同originの `/mcp` を使い、Node 4350 / relay 4351へ対応させる。トンネル・stateDir・既存secretは維持する。共有AccessはNodeサーバーの `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` に設定し、`WORKER_API_URL=https://future-company-demo.r74.workers.dev` を明示する。現在の `integration/server.mjs` は `WORKER_API_URL` でWorkerBridgeの起動を判定するため、`WORKER_API_ORIGIN` だけでは起動しない。ブラウザのビルド変数へ秘密値を入れない。
+`--keep-vars` は既存変数を保持する。現在のrelay/MCPはクラウドの `https://future-company-voice-node.r74.workers.dev` / 同originの `/mcp` を使う。configの `NODE_RELAY_ORIGIN` と実際のWorker変数を一致させ、旧Quick Tunnelへ戻さない。stateDir・既存secretは維持する。共有AccessはNodeサーバーの `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` に設定し、`WORKER_API_URL=https://future-company-demo.r74.workers.dev` を明示する。現在の `integration/server.mjs` は `WORKER_API_URL` でWorkerBridgeの起動を判定するため、`WORKER_API_ORIGIN` だけでは起動しない。ブラウザのビルド変数へ秘密値を入れない。
 
 配置後はAccess認証付きの `haas` 案件作成201、同じvisitor cookieによる `bridge-token` 200、case別 `voice/status` 200を順に確認する。`voice_relay_unconfigured` はWorkerのrelay設定不足、status 200は接続口の確認まで。Live開始・保存済み人間回答の返却・音声出力は別に通し確認する。既存Accessポリシーとpreview無効を維持する。
 

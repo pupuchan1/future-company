@@ -1,9 +1,11 @@
+import { ConversationActivity } from '../voice/conversation.ts'
 import { measureSignal, SILENT_SIGNAL, VoiceActivityStore } from '../voice/activity.ts'
 import type { AudioSignal, VoiceActivity } from '../voice/activity.ts'
 import { LiveEventReducer, putRequest, readHumanRequest } from './events.ts'
 import { initialSnapshot, LANGUAGE_CHANGE_ERROR, object } from './types.ts'
 import type { JsonObject, LiveLanguage, LiveLanguagePreference, LiveRoute, LiveSnapshot, LiveSpeaking } from './types.ts'
 import { createEventTransport } from './event-transport.ts'
+import { createRtcMeter } from './rtc-meter.ts'
 import type { LiveEventTransport } from './event-transport.ts'
 import type { LiveMediaObserver } from '../recording/types.ts'
 
@@ -151,15 +153,21 @@ export function caseVoicePrefix(caseId: string): string {
 
 interface Connection {
   stream?: MediaStream
+  /** Disabled clone used only while a replacement transport warms up. */
+  warmStream?: MediaStream
   remoteStream?: MediaStream
   peer?: RTCPeerConnection
   channel?: RTCDataChannel
   sessionId?: string
+  pendingLifecycle?: { event: JsonObject; source: 'server' | 'datachannel' }[]
   started: boolean
   startTimer?: ReturnType<typeof setTimeout>
   disconnectTimer?: ReturnType<typeof setTimeout>
   cancelIce?: () => void
   meter?: LiveAudioMeter | null
+  meterActive?: boolean
+  rtcMeter?: { dispose(): void }
+  rtcActive?: boolean
   outputPlaying?: boolean
   audio?: HTMLAudioElement
   failure?: Error
@@ -177,6 +185,11 @@ interface VoiceSwitch {
   phase: 'preparing' | 'activating' | 'uncertain'
   cancelled: boolean
   previousEnded: boolean
+}
+
+interface PreparedHandoff extends VoiceSwitch {
+  ready: boolean
+  created?: JsonObject
 }
 
 class LiveApiError extends Error {
@@ -207,10 +220,12 @@ export class LiveClient {
   private reducer = new LiveEventReducer()
   private connection: Connection | null = null
   private voiceSwitch: VoiceSwitch | null = null
+  private preparedHandoff: PreparedHandoff | null = null
   private source: LiveEventTransport | null = null
   private poll?: ReturnType<typeof setInterval>
   private reconnectTimer?: ReturnType<typeof setTimeout>
   private statusBusy = false
+  private prewarmConfigured = false
   private statusError = ''
   private observing = false
   private disposed = false
@@ -227,6 +242,7 @@ export class LiveClient {
   private languageUpdate: Promise<void> | null = null
   private languageConnection: Connection | null = null
   private languageGeneration = 0
+  private conversation = new ConversationActivity()
 
   constructor(caseId: string, language: LiveLanguage, runtime = browserRuntime(), options: LiveClientOptions = {}) {
     const prefix = options.apiPrefix
@@ -256,11 +272,61 @@ export class LiveClient {
     clearTimeout(this.automaticTimer)
     this.automaticTimer = undefined
     this.automaticHandoff = null
+    this.discardPreparedHandoff()
+  }
+
+  private discardPreparedHandoff() {
+    const prepared = this.preparedHandoff
+    if (!prepared) return
+    this.preparedHandoff = null
+    prepared.cancelled = true
+    this.failCandidate(prepared.candidate, 'Voice preparation cancelled')
+    this.releaseTransport(prepared.candidate)
+    void this.finalize(prepared.candidate)
+  }
+
+  private async prepareAutomaticHandoff(route: LiveRoute) {
+    const previous = this.connection
+    if (!previous?.stream?.clone || !previous.sessionId || this.preparedHandoff || this.voiceSwitch
+      || this.disposed || this.closing || !this.state.switchConfigured || !this.prewarmConfigured || this.state.phase !== 'connected') return
+    const warmStream = previous.stream.clone()
+    warmStream.getAudioTracks().forEach(track => { track.enabled = false })
+    const candidate: Connection = { started: false, stream: previous.stream, warmStream }
+    const prepared: PreparedHandoff = { previous, candidate, route, muted: this.state.muted,
+      phase: 'preparing', cancelled: false, previousEnded: false, ready: false }
+    this.preparedHandoff = prepared
+    try {
+      const sdp = await this.offer(candidate)
+      if (!sdp || prepared.cancelled) return
+      const created = await this.api(`${this.endpoints.session}/${encodeURIComponent(previous.sessionId)}/handoff`, {
+        method: 'POST', body: JSON.stringify({ sdp, route, automatic: true, prewarm: true }),
+      })
+      const id = object(created.session).id
+      if (typeof id !== 'string' || !id || id === previous.sessionId) throw new Error('Invalid prepared session ID')
+      candidate.sessionId = id
+      if (prepared.cancelled || this.preparedHandoff !== prepared) { await this.finalize(candidate); return }
+      const answer = object(created.transport).sdp
+      if (typeof answer !== 'string' || typeof created.handoff_token !== 'string' || created.case_id !== this.state.caseId
+        || created.old_session_id !== previous.sessionId || created.route !== route) throw new Error('Invalid prepared voice response')
+      prepared.token = created.handoff_token
+      prepared.created = created
+      this.flushLifecycle(candidate)
+      if (candidate.failure) throw candidate.failure
+      await candidate.peer!.setRemoteDescription({ type: 'answer', sdp: answer })
+      await this.waitForCandidate(candidate)
+      if (prepared.cancelled || this.preparedHandoff !== prepared) return
+      prepared.ready = true
+    } catch {
+      // Older servers can reject prewarming while busy. Keep the working call;
+      // the existing just-in-time handoff remains available at the speech boundary.
+      if (this.preparedHandoff === prepared) this.discardPreparedHandoff()
+    } finally { this.scheduleAutomaticHandoff() }
   }
 
   private scheduleAutomaticHandoff() {
     const pending = this.automaticHandoff
     if (!pending || this.disposed || this.closing || this.voiceSwitch || this.automaticTimer) return
+    if (this.preparedHandoff && !this.preparedHandoff.ready) return
     if (pending.route === this.state.voiceRoute) { this.cancelAutomaticHandoff(); return }
     if (pending.awaitingOutput || this.state.backend === 'running' || this.state.phase !== 'connected'
       || !this.state.switchConfigured || !this.state.meteringAvailable || this.state.playbackBlocked || this.state.muted) return
@@ -302,8 +368,9 @@ export class LiveClient {
     const speaking = speakerFor(inputLevel, outputLevel)
     if (inputLevel >= SPEAKING_RMS || outputLevel >= SPEAKING_RMS) this.lastSpeechAt = Date.now()
     if (outputLevel >= SPEAKING_RMS && this.automaticHandoff && this.state.backend === 'result') this.automaticHandoff.awaitingOutput = false
-    if (inputLevel !== this.state.inputLevel || outputLevel !== this.state.outputLevel || speaking !== this.state.speaking) {
-      this.patch({ inputLevel, outputLevel, speaking })
+    const conversation = this.conversation.sample(inputLevel, outputLevel, !!audible && (audio?.volume ?? 1) > 0, this.state.muted)
+    if (inputLevel !== this.state.inputLevel || outputLevel !== this.state.outputLevel || speaking !== this.state.speaking || conversation !== this.state.conversation) {
+      this.patch({ inputLevel, outputLevel, speaking, conversation })
     }
     this.scheduleAutomaticHandoff()
   }
@@ -362,6 +429,7 @@ export class LiveClient {
       const data = await this.api(this.endpoints.status, { signal: AbortSignal.timeout(8000) })
       if (this.disposed) return
       if (typeof data.live_configured !== 'boolean' || typeof data.mcp_configured !== 'boolean') throw new Error('接続先の応答が不正です。 / Invalid server status.')
+      this.prewarmConfigured = data.prewarm_configured === true
       const voiceMap: LiveSnapshot['voiceMap'] = {}
       for (const [route, voice] of Object.entries(object(data.voice_map))) if (isRoute(route) && typeof voice === 'string') voiceMap[route] = voice
       let next: LiveSnapshot = { ...this.state, configured: data.live_configured, mcpConfigured: data.mcp_configured, switchConfigured: data.handoff_configured === true, voiceMap,
@@ -392,20 +460,33 @@ export class LiveClient {
     // Lifecycle events from the shared SSE may belong to another browser/case.
     if (source === 'server' && body.case_id !== this.state.caseId && object(body.request).case_id !== this.state.caseId && object(body.handoff).case_id !== this.state.caseId) return
     if (body.case_id !== undefined && body.case_id !== this.state.caseId) return
-    const sessionId = object(body.session).id ?? body.session_id
+    // backend.result.session_id is the legacy Agent ID, not the voice transport.
+    const sessionId = body.live_session_id ?? object(body.session).id ?? body.session_id
     const closed = type === 'session.closed' || type === 'session.ended' || type === 'live.closed'
     const lifecycle = type === 'session.started' || closed
     let current = connection ?? this.connection
-    if (!connection && sessionId && sessionId === this.voiceSwitch?.candidate.sessionId) current = this.voiceSwitch.candidate
-    if (lifecycle && sessionId && current?.sessionId && sessionId !== current.sessionId) return
-    if (closed && source === 'server' && !sessionId) return
+    if (!connection && sessionId && (this.voiceSwitch || this.preparedHandoff)) {
+      const candidate = (this.voiceSwitch ?? this.preparedHandoff)!.candidate
+      if (sessionId === candidate.sessionId || (lifecycle && !candidate.sessionId && sessionId !== current?.sessionId)) current = candidate
+    }
+    if (lifecycle) {
+      // SSE is shared across this case's transports; its lifecycle needs an ID.
+      if (!current || (source === 'server' && (typeof sessionId !== 'string' || !sessionId))) return
+      if (!current.sessionId) {
+        // HTTP owns the identity. Retain early starts/closes in arrival order,
+        // then discard events for old sessions once creation confirms the ID.
+        current.pendingLifecycle = [...(current.pendingLifecycle ?? []), { event, source }].slice(-64)
+        return
+      }
+      if (sessionId && sessionId !== current.sessionId) return
+    }
     if (type === 'session.started' && current) {
       current.started = true
-      if (this.voiceSwitch?.candidate === current) this.checkCandidateReady(current)
+      if (this.voiceSwitch?.candidate === current || this.preparedHandoff?.candidate === current) this.checkCandidateReady(current)
       else if (!this.voiceSwitch) { clearTimeout(current.startTimer); this.patch({ phase: 'connected' }) }
     }
     // A candidate is silent until activation. Its transcripts are not spoken output.
-    if (this.voiceSwitch?.candidate === current) {
+    if (this.voiceSwitch?.candidate === current || this.preparedHandoff?.candidate === current) {
       if (closed || type === 'error') this.failCandidate(current, '切替先の音声接続が終了しました。 / Candidate voice connection ended.')
       return
     }
@@ -414,8 +495,24 @@ export class LiveClient {
       this.voiceSwitch.previousEnded = true
       return
     }
-    this.publish(this.reducer.apply(this.state, event, source))
-    if (source === 'server' && type === 'routing.updated' && body.source === 'decisions'
+    // A case can outlive several transports. Ignore delayed events from the old
+    // session, including transcripts and backend results, for the orb only.
+    const reduced = this.reducer.apply(this.state, event, source)
+    const eventAccepted = reduced !== this.state
+    const newTranscript = reduced.transcripts !== this.state.transcripts
+    this.publish(reduced)
+    const activeVoice = !this.voiceSwitch && this.connection &&
+      (source === 'datachannel' ? connection === this.connection && (!sessionId || sessionId === this.connection.sessionId) : sessionId === this.connection.sessionId)
+    if (activeVoice && eventAccepted) {
+      const inputText = typeof body.delta === 'string' ? body.delta : object(body.delta).text ?? object(body.delta).transcript
+      if (newTranscript && type === 'session.input_transcript.delta' && typeof inputText === 'string' && inputText.trim()) this.conversation.acceptInput()
+      if (type === 'backend.started' || type === 'backend.result') this.conversation.awaitResponse()
+      if (type === 'backend.error' || type === 'error') this.conversation.fail()
+      const audio = this.connection?.audio
+      const audible = !!this.connection?.outputPlaying && !!audio && !audio.paused && !audio.muted && audio.volume > 0 && !this.state.playbackBlocked
+      this.patch({ conversation: this.conversation.sample(this.state.inputLevel, this.state.outputLevel, audible, this.state.muted) })
+    }
+    if (eventAccepted && source === 'server' && type === 'routing.updated' && body.source === 'decisions'
       && sessionId === this.connection?.sessionId && isRoute(body.route)) {
       const key = `${sessionId}:${body.source_event_id ?? ''}:${body.route}`
       if (key !== this.lastAutomaticRouting) {
@@ -424,29 +521,50 @@ export class LiveClient {
         else if (this.automaticHandoff?.route !== body.route) {
           this.cancelAutomaticHandoff()
           this.automaticHandoff = { route: body.route, attempts: 0, awaitingOutput: true }
+          void this.prepareAutomaticHandoff(body.route)
         }
       }
     }
-    if (this.automaticHandoff && (type === 'backend.started' || type === 'backend.result')) this.automaticHandoff.awaitingOutput = true
-    if (type === 'backend.error') this.cancelAutomaticHandoff()
-    if (type === 'session.input_transcript.delta' || type === 'session.output_transcript.delta') this.lastSpeechAt = Date.now()
+    if (eventAccepted && this.automaticHandoff && (type === 'backend.started' || type === 'backend.result')) this.automaticHandoff.awaitingOutput = true
+    if (eventAccepted && type === 'backend.error') this.cancelAutomaticHandoff()
+    if (eventAccepted && (type === 'session.input_transcript.delta' || type === 'session.output_transcript.delta')) this.lastSpeechAt = Date.now()
     this.scheduleAutomaticHandoff()
     if (closed) void this.stop()
     if (type === 'error' && source === 'datachannel') void this.stop(this.state.error)
   }
 
   private tracked(connection: Connection) {
-    return this.connection === connection || this.voiceSwitch?.candidate === connection
+    return this.connection === connection || this.voiceSwitch?.candidate === connection || this.preparedHandoff?.candidate === connection
+  }
+
+  private flushLifecycle(connection: Connection) {
+    const pending = connection.pendingLifecycle ?? []
+    connection.pendingLifecycle = undefined
+    for (const { event, source } of pending) this.receive(event, source, connection)
   }
 
   private createMeter(connection: Connection) {
-    try { connection.meter = this.runtime.metering?.(levels => this.audioLevels(connection, levels), activity => this.audioActivity(connection, activity)) }
+    try { connection.meter = this.runtime.metering?.(levels => {
+      if (connection.meterActive !== false) this.audioLevels(connection, levels)
+    }, activity => {
+      connection.meterActive = activity.available
+      this.updateMeterAvailability(connection)
+      this.audioActivity(connection, activity)
+    }) }
     catch { connection.meter = null }
+    connection.meterActive = !!connection.meter
+  }
+
+  private updateMeterAvailability(connection: Connection) {
+    if (connection !== this.connection || this.disposed) return
+    const available = !!(connection.meterActive || connection.rtcActive)
+    if (available !== this.state.meteringAvailable) this.patch({ meteringAvailable: available })
   }
 
   private failCandidate(connection: Connection, message: string) {
     connection.failure = new Error(message)
     connection.rejectReady?.(connection.failure)
+    if (this.preparedHandoff?.candidate === connection && this.preparedHandoff.ready) this.discardPreparedHandoff()
   }
 
   private checkCandidateReady(connection: Connection) {
@@ -457,11 +575,17 @@ export class LiveClient {
   private createPeer(connection: Connection) {
     const peer = this.runtime.peer()
     connection.peer = peer
-    for (const track of connection.stream!.getAudioTracks()) peer.addTrack(track, connection.stream!)
+    connection.rtcMeter = createRtcMeter(peer, levels => {
+      connection.rtcActive = levels.available
+      this.updateMeterAvailability(connection)
+      if (!connection.meterActive && levels.available) this.audioLevels(connection, levels)
+    })
+    const stream = connection.warmStream ?? connection.stream!
+    for (const track of stream.getAudioTracks()) peer.addTrack(track, stream)
     peer.ontrack = event => {
       if (!this.tracked(connection)) return
       connection.audio ??= this.runtime.audio()
-      const candidate = this.voiceSwitch?.candidate === connection
+      const candidate = this.voiceSwitch?.candidate === connection || this.preparedHandoff?.candidate === connection
       connection.audio.autoplay = !candidate
       const remoteStream = event.streams[0] ?? new MediaStream([event.track])
       connection.remoteStream = remoteStream
@@ -471,7 +595,7 @@ export class LiveClient {
     }
     peer.onconnectionstatechange = () => {
       if (!this.tracked(connection)) return
-      if (this.voiceSwitch?.candidate === connection) {
+      if (this.voiceSwitch?.candidate === connection || this.preparedHandoff?.candidate === connection) {
         if (peer.connectionState === 'failed' || peer.connectionState === 'closed') this.failCandidate(connection, '切替先の接続を確認できません。 / Candidate connection failed.')
         this.checkCandidateReady(connection)
         return
@@ -495,7 +619,7 @@ export class LiveClient {
       try { this.receive(JSON.parse(event.data), 'datachannel', connection) } catch { /* Ignore malformed frames. */ }
     }
     channel.onclose = () => {
-      if (this.voiceSwitch?.candidate === connection) this.failCandidate(connection, '切替先のイベント接続が終了しました。 / Candidate event connection closed.')
+      if (this.voiceSwitch?.candidate === connection || this.preparedHandoff?.candidate === connection) this.failCandidate(connection, '切替先のイベント接続が終了しました。 / Candidate event connection closed.')
       else if (this.voiceSwitch?.previous === connection) this.voiceSwitch.previousEnded = true
       else if (this.connection === connection) void this.stop('音声イベント接続が終了しました。 / Voice event connection closed.')
     }
@@ -530,7 +654,8 @@ export class LiveClient {
     this.lastAutomaticRouting = ''
     this.reducer.reset()
     this.voice.reset()
-    this.patch({ phase: 'connecting', language, route, voiceRoute: route, voice: '', transcripts: [], muted: false, playbackBlocked: false, error: '', backend: 'idle', backendResult: '', cleanupWarning: '', inputLevel: 0, outputLevel: 0, speaking: 'silent', meteringAvailable: false })
+    this.conversation.reset()
+    this.patch({ conversation: 'listening', phase: 'connecting', language, route, voiceRoute: route, voice: '', transcripts: [], muted: false, playbackBlocked: false, error: '', backend: 'idle', backendResult: '', cleanupWarning: '', inputLevel: 0, outputLevel: 0, speaking: 'silent', meteringAvailable: false })
     try {
       // Construct/resume inside the user's Start gesture, before microphone await.
       this.createMeter(connection)
@@ -547,12 +672,14 @@ export class LiveClient {
       if (!sdp || this.connection !== connection) return
       // Do not abort this request on Stop: a late response still needs DELETE.
       this.appliedLanguage = `${language}:${preference}`
-      const created = await this.api(this.endpoints.session, { method: 'POST', body: JSON.stringify({ sdp, language, ...(preference === 'auto' ? {} : { language_preference: preference }), case_id: this.state.caseId, ...(route === 'reception' ? {} : { route }), ...(bridgeToken ? { bridge_token: bridgeToken } : {}) }) })
+      const created = await this.api(this.endpoints.session, { method: 'POST', body: JSON.stringify({ sdp, language, case_id: this.state.caseId, ...(preference === 'auto' ? {} : { language_preference: preference }), ...(bridgeToken ? { bridge_token: bridgeToken } : {}), ...(route === 'reception' ? {} : { route }) }) })
       const id = object(created.session).id ?? created.session_id
       if (typeof id === 'string') connection.sessionId = id
       if (this.connection !== connection) { await this.finalize(connection); return }
       const answer = object(created.transport).sdp
       if (!connection.sessionId || typeof answer !== 'string' || (created.case_id !== undefined && created.case_id !== this.state.caseId)) throw new Error('音声サーバーの応答が不正です。 / Invalid voice session response.')
+      this.flushLifecycle(connection)
+      if (this.connection !== connection) { await this.finalize(connection); return }
       this.patch({ voiceRoute: isRoute(created.route) ? created.route : route, voice: typeof created.voice === 'string' ? created.voice : '' })
       await connection.peer!.setRemoteDescription({ type: 'answer', sdp: answer })
       if (this.connection !== connection) return
@@ -579,6 +706,7 @@ export class LiveClient {
   }
 
   private async activate(attempt: VoiceSwitch): Promise<JsonObject> {
+    let busyRetries = 0
     for (let retry = 0; retry < 3; retry++) {
       if (attempt.cancelled || this.voiceSwitch !== attempt) throw new Error('Voice switch cancelled')
       try {
@@ -590,6 +718,13 @@ export class LiveClient {
         }
         return result
       } catch (error) {
+        if (error instanceof LiveApiError && error.code === 'busy' && busyRetries++ < 20) {
+          // The old Agent can finish or a human answer can arrive after the
+          // quiet check. Retain this ready candidate and retry the same token.
+          retry--
+          await new Promise(resolve => setTimeout(resolve, 250))
+          continue
+        }
         // Only a definite client rejection permits deleting the candidate.
         // Retrying the same token resolves a response lost after server commit.
         if (error instanceof LiveApiError && error.status < 500 && ![408, 429].includes(error.status)) throw error
@@ -608,11 +743,18 @@ export class LiveClient {
       this.patch({ error: '現在は担当の声を切り替えられません。 / Department voice switching is unavailable.' })
       return
     }
-    const candidate: Connection = { started: false, stream: previous.stream }
-    const attempt: VoiceSwitch = { previous, candidate, route, muted: this.state.muted, phase: 'preparing', cancelled: false, previousEnded: false }
+    const prepared = this.preparedHandoff?.ready && this.preparedHandoff.previous === previous
+      && this.preparedHandoff.route === route ? this.preparedHandoff : null
+    if (this.preparedHandoff && !prepared) this.discardPreparedHandoff()
+    this.preparedHandoff = null
+    const candidate: Connection = prepared?.candidate ?? { started: false, stream: previous.stream }
+    const attempt: VoiceSwitch = prepared ?? { previous, candidate, route, muted: this.state.muted, phase: 'preparing', cancelled: false, previousEnded: false }
+    attempt.muted = this.state.muted
     this.voiceSwitch = attempt
     this.notifyMedia(observer => observer.setEnabled(false, false))
     this.voice.reset()
+    this.conversation.reset()
+    this.patch({ conversation: 'listening' })
     previous.outputPlaying = false
     previous.stream.getAudioTracks().forEach(track => { track.enabled = false })
     if (previous.audio) { previous.audio.autoplay = false; previous.audio.pause() }
@@ -621,25 +763,42 @@ export class LiveClient {
     try {
       this.createMeter(candidate)
       candidate.meter?.setInput(previous.stream)
-      const sdp = await this.offer(candidate)
-      if (!sdp || attempt.cancelled || this.voiceSwitch !== attempt) return
-      const created = await this.api(`${this.endpoints.session}/${encodeURIComponent(previous.sessionId)}/handoff`, {
-        method: 'POST', body: JSON.stringify({ sdp, route, ...(automatic ? { automatic: true } : {}) }),
-      })
-      const id = object(created.session).id
-      if (typeof id !== 'string' || !id || id === previous.sessionId) throw new Error('切替先のセッションIDが不正です。 / Invalid candidate session ID.')
-      candidate.sessionId = id
-      if (attempt.cancelled || this.voiceSwitch !== attempt) { await this.finalize(candidate); return }
-      const answer = object(created.transport).sdp
-      if (!candidate.sessionId || typeof answer !== 'string' || typeof created.handoff_token !== 'string'
-        || created.case_id !== this.state.caseId || created.old_session_id !== previous.sessionId || created.route !== route) {
-        throw new Error('担当の声の切替情報が不正です。 / Invalid voice handoff response.')
+      let created = prepared?.created
+      if (!prepared) {
+        const sdp = await this.offer(candidate)
+        if (!sdp || attempt.cancelled || this.voiceSwitch !== attempt) return
+        created = await this.api(`${this.endpoints.session}/${encodeURIComponent(previous.sessionId)}/handoff`, {
+          method: 'POST', body: JSON.stringify({ sdp, route, ...(automatic ? { automatic: true } : {}) }),
+        })
+        const id = object(created.session).id
+        if (typeof id !== 'string' || !id || id === previous.sessionId) throw new Error('切替先のセッションIDが不正です。 / Invalid candidate session ID.')
+        candidate.sessionId = id
+        if (attempt.cancelled || this.voiceSwitch !== attempt) { await this.finalize(candidate); return }
+        const answer = object(created.transport).sdp
+        if (!candidate.sessionId || typeof answer !== 'string' || typeof created.handoff_token !== 'string'
+          || created.case_id !== this.state.caseId || created.old_session_id !== previous.sessionId || created.route !== route) {
+          throw new Error('担当の声の切替情報が不正です。 / Invalid voice handoff response.')
+        }
+        attempt.token = created.handoff_token
+        this.flushLifecycle(candidate)
+        if (candidate.failure) throw candidate.failure
+        await candidate.peer!.setRemoteDescription({ type: 'answer', sdp: answer })
+        if (attempt.cancelled || this.voiceSwitch !== attempt) return
+        await this.waitForCandidate(candidate)
+      } else {
+        if (candidate.failure) throw candidate.failure
+        if (candidate.remoteStream) candidate.meter?.setOutput(candidate.remoteStream)
+        // The warm connection has only received disabled clones. Attach the
+        // existing capture at the actual switch, without requesting a new mic.
+        const tracks = previous.stream.getAudioTracks()
+        const senders = candidate.peer!.getSenders().filter(sender => sender.track?.kind === 'audio')
+        await Promise.all(senders.map((sender, index) => sender.replaceTrack(tracks[index] ?? tracks[0])))
+        candidate.warmStream?.getTracks().forEach(track => track.stop())
+        candidate.warmStream = undefined
       }
-      attempt.token = created.handoff_token
-      await candidate.peer!.setRemoteDescription({ type: 'answer', sdp: answer })
       if (attempt.cancelled || this.voiceSwitch !== attempt) return
-      await this.waitForCandidate(candidate)
-      if (attempt.cancelled || this.voiceSwitch !== attempt) return
+      if (candidate.failure) throw candidate.failure
+      if (['failed', 'closed'].includes(candidate.peer?.connectionState ?? '')) throw new Error('Prepared voice connection closed before activation')
       attempt.phase = 'activating'
       const active = await this.activate(attempt)
       if (attempt.cancelled || this.voiceSwitch !== attempt) { await this.finalize(candidate); return }
@@ -651,7 +810,7 @@ export class LiveClient {
       this.notifyMedia(observer => observer.setEnabled(!attempt.muted, false))
       this.patch({
         phase: candidate.peer?.connectionState === 'connected' ? 'connected' : 'reconnecting',
-        voiceRoute: route, voice: typeof active.voice === 'string' ? active.voice : typeof created.voice === 'string' ? created.voice : '',
+        voiceRoute: route, voice: typeof active.voice === 'string' ? active.voice : typeof created?.voice === 'string' ? created.voice : '',
         muted: attempt.muted, playbackBlocked: false, meteringAvailable: !!candidate.meter,
         inputLevel: 0, outputLevel: 0, speaking: 'silent', error: '',
       })
@@ -736,7 +895,10 @@ export class LiveClient {
     this.connection.stream.getAudioTracks().forEach(track => { track.enabled = !muted })
     this.notifyMedia(observer => observer.setEnabled(!muted, !!this.connection?.outputPlaying && !this.state.playbackBlocked))
     const inputLevel = muted ? 0 : this.state.inputLevel
-    this.patch({ muted, inputLevel, speaking: speakerFor(inputLevel, this.state.outputLevel) })
+    const audio = this.connection.audio
+    const audible = !!this.connection.outputPlaying && !!audio && !audio.paused && !audio.muted && audio.volume > 0 && !this.state.playbackBlocked
+    this.patch({ muted, inputLevel, speaking: speakerFor(inputLevel, this.state.outputLevel),
+      conversation: this.conversation.sample(inputLevel, audible ? this.state.outputLevel : 0, audible, muted) })
     if (muted) this.voice.publish({ ...this.voice.getSnapshot(), input: SILENT_SIGNAL })
   }
 
@@ -783,11 +945,15 @@ export class LiveClient {
   }
 
   private releaseTransport(connection: Connection) {
+    connection.warmStream?.getTracks().forEach(track => track.stop())
+    connection.warmStream = undefined
+    connection.pendingLifecycle = undefined
     connection.outputPlaying = false
     clearTimeout(connection.startTimer)
     clearTimeout(connection.disconnectTimer)
     connection.cancelIce?.()
     connection.meter?.dispose(); connection.meter = null
+    connection.rtcMeter?.dispose(); connection.rtcMeter = undefined
     if (connection.channel) { connection.channel.onmessage = null; connection.channel.onclose = null; connection.channel.close() }
     if (connection.peer) { connection.peer.ontrack = null; connection.peer.onconnectionstatechange = null; connection.peer.close() }
     if (connection.audio) { connection.audio.pause(); connection.audio.srcObject = null }
@@ -808,6 +974,8 @@ export class LiveClient {
     const connections = attempt ? [attempt.candidate, connection] : [connection]
     this.connection = null
     this.voice.reset()
+    this.conversation.reset()
+    this.patch({ conversation: 'listening' })
     this.voiceSwitch = null
     if (attempt) { attempt.cancelled = true; attempt.candidate.failure = new Error('Voice switch cancelled'); attempt.candidate.rejectReady?.(attempt.candidate.failure) }
     const tracks = new Set(connections.flatMap(item => item.stream?.getTracks() ?? []))

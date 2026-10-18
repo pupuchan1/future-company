@@ -13,6 +13,7 @@ export const requestHumanSchema = z.object({
   target_role: taskDetail.optional().describe('Role to consult, not a routing guarantee.'),
   task: taskDetail.optional().describe('The bounded question or task for the human.'),
   expected_result: taskDetail.optional().describe('What answer is needed to continue the conversation.'),
+  applicant_summary: z.string().trim().min(1).max(1000).optional().describe('Applicant facts explicitly stated by the caller only. Omit unknown name or experience; never rank or recommend hiring.'),
 }).strict();
 export const humanResultSchema = z.object({
   text: z.string().trim().min(1).max(4000),
@@ -56,6 +57,9 @@ export function createHumanService({
   ringTimeoutMs = 30_000,
   acceptedTimeoutMs = 300_000,
   maxRequests = 1000,
+  slack,
+  transportForCase = () => 'phone',
+  caseActive = () => true,
 } = {}) {
   for (const timeout of [ackTimeoutMs, ringTimeoutMs, acceptedTimeoutMs]) {
     if (!Number.isFinite(timeout) || timeout <= 0) throw new Error('Timeouts must be positive.');
@@ -86,6 +90,7 @@ export function createHumanService({
     clearTimeout(entry.timer);
     entry.timer = undefined;
     entry.record.status = status;
+    if (terminal.has(status)) entry.cancelTransport?.();
     entry.record.revision += 1;
     entry.record.updated_at = new Date().toISOString();
     if (detail) entry.record.unavailable_reason = detail;
@@ -144,13 +149,15 @@ export function createHumanService({
     if (requests.size >= maxRequests) {
       throw new HumanServiceError('capacity_reached', 'Human request capacity reached; archive and restart the development gateway.');
     }
-    const device = devices.get(args.device_id);
+    const transport = transportForCase(args.case_id);
+    const device = transport === 'phone' ? devices.get(args.device_id) : undefined;
     const now = new Date().toISOString();
     const entry = {
       record: {
         handoff_id: randomUUID(), ...payload,
         status: 'requested', simulated: device?.simulated ?? false,
         audio_connected: false,
+        ...(transport === 'slack' ? { transport: 'slack', device_id: 'slack-ai', notification_status: 'queued', reply_status: 'unconfigured' } : {}),
         revision: 1, created_at: now, updated_at: now,
       },
       commandId: randomUUID(), connectionId: device?.connectionId,
@@ -159,6 +166,25 @@ export function createHumanService({
     requests.set(entry.record.handoff_id, entry);
     idempotency.set(idempotency_key, { fingerprint, handoffId: entry.record.handoff_id });
     emit(entry);
+    if (!caseActive(args.case_id)) unavailable(entry, 'case_inactive', false);
+    else if (transport === 'slack') {
+      if (!slack?.configured) unavailable(entry, 'slack_unconfigured', false);
+      else if ([...requests.values()].some(other => other !== entry && other.record.case_id === args.case_id
+        && other.record.transport === 'slack' && !terminal.has(other.record.status))) unavailable(entry, 'slack_request_pending', false);
+      else {
+        entry.slackDeadline = Date.now() + 600000;
+        arm(entry, 600000, 'slack_answer_timeout');
+        const isActive = () => !closed && !terminal.has(entry.record.status) && caseActive(args.case_id);
+        entry.cancelTransport = slack.start(copy(entry.record), {
+          isActive,
+          update(values) { if (isActive()) { Object.assign(entry.record, values); transition(entry, 'requested'); arm(entry, Math.max(1, entry.slackDeadline - Date.now()), 'slack_answer_timeout'); } },
+          complete(result, source) { if (isActive()) { entry.record.result = humanResultSchema.parse(result); Object.assign(entry.record, source); transition(entry, 'completed'); } },
+          fail(reason) { if (isActive()) unavailable(entry, reason, false); },
+        });
+      }
+      return copy(entry.record);
+    }
+    if (terminal.has(entry.record.status)) return copy(entry.record);
     if (!device) unavailable(entry, 'device_offline', false);
     else if (!['ring.start', 'ring.stop'].every((cap) => device.capabilities.includes(cap))) {
       unavailable(entry, 'capability_missing', false);
@@ -184,7 +210,7 @@ export function createHumanService({
 
   function cancelHumanRequest(input) {
     const entry = find(input);
-    if (transition(entry, 'cancelled')) send(entry, 'ring.stop');
+    if (transition(entry, 'cancelled') && entry.record.transport !== 'slack') send(entry, 'ring.stop');
     return copy(entry.record);
   }
 
@@ -250,6 +276,7 @@ export function createHumanService({
     requestHuman, getHumanRequest, cancelHumanRequest, connectDevice,
     listDevices: () => [...devices.values()].map(({ send: _, connectionId: __, ...device }) => copy({ ...device, online: true })),
     listRequests: () => [...requests.values()].map(({ record }) => copy(record)),
+    closeCase(caseId) { for (const entry of requests.values()) if (entry.record.case_id === caseId && !terminal.has(entry.record.status)) cancelHumanRequest(entry.record.handoff_id); },
     close() {
       if (closed) return;
       closed = true;
