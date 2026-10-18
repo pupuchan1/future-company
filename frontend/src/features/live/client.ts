@@ -326,7 +326,11 @@ export class LiveClient {
       const message = error instanceof Error ? error.message : '受付へ接続できません。 / Cannot reach reception.'
       const replaceError = !this.state.error || this.state.error === this.statusError
       this.statusError = message
-      this.patch({ configured: null, mcpConfigured: null, switchConfigured: false, error: replaceError ? message : this.state.error })
+      // A status timeout cannot revoke capabilities already negotiated for an
+      // active call. Keep the error visible and retry through the normal poll.
+      const transient = !(error instanceof LiveApiError) || error.status >= 500 || [408, 429].includes(error.status)
+      this.patch({ ...(!this.connection || !transient ? { configured: null, mcpConfigured: null, switchConfigured: false } : {}),
+        error: replaceError ? message : this.state.error })
     } finally { this.statusBusy = false }
   }
 
