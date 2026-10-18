@@ -243,13 +243,17 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         const input = await body(req);
         if (typeof input.sdp !== 'string' || !input.sdp.startsWith('v=0')) return json(res, 400, { error: 'A WebRTC SDP offer is required.' });
         if (!isVoiceRoute(input.route)) return json(res, 400, { error: 'Unknown voice department.', code: 'invalid_route' });
+        if (input.automatic !== undefined && typeof input.automatic !== 'boolean') return json(res, 400, { error: 'Invalid handoff mode.' });
         const state = current.caseState;
         if (state.closed || current.closed || current.closing || state.activeSessionId !== current.id) {
           return json(res, 409, { error: 'This is no longer the active voice session.', code: 'inactive_session' });
         }
         if (state.switching || current.busy) return json(res, 409, {
           error: 'Wait until the current work or handoff finishes.', code: state.switching ? 'handoff_in_progress' : 'busy' });
-        const ticket = { token: randomUUID(), oldId: current.id, newId: null, route: input.route, ready: false };
+        if (input.automatic && input.route !== state.routing.route) return json(res, 409, {
+          error: 'The confirmed department changed.', code: 'routing_changed' });
+        const ticket = { token: randomUUID(), oldId: current.id, newId: null, route: input.route,
+          automatic: input.automatic === true, ready: false };
         state.switching = ticket;
         ticket.timer = setTimeout(() => abandonHandoff(state, ticket), handoffTimeoutMs);
         ticket.timer.unref?.();
@@ -301,7 +305,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         const response = { ...connectionInfo(candidate), old_session_id: ticket.oldId, active: true };
         candidate.activation = { token: ticket.token, response };
         const resumedHuman = drainHuman(state);
-        candidate.activateDepartment({ announce: resumedHuman === 0 });
+        candidate.activateDepartment({ announce: !ticket.automatic && resumedHuman === 0, automatic: ticket.automatic });
         emit({ type: 'live.handoff', ...response, session_id: candidate.id });
         void previous.close({ preserveCase: true });
         return json(res, 200, response);

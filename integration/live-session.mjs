@@ -90,10 +90,11 @@ export class LiveConversation {
       .some(([key, value]) => key.startsWith(`${this.caseId}:`) && value.active));
   }
 
-  activateDepartment({ announce = true } = {}) {
+  activateDepartment({ announce = true, automatic = false } = {}) {
     this.standby = false;
+    this.awaitFreshInput = automatic;
     this.send('session.instructions.append', { delegation_id: null,
-      content: `The department handoff is complete. You may speak now as ${this.voiceRoute}. Continue the supplied conversation without repeating completed actions. Keep speaking ${this.routing.language === 'en' ? 'English' : 'Japanese'}.` });
+      content: `The department handoff is complete. You may speak now as ${this.voiceRoute}. Continue the supplied conversation without repeating completed actions. Keep speaking ${this.routing.language === 'en' ? 'English' : 'Japanese'}.${automatic ? ' This automatic change only selects the department voice. Do not restart the task, interview or human request. Wait for the caller or an incoming verified result before delegating again.' : ''}` });
     if (announce) return this.enqueue(null, 'department_selection', `\nApplication action: the caller explicitly selected the ${this.voiceRoute} department. ${this.voiceRoute === 'recruiting'
       ? 'Begin or resume the interview, obtain the interview template if needed, and ask one appropriate job-related question. Do not rank or make a hiring decision.'
       : 'Briefly introduce this department and continue from the shared context; ask what help is needed if it is not yet clear.'} Do not repeat completed human requests.`, this.voiceRoute);
@@ -116,7 +117,8 @@ export class LiveConversation {
     this.routing = next;
     if (this.caseState) this.caseState.routing = next;
     this.emit({ type: 'routing.updated', case_id: this.caseId, session_id: this.id,
-      voice_route: this.voiceRoute, voice: this.voice, ...next, source });
+      voice_route: this.voiceRoute, voice: this.voice, ...next, source,
+      ...(source === 'decisions' ? { source_event_id: this.lastInputId } : {}) });
     if (source === 'language_selection') return;
     this.send('session.instructions.append', { delegation_id: null,
       content: `The app has routed this conversation to ${next.route === 'recruiting' ? 'the recruitment interview specialist' : next.route === 'haas' ? 'the Human as a Service coordinator' : 'general reception'}. Speak ${next.language === 'en' ? 'English' : 'Japanese'}. Announce a department change once when relevant and say the conversation context is shared. This is a specialist backend context change; do not say the voice or person changed.` });
@@ -140,7 +142,7 @@ export class LiveConversation {
       this.seen.add(event.event_id);
       this.history.push(event);
       if (this.history.length > 1000) this.history.shift();
-      if (event.type === 'session.input_transcript.delta') this.lastInputId = event.event_id;
+      if (event.type === 'session.input_transcript.delta') { this.lastInputId = event.event_id; this.awaitFreshInput = false; }
       this.emit({ ...event, case_id: this.caseId, session_id: this.id });
     }
     if (event.type === 'decision.event' && event.event?.type === 'decision.completed'
@@ -151,6 +153,7 @@ export class LiveConversation {
         ...readRouting(event.event.decision.answers, this.routing), source: 'live_decisions', source_event_id: event.source_event_id });
     }
     if (event.type === 'session.delegation.created' && event.delegation?.target === 'client') {
+      if (this.awaitFreshInput) return;
       const id = event.delegation.id;
       if (!this.canWork()) {
         if (this.caseState?.switching && !this.closed && !this.closing) this.caseState.deferredDelegations.add(id);
