@@ -464,7 +464,7 @@ test('confirmed routing switches voice once after backend result and actual spee
     assert.equal(f.peers.length, 1)
     f.meters[0].levels(.2, 0)
     t.mock.timers.tick(1400); await tick()
-    assert.equal(f.peers.length, 1, 'New caller speech postpones handoff')
+    assert.equal(f.peers.length, 1, 'New caller speech gets a grace period before its transcript arrives')
     f.meters[0].levels(0, 0)
     serverEvent(f, result)
     t.mock.timers.tick(1500); await tick()
@@ -476,6 +476,38 @@ test('confirmed routing switches voice once after backend result and actual spee
     t.mock.timers.tick(5000); await tick()
     assert.equal(f.peers.length, 2, 'Repeated routing event must not start another switch')
     assert.equal(f.track.stopped, 0)
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+test('room noise cannot keep the reception voice after the specialist is ready', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const f = fixture(); enablePrewarm(f); await f.start()
+  try {
+    serverEvent(f, { ...routedToHaas, route: 'recruiting' })
+    await f.readyCandidate(); await tick()
+    serverEvent(f, { type: 'backend.result', event_id: 'answer', content: '採用担当へおつなぎします。' })
+    for (let frame = 0; frame < 30; frame++) {
+      f.meters[0].levels(.02, .2)
+      t.mock.timers.tick(100); await tick()
+    }
+    assert.equal(f.calls.filter(call => call.path.endsWith('/activate')).length, 0, 'AI output must finish first')
+    const speech = { type: 'session.input_transcript.delta', event_id: 'real-caller', delta: 'はい、お願いします。' }
+    serverEvent(f, speech)
+    for (let frame = 0; frame < 14; frame++) {
+      f.meters[0].levels(frame === 0 ? 0 : .02, 0)
+      t.mock.timers.tick(100); await tick()
+    }
+    assert.equal(f.calls.filter(call => call.path.endsWith('/activate')).length, 0, 'Fresh caller transcript gets a quiet interval')
+    serverEvent(f, speech)
+    for (let frame = 0; frame < 4; frame++) {
+      f.meters[0].levels(frame % 2 ? .02 : 0, 0)
+      t.mock.timers.tick(100); await tick()
+    }
+    assert.equal(f.client.getSnapshot().voice, 'harema')
+    assert.equal(f.calls.filter(call => call.path.endsWith('/activate')).length, 1)
+    assert.equal(f.peers[0].closed, true)
+    assert.equal(f.audios[0].paused, true)
+    assert.ok(f.audios[1].plays > 0)
   } finally { await f.client.stop(); f.client.dispose() }
 })
 
