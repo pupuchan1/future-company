@@ -9,7 +9,9 @@
 5. マージ後は関連 Issue に結果と残件を記載する。共同開発はこのリポジトリ、GOROman さんの申請用リポジトリは https://github.com/GOROman/devday-community-hackathon-2026-haas 。移管する確定commitと担当は #94 に記録する。
 
 現時点の公開体験は **採用のみ**。GPT Live共通受付 → 採用担当の声・専門文脈へ交代 → 必要な確認をSlack `#ai`（`C0CA6A7F4E5`）の採用担当へ依頼 → 人間の返信を同じcase・元Agent・音声へ返す。応募者の通知は本人が話した情報に限り、未確認の氏名・経歴や採用判断を補完しない。最新の範囲・担当は #94、Slack接続は #107 を参照する。
-オーブの仕上げはpupu、Node/relay・既存WorkerとSlack認証設定はr74tech、結合・接続実装・検証・公開Codex SitesはLimo/Codexが担当する。最新の公開先はCodex Sitesとし、全員が音声受付を使えるようにする。Sitesのサーバーから既存Workerへ接続し、案件所有と秘密の境界を保つ。黒電話とハンダ付けのHaaS経路は別の発表・実演用に維持し、実機はGOROmanとバックエンドチームが進める。問い合わせ・退職代行・ハンダ付けの専用画面を同時に増やさない。
+オーブの仕上げはpupu、Node/relay・既存WorkerとSlack認証設定はr74tech、結合・接続実装・検証はLimo/Codexが担当する。Codex Sitesは予備入口とし、pupuの画面とr74の本番を結合して使える状態を優先する。最新の本番URL・配備commitは#33/#94を参照し、古い静的プレビューへ誘導しない。Sitesを使う場合も既存Workerへ接続し、案件所有と秘密の境界を保つ。黒電話とハンダ付けのHaaS経路は別の発表・実演用に維持し、実機はGOROmanとバックエンドチームが進める。問い合わせ・退職代行・ハンダ付けの専用画面を同時に増やさない。
+
+チーム用の[音声体験・デプロイ・当日の確認手順](https://devdaycommuni-qzr8743.slack.com/docs/T0CAD4KL7UG/F0CAYSMQBDE)をSlackで共有している。新しい配備候補はPR・固定commit・実行した検証を添えてr74へ依頼し、配備結果を#33へ戻す。声の先行準備は#123、短い交代案内と自然な会話は#129を参照する。
 
 PR の最低記載事項:
 
