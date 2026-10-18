@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useReceptionConnection } from "@/features/worker/useReceptionConnection";
+import { ConversationRecord } from "@/features/recording/ConversationRecord";
 import { VoiceOrb } from "@/features/voice/VoiceOrb";
 import type { LiveLanguage, LiveRoute } from "@/features/live/types";
 import { useDisplayLanguage } from "@/lib/useDisplayLanguage";
@@ -83,7 +84,7 @@ export function ReceptionPage() {
   }, [s.transcripts]);
   async function toggleCall() {
     if (active) await live.stop();
-    else await live.start();
+    else { openConversation(); await live.start(); }
   }
   return (
     <div className={`app-shell reception-shell haas-homepage${hasConversation ? " haas-in-conversation" : ""}${conversationView ? " haas-conversation-view" : ""}`}>
@@ -257,58 +258,7 @@ export function ReceptionPage() {
           </div>
         </section>}
         {hasConversation && <div className="reception-content">
-          <section className="panel reception-transcript">
-            <h2 className="panel-heading">
-              {text("会話", "Conversation")}
-              <span>
-                {text(
-                  "話した内容とAIの回答",
-                  "Your words and the AI’s replies",
-                )}
-              </span>
-            </h2>
-            <div
-              ref={log}
-              className="transcript"
-              role="log"
-              aria-live="polite"
-              aria-label={text("会話の文字起こし", "Conversation transcript")}
-            >
-              {s.transcripts.length ? (
-                s.transcripts.map((m) => (
-                  <article key={m.id} className={`message message-${m.role}`}>
-                    <div className="message-label">
-                      {m.role === "user"
-                        ? text("あなた", "You")
-                        : m.role === "system"
-                          ? text("お知らせ", "Notice")
-                          : "AI"}
-                      {!m.final && (
-                        <span>{text("聞き取り中", "In progress")}</span>
-                      )}
-                    </div>
-                    <p>{m.text}</p>
-                  </article>
-                ))
-              ) : (
-                <div className="reception-empty">
-                  <Mic />
-                  <p>
-                    {text(
-                      "会話を始めると、ここに内容が表示されます。",
-                      "Your conversation will appear here once you start.",
-                    )}
-                  </p>
-                  <span className="small">
-                    {text(
-                      "どんな用件でも、同じ入口からどうぞ。",
-                      "Whatever you need, start in the same place.",
-                    )}
-                  </span>
-                </div>
-              )}
-            </div>
-          </section>
+          <ConversationRecord entries={s.transcripts} recording={live.recording} language={language} active={active} />
           <aside className="reception-work">
             <section className="panel">
               <h2 className="panel-heading">

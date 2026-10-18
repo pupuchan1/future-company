@@ -93,6 +93,8 @@ if (stopping) process.exit(1);
 console.log(
   "Local reception: http://127.0.0.1:5173 (voice: 4320, relay: 4330, Worker: 8787)",
 );
-run("Voice backend and relay", ["run", "integration:relay"]);
+// UI-only local development still starts without inventing or saving credentials.
+const relayConfigured = Boolean(process.env.NODE_RELAY_SECRET && process.env.HUMAN_MCP_TOKEN);
+run(relayConfigured ? "Voice backend and relay" : "Voice backend", ["run", relayConfigured ? "integration:relay" : "integration"]);
 run("Worker backend", ["run", "dev:worker"]);
 run("React", ["run", "dev:frontend", "--", "--port", "5173", "--strictPort"]);

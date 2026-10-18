@@ -30,10 +30,10 @@ export function putRequest(snapshot: LiveSnapshot, request: LiveHumanRequest): L
 /** One reducer per case. SSE is global in PR #4, so require its case_id. */
 export class LiveEventReducer {
   private seen = new Set<string>()
-  private recent: { id: string; role: string; at: number; final: boolean } | null = null
+  private recent = new Map<string, { id: string; at: number; final: boolean }>()
   private sequence = 0
 
-  reset() { this.seen.clear(); this.recent = null; this.sequence = 0 }
+  reset() { this.seen.clear(); this.recent.clear(); this.sequence = 0 }
 
   apply(snapshot: LiveSnapshot, input: unknown, source: 'server' | 'datachannel', now = Date.now()): LiveSnapshot {
     const event = object(input)
@@ -43,11 +43,10 @@ export class LiveEventReducer {
     const caseId = body.case_id ?? request.case_id
     if (caseId !== undefined && caseId !== snapshot.caseId) return snapshot
     if (source === 'server' && caseId !== snapshot.caseId) return snapshot
-    const eventId = event.event_id ?? event.eventId
+    const eventId = body.event_id ?? event.eventId
     if (typeof eventId === 'string') {
       if (this.seen.has(eventId)) return snapshot
       this.seen.add(eventId)
-      if (this.seen.size > 1000) this.seen.delete(this.seen.values().next().value!)
     }
     if (type === 'routing.updated') {
       const route = ['reception', 'recruiting', 'haas'].includes(String(body.route)) ? body.route as LiveSnapshot['route'] : snapshot.route
@@ -72,19 +71,25 @@ export class LiveEventReducer {
     const deltaValue = typeof body.delta === 'string' ? body.delta : object(body.delta).text ?? object(body.delta).transcript
     const full = typeof body.transcript === 'string' ? body.transcript : body.text ?? nested.text
     const text = deltaValue ?? full
-    if (typeof text !== 'string' || !text) return snapshot
     const speaker = body.role ?? body.speaker ?? nested.role ?? (type.includes('input') ? 'user' : 'assistant')
     const role = speaker === 'user' || speaker === 'human' ? 'user' : speaker === 'system' ? 'system' : 'assistant'
+    const recent = this.recent.get(role)
     const explicitId = body.item_id ?? body.utterance_id ?? body.transcript_id ?? body.segment_id ?? nested.id
     let id = typeof explicitId === 'string' ? `${role}:${explicitId}` : ''
-    if (!id && this.recent?.role === role && !this.recent.final && now - this.recent.at < 8000) id = this.recent.id
+    const final = /completed|done|final/.test(type) || body.is_final === true
+    if (typeof text !== 'string' || !text) {
+      if (!final || (!id && !recent)) return snapshot
+      id ||= recent!.id
+      if (recent?.id === id) this.recent.set(role, { ...recent, final: true })
+      return { ...snapshot, transcripts: snapshot.transcripts.map(item => item.id === id ? { ...item, final: true } : item) }
+    }
+    if (!id && recent && snapshot.transcripts.at(-1)?.id === recent.id && !recent.final && now - recent.at < 8000) id = recent.id
     if (!id) id = `${role}:live-${++this.sequence}`
     const old = snapshot.transcripts.find(item => item.id === id)
-    const final = /completed|done|final/.test(type) || body.is_final === true
     const entry = { id, role, text: deltaValue !== undefined ? (old?.text ?? '') + text : text, final } as const
-    this.recent = { id, role, at: now, final }
+    this.recent.set(role, { id, at: now, final })
     const transcripts = old ? snapshot.transcripts.map(item => item.id === id ? entry : item) : [...snapshot.transcripts, entry]
-    return { ...snapshot, transcripts: transcripts.slice(-200) }
+    return { ...snapshot, transcripts }
   }
 }
 

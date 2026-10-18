@@ -6,6 +6,7 @@ import { initialSnapshot, LANGUAGE_CHANGE_ERROR, object } from './types.ts'
 import type { JsonObject, LiveLanguage, LiveLanguagePreference, LiveRoute, LiveSnapshot, LiveSpeaking } from './types.ts'
 import { createEventTransport } from './event-transport.ts'
 import type { LiveEventTransport } from './event-transport.ts'
+import type { LiveMediaObserver } from '../recording/types.ts'
 
 export interface LiveAudioLevels { inputLevel: number; outputLevel: number }
 export interface LiveAudioMeter {
@@ -140,6 +141,8 @@ export interface LiveClientOptions {
   apiPrefix?: string
   /** A fresh case-scoped proof; never persisted in a snapshot or storage. */
   bridgeToken?: () => Promise<string>
+  /** Local-only capture of the active media; never receives a candidate's audio. */
+  media?: LiveMediaObserver
 }
 
 export function caseVoicePrefix(caseId: string): string {
@@ -149,6 +152,7 @@ export function caseVoicePrefix(caseId: string): string {
 
 interface Connection {
   stream?: MediaStream
+  remoteStream?: MediaStream
   peer?: RTCPeerConnection
   channel?: RTCDataChannel
   sessionId?: string
@@ -219,6 +223,7 @@ export class LiveClient {
   private languageGeneration = 0
   private endpoints: { status: string; events: string; session: string }
   private bridgeToken?: () => Promise<string>
+  private media?: LiveMediaObserver
   private automaticHandoff: { route: LiveRoute; attempts: number; awaitingOutput: boolean } | null = null
   private automaticTimer?: ReturnType<typeof setTimeout>
   private lastSpeechAt = 0
@@ -231,6 +236,7 @@ export class LiveClient {
     this.endpoints = prefix ? { status: `${prefix}/status`, events: `${prefix}/events`, session: `${prefix}/session` }
       : { status: '/api/status', events: '/api/events', session: '/api/live/session' }
     this.bridgeToken = options.bridgeToken
+    this.media = options.media
     this.state = initialSnapshot(caseId, language)
     this.runtime = runtime
   }
@@ -476,6 +482,7 @@ export class LiveClient {
       const candidate = this.voiceSwitch?.candidate === connection
       connection.audio.autoplay = !candidate
       const remoteStream = event.streams[0] ?? new MediaStream([event.track])
+      connection.remoteStream = remoteStream
       connection.audio.srcObject = remoteStream
       connection.meter?.setOutput(remoteStream)
       if (!candidate && !this.voiceSwitch) void this.playAudio()
@@ -553,6 +560,7 @@ export class LiveClient {
       const stream = await this.runtime.microphone()
       if (this.connection !== connection) { stream.getTracks().forEach(track => track.stop()); return }
       connection.stream = stream
+      this.notifyMedia(observer => observer.setInput(stream))
       connection.meter?.setInput(stream)
       const sdp = await this.offer(connection)
       if (!sdp || this.connection !== connection) return
@@ -622,6 +630,7 @@ export class LiveClient {
     const candidate: Connection = { started: false, stream: previous.stream }
     const attempt: VoiceSwitch = { previous, candidate, route, muted: this.state.muted, phase: 'preparing', cancelled: false, previousEnded: false }
     this.voiceSwitch = attempt
+    this.notifyMedia(observer => observer.setEnabled(false, false))
     this.voice.reset()
     this.conversation.reset()
     this.patch({ conversation: 'listening' })
@@ -660,6 +669,7 @@ export class LiveClient {
       // Both peers use the same capture tracks. Switching must not stop them.
       this.releaseTransport(previous)
       candidate.stream!.getAudioTracks().forEach(track => { track.enabled = !attempt.muted })
+      this.notifyMedia(observer => observer.setEnabled(!attempt.muted, false))
       this.patch({
         phase: candidate.peer?.connectionState === 'connected' ? 'connected' : 'reconnecting',
         voiceRoute: route, voice: typeof active.voice === 'string' ? active.voice : typeof created.voice === 'string' ? created.voice : '',
@@ -693,6 +703,7 @@ export class LiveClient {
       }
       this.voiceSwitch = null
       previous.stream.getAudioTracks().forEach(track => { track.enabled = !attempt.muted })
+      this.notifyMedia(observer => observer.setEnabled(!attempt.muted, false))
       this.patch({ phase: previous.peer?.connectionState === 'disconnected' ? 'reconnecting' : 'connected', muted: attempt.muted, error: `担当の声を切り替えられませんでした。元の声で続けます。 / Voice unchanged. ${microphoneError(error)}` })
       if (previous.audio) previous.audio.autoplay = true
       await this.playAudio()
@@ -741,6 +752,7 @@ export class LiveClient {
   setMuted(muted: boolean) {
     if (!this.connection?.stream || this.voiceSwitch) return
     this.connection.stream.getAudioTracks().forEach(track => { track.enabled = !muted })
+    this.notifyMedia(observer => observer.setEnabled(!muted, !!this.connection?.outputPlaying && !this.state.playbackBlocked))
     const inputLevel = muted ? 0 : this.state.inputLevel
     const audio = this.connection.audio
     const audible = !!this.connection.outputPlaying && !!audio && !audio.paused && !audio.muted && audio.volume > 0 && !this.state.playbackBlocked
@@ -755,10 +767,18 @@ export class LiveClient {
     if (!audio || !connection || this.voiceSwitch) return
     connection.meter?.resume?.()
     connection.outputPlaying = false
+    this.notifyMedia(observer => observer.setEnabled(!this.state.muted, false))
     this.voice.publish({ ...this.voice.getSnapshot(), output: SILENT_SIGNAL })
     try {
       await audio.play()
-      if (this.connection === connection) { connection.outputPlaying = true; this.patch({ playbackBlocked: false }) }
+      if (this.connection === connection && !this.voiceSwitch) {
+        connection.outputPlaying = true
+        this.notifyMedia(observer => {
+          observer.setOutput(connection.remoteStream ?? null)
+          observer.setEnabled(!this.state.muted, true)
+        })
+        this.patch({ playbackBlocked: false })
+      }
     } catch {
       if (this.connection === connection) { connection.outputPlaying = false; this.patch({ playbackBlocked: true }) }
     }
@@ -794,11 +814,17 @@ export class LiveClient {
     if (connection.audio) { connection.audio.pause(); connection.audio.srcObject = null }
   }
 
+  private notifyMedia(callback: (observer: LiveMediaObserver) => void) {
+    // An optional recording failure must never interrupt the live conversation.
+    try { if (this.media) callback(this.media) } catch { /* Recorder reports its own availability. */ }
+  }
+
   async stop(error = '', keepalive = false) {
     this.cancelAutomaticHandoff()
     if (this.closing) return this.closing
     const connection = this.connection
     if (!connection) return
+    this.notifyMedia(observer => observer.stop())
     const attempt = this.voiceSwitch
     const connections = attempt ? [attempt.candidate, connection] : [connection]
     this.connection = null

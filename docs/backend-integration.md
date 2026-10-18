@@ -173,3 +173,14 @@ WorkerBridgeも#39の最新キャッシュ・Access境界へ合わせ、正規�
 
 
 追加でcfc694d / 1433bb3の遅延ACK・取消/終了済み案件のSSE抑制・閉じたSSEの安全な終了・CF_ACCESS認証変数の互換名を反映しました。既存の日本語/English切替と、回答なし完了通知の処理は保っています。今回の変更に対応する検証は計75件成功（gateway 16、proxy 13、bridge 14、Node ingress 9、orchestration 14、実Worker/DO/D1 bridge 9）。FE/Worker型検査とFEビルドも成功。ローカル再起動後のstatus 200、同一originの結果再同期503（未設定）、別originの再同期403を確認しています。設定なしを接続成功とは扱いません。
+
+
+### 最新統合（Issue #92 / #96、2026-10-18）
+
+#72の案件限定voice APIとSSE/WebSocket transport、#39の自動声交代・自然な案内・全文字幕/ローカルMP3記録、#81相当の新発話まで重複業務を抑止する処理を取り込みました。#76の会話開始時の画面遷移は、現在の同一hookを保つ#conversation表示へ統合しています。既存の日本語/English設定と、人間回答の正規キャッシュ・配信予約の回復は維持します。
+
+Orbはユーザー指示で#87/d2f208bの描画・内部変形・応答待ち状態を優先しました。描画ファイル群の元PR一致を確認後、配色と会話画面callbackの最終調整はOrb担当が別途進めています。ページ側の左Orb/右ボタン配置と現在のブランド・コピーは巻き戻していません。#62の元ブランド資産とhardware用ディレクトリーも取り込み済みです。
+
+今回の関連検証はFE89、Node integration86、relay/gateway29、実Worker/DO/D1 bridge/proof13の計217件成功。FE/Worker/配置用TypeScriptとFEビルドが成功し、AudioWorklet/MP3 Workerも生成されます。模擬回答のsimulatedを保ったまま自然な文章へ変わった上流変更に合わせ、旧文言を要求していたsimulator試験を更新しています。
+
+ローカルWorkerの起動が配信用ビルド設定へ誘導される問題を、wrangler.local.jsoncの明示指定で修正しました。保存先は既存の.wrangler/stateを維持します。relayの秘密設定がないときもUI/Worker/Nodeは起動しますが、認可を省略した音声接続は行いません。再起動後、5173のstatusとWorker company APIは200。live_configured/mcp_configured/worker_bridge_configuredはfalseのため、この環境の実AI音声・実機確認とは扱いません。秘密設定・公開先・Access権限には変更を加えていません。

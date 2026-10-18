@@ -24,7 +24,7 @@
     "lint": "npm run lint --workspace frontend",
     "typecheck:frontend": "npm run typecheck --workspace frontend",
     "preview:frontend": "npm run preview --workspace frontend --",
-    "dev:worker": "wrangler dev deployment/worker-local.ts --assets public --ip 127.0.0.1 --port 8787",
+    "dev:worker": "wrangler dev --config wrangler.local.jsonc --ip 127.0.0.1 --port 8787 --persist-to .wrangler/state",
     "build:worker": "vite build",
     "typecheck:worker": "npm run cf-typegen && tsc --noEmit",
     "test:frontend": "node --test frontend/tests/*.test.ts",
