@@ -380,6 +380,20 @@ function enablePrewarm(f: ReturnType<typeof fixture>) {
   return clone
 }
 
+test('early routing activates the prepared specialist before any business result, despite room noise', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const f = fixture(); enablePrewarm(f); await f.start()
+  try {
+    assert.equal(f.calls.find(call => call.path.endsWith('/session'))?.body.handoff_before_work, true)
+    serverEvent(f, { ...routedToHaas, route: 'recruiting', handoff_before_work: true })
+    await f.readyCandidate(); await tick()
+    for (let i = 0; i < 20; i++) { f.meters[0].levels(.02, 0); t.mock.timers.tick(100); await tick() }
+    assert.equal(f.client.getSnapshot().voice, 'harema')
+    assert.equal(f.calls.filter(call => call.path.endsWith('/activate')).length, 1)
+    assert.equal(f.peers[0].closed, true)
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
 test('confirmed route prepares muted replacement while old voice works, then activates without a second offer', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const f = fixture(); const clone = enablePrewarm(f); await f.start()

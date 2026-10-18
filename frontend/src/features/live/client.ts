@@ -568,7 +568,7 @@ export class LiveClient {
         if (body.route === this.state.voiceRoute) this.cancelAutomaticHandoff()
         else if (this.automaticHandoff?.route !== body.route) {
           this.cancelAutomaticHandoff()
-          this.automaticHandoff = { route: body.route, attempts: 0, awaitingOutput: true }
+          this.automaticHandoff = { route: body.route, attempts: 0, awaitingOutput: body.handoff_before_work !== true }
           void this.prepareAutomaticHandoff(body.route)
         }
       }
@@ -720,7 +720,9 @@ export class LiveClient {
       if (!sdp || this.connection !== connection) return
       // Do not abort this request on Stop: a late response still needs DELETE.
       this.appliedLanguage = `${language}:${preference}`
-      const created = await this.api(this.endpoints.session, { method: 'POST', body: JSON.stringify({ sdp, language, case_id: this.state.caseId, ...(preference === 'auto' ? {} : { language_preference: preference }), ...(bridgeToken ? { bridge_token: bridgeToken } : {}), ...(route === 'reception' ? {} : { route }) }) })
+      const created = await this.api(this.endpoints.session, { method: 'POST', body: JSON.stringify({ sdp, language, case_id: this.state.caseId,
+        ...(this.prewarmConfigured && typeof stream.clone === 'function' ? { handoff_before_work: true } : {}),
+        ...(preference === 'auto' ? {} : { language_preference: preference }), ...(bridgeToken ? { bridge_token: bridgeToken } : {}), ...(route === 'reception' ? {} : { route }) }) })
       const id = object(created.session).id ?? created.session_id
       if (typeof id === 'string') connection.sessionId = id
       if (this.connection !== connection) { await this.finalize(connection); return }

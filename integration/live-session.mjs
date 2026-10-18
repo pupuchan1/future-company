@@ -29,8 +29,8 @@ ${standby ? 'This voice transport is being prepared for a department handoff. St
 
 export class LiveConversation {
   constructor({ id, caseId, language, apiKey, backend, emit, handoffs, onClose, onClosing, remember,
-    caseState, requestWork, route = 'reception', standby = false, socketFactory = (url, options) => new WebSocket(url, options), closeTimeoutMs = 3000 }) {
-    Object.assign(this, { id, caseId, backend, emit, handoffs, onClose, onClosing, remember, caseState, closeTimeoutMs, requestWork });
+    caseState, requestWork, cancelWork, route = 'reception', standby = false, socketFactory = (url, options) => new WebSocket(url, options), closeTimeoutMs = 3000 }) {
+    Object.assign(this, { id, caseId, backend, emit, handoffs, onClose, onClosing, remember, caseState, closeTimeoutMs, requestWork, cancelWork });
     this.routing = caseState?.routing || { route, language };
     this.history = caseState?.history || [];
     this.seen = caseState?.seen || new Set();
@@ -143,6 +143,7 @@ export class LiveConversation {
     if (this.caseState) this.caseState.routing = next;
     this.emit({ type: 'routing.updated', case_id: this.caseId, session_id: this.id,
       voice_route: this.voiceRoute, voice: this.voice, ...next, source,
+      ...(source === 'decisions' && this.caseState?.handoffBeforeWork && next.route !== this.voiceRoute ? { handoff_before_work: true } : {}),
       ...(source === 'decisions' ? { source_event_id: this.lastInputId } : {}) });
     this.send('session.instructions.append', { delegation_id: null,
       content: `The app has routed this conversation to ${next.route === 'recruiting' ? 'the recruitment interview specialist' : next.route === 'haas' ? 'the Human as a Service coordinator' : 'general reception'}. Speak ${next.language === 'en' ? 'English' : 'Japanese'}. If the department differs from this voice transport, briefly say once that you are connecting the caller and their context will be shared. Do not repeat this transition if it was already said. This is a specialist backend context change; do not say the voice or person changed, or introduce yourself as the new specialist before activation.` });
@@ -195,6 +196,15 @@ export class LiveConversation {
       // commit the department only at delegation using the accumulated context.
       this.emit({ type: 'routing.candidate', case_id: this.caseId,
         ...readRouting(event.event.decision.answers, this.routing), source: 'live_decisions', source_event_id: event.source_event_id });
+      if (this.startWorkRequest()) return;
+      if (this.caseState?.handoffBeforeWork && this.canWork() && !this.busy) {
+        const next = readRouting(event.event.decision.answers, this.routing);
+        if (next.route !== this.routing.route) {
+          this.updateRouting({ ...this.routing, route: next.route }, 'decisions');
+          if (next.route !== this.voiceRoute) this.deferHandoff(`routing:${this.caseState.callerTurnId}`);
+          else this.caseState.deferredDelegations.clear();
+        }
+      }
     }
     if (event.type === 'session.delegation.created' && event.delegation?.target === 'client') {
       if (this.awaitFreshInput) return;
@@ -220,8 +230,12 @@ export class LiveConversation {
 
   startWorkRequest() {
     if (!this.requestWork || !this.canWork() || this.voiceRoute === 'recruiting') return false;
-    if (this.caseState?.fastWorkRequest) return true;
     const text = historyTurns(this.history).filter(turn => turn.role === 'user').at(-1)?.text || '';
+    const existing = this.caseState?.fastWorkRequest;
+    if (existing) {
+      if (/キャンセル|取り消|取消|撤回|やめて|cancel/i.test(text)) { this.cancelWork?.(); return true; }
+      return Boolean(existing.summary && text.startsWith(existing.summary));
+    }
     if (!requestsWork(text)) return false;
     clearTimeout(this.workRequestTimer);
     this.emit({ type: 'backend.started', case_id: this.caseId, live_session_id: this.id, source: 'fast_work_intake' });
@@ -230,9 +244,22 @@ export class LiveConversation {
     return true;
   }
 
+  deferHandoff(delegationId) {
+    const pending = this.caseState.deferredDelegations;
+    if (pending.has(delegationId)) return;
+    pending.add(delegationId);
+    // A client that cannot prepare a candidate still keeps its working voice.
+    const fallback = setTimeout(() => {
+      if (!pending.delete(delegationId) || !this.canWork()) return;
+      pending.clear();
+      void this.enqueue(null, 'handoff_fallback');
+    }, 10000);
+    fallback.unref?.();
+  }
+
   enqueue(delegationId, source, extra = '', resumeRoute = null, isValid = () => true) {
     if (!this.canWork()) return this.queue;
-    if (source === 'delegation' && this.startWorkRequest()) return Promise.resolve({ status: 'human_requested' });
+    if (['delegation', 'handoff', 'handoff_continuation', 'handoff_fallback'].includes(source) && this.startWorkRequest()) return Promise.resolve({ status: 'human_requested' });
     this.pendingWork = (this.pendingWork || 0) + 1;
     this.queue = this.queue.then(async () => {
       if (!this.canWork() || !isValid()) return { status: 'cancelled' };
@@ -269,6 +296,11 @@ export class LiveConversation {
         }
       }
       if (this.closed) return;
+      if (source === 'delegation' && this.caseState?.handoffBeforeWork && this.routing.route !== this.voiceRoute) {
+        // Move this unstarted turn to the new voice instead of reading it on reception.
+        this.deferHandoff(delegationId);
+        return { status: 'waiting_handoff' };
+      }
       const content = await this.backend.run({ caseId: this.caseId, liveSessionId: this.id, ...this.routing, route: resumeRoute || this.routing.route,
         transcript: transcript + extra, handoffs: this.handoffs(), source });
       if (this.closed || !isValid()) return { status: 'cancelled' };
@@ -299,6 +331,8 @@ export class LiveConversation {
         this.remember?.({ type: 'work_slack_delivered', case_id: this.caseId, elapsed_ms: Date.now() - (this.caseState?.fastWorkRequest?.startedAt || Date.now()) });
       } else if (event.name === 'human.completed' && event.data.result?.text) {
         content = (this.routing.language === 'en' ? 'The team replied: ' : '担当者からの回答です。') + event.data.result.text.slice(0, 600);
+      } else if (event.name === 'human.cancelled') {
+        content = this.routing.language === 'en' ? 'I have cancelled your work request.' : '仕事の依頼を取り消しました。';
       } else if (event.name === 'human.unavailable') {
         content = event.data.notification_status === 'sent' ? '担当者からの返信はまだ届いていません。' : 'Slackへの送信を確認できませんでした。担当者への確認が必要です。';
       }

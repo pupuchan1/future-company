@@ -87,6 +87,91 @@ async function fixture(t, { create, handoffTimeoutMs = 30000, prewarmTimeoutMs =
   return { app, api, start, prepare, activate, sockets, creates, runs, closedCases, stateDir };
 }
 
+test('automatic voice handoff preserves the completed business turn without running it again', async (t) => {
+  const f = await fixture(t);
+  const started = await f.start();
+  const oldId = started.body.session.id;
+  f.app.backend.classify = async () => ({ route: 'haas', language: 'ja' });
+  f.sockets.get(oldId).receive({ type: 'session.input_transcript.delta', event_id: 'automatic-input', delta: '担当者に確認をお願いします。' });
+  f.sockets.get(oldId).receive({ type: 'session.delegation.created', delegation: { id: 'automatic-work', target: 'client' } });
+  await until(() => f.runs.length === 1);
+  await pause(0);
+  assert.equal((await f.api(`/api/live/session/${oldId}/handoff`, { sdp: 'v=0\r\n', route: 'haas', automatic: 'true' })).status, 400);
+  const prepared = await f.api(`/api/live/session/${oldId}/handoff`, { sdp: 'v=0\r\n', route: 'haas', automatic: true });
+  assert.equal(prepared.status, 200);
+  assert.equal((await f.activate(prepared)).status, 200);
+  await pause(0);
+  assert.equal(f.runs.length, 1);
+  assert.equal(f.runs[0].route, 'haas');
+  assert.equal(f.sockets.get(oldId).readyState, 3);
+  const candidate = f.sockets.get(prepared.body.session.id);
+  assert.ok(candidate.sent.some(event => event.type === 'session.instructions.append' && /handoff is complete/.test(event.content)));
+  candidate.receive({ type: 'session.input_transcript.delta', event_id: 'next-input', delta: 'ありがとうございます。' });
+  candidate.receive({ type: 'session.delegation.created', delegation: { id: 'next-work', target: 'client' } });
+  await until(() => f.runs.length === 2);
+  assert.equal(f.runs[1].source, 'delegation');
+});
+
+test('early handoff runs the first business turn on the new voice, without waiting for its answer', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.api('/api/live/session', { sdp: 'v=0\r\n', handoff_before_work: 'true' })).status, 400);
+  const started = await f.api('/api/live/session', { sdp: 'v=0\r\n', case_id: 'case-switch', handoff_before_work: true });
+  const oldId = started.body.session.id;
+  f.app.backend.classify = async () => ({ route: 'recruiting', language: 'ja' });
+  const old = f.sockets.get(oldId);
+  old.receive({ type: 'session.input_transcript.delta', event_id: 'early-input', delta: '採用面談をお願いします。' });
+  old.receive({ type: 'session.delegation.created', delegation: { id: 'early-work', target: 'client' } });
+  await pause(20);
+  assert.equal(f.runs.length, 0, 'The reception voice must not start the specialist business turn');
+  const prepared = await f.api(`/api/live/session/${oldId}/handoff`, { sdp: 'v=0\r\n', route: 'recruiting', automatic: true, prewarm: true });
+  assert.equal(prepared.status, 200);
+  assert.equal((await f.activate(prepared)).status, 200);
+  await until(() => f.runs.length === 1);
+  assert.equal(f.runs[0].liveSessionId, prepared.body.session.id);
+  assert.equal(f.runs[0].route, 'recruiting');
+  assert.equal((await f.activate(prepared)).status, 200);
+  await pause(10);
+  assert.equal(f.runs.length, 1, 'Activation replay cannot repeat the business turn');
+  assert.equal(old.readyState, 3);
+});
+
+test('a current native department decision starts handoff without waiting for model delegation', async t => {
+  const f = await fixture(t);
+  const started = await f.api('/api/live/session', { sdp: 'v=0\r\n', case_id: 'case-switch', handoff_before_work: true });
+  const old = f.sockets.get(started.body.session.id);
+  old.receive({ type: 'session.input_transcript.delta', event_id: 'call-recruiter', delta: '採用担当を呼んでください。' });
+  old.receive({ type: 'decision.event', source_event_id: 'call-recruiter', source_event_type: 'session.input_transcript.delta',
+    event: { type: 'decision.completed', decision: { answers: [{ name: 'route', type: 'choice', choice: 'recruiting', confidence: .99 }] } } });
+  f.app.backend.classify = async () => ({ route: 'recruiting', language: 'ja' });
+  old.receive({ type: 'session.delegation.created', delegation: { id: 'late-delegation', target: 'client' } });
+  await pause(20);
+  const prepared = await f.api(`/api/live/session/${started.body.session.id}/handoff`, { sdp: 'v=0\r\n', route: 'recruiting', automatic: true, prewarm: true });
+  assert.equal(prepared.status, 200);
+  assert.equal(f.runs.length, 0);
+  assert.equal((await f.activate(prepared)).status, 200);
+  await until(() => f.runs.length === 1);
+  assert.equal(f.runs[0].liveSessionId, prepared.body.session.id);
+  assert.equal(f.runs[0].route, 'recruiting');
+});
+
+test('failed early candidate continues the unstarted task once on the original voice', async t => {
+  const f = await fixture(t, { create: (_input, count) => {
+    if (count > 1) throw new OpenAI.APIConnectionError({ cause: new TypeError('Candidate unavailable') });
+    return { session: { id: 'original' }, transport: { type: 'webrtc', sdp: 'v=0\r\nanswer' } };
+  } });
+  const started = await f.api('/api/live/session', { sdp: 'v=0\r\n', case_id: 'case-switch', handoff_before_work: true });
+  const old = f.sockets.get(started.body.session.id);
+  f.app.backend.classify = async () => ({ route: 'recruiting', language: 'ja' });
+  old.receive({ type: 'session.input_transcript.delta', event_id: 'request', delta: '採用担当を呼んでください。' });
+  old.receive({ type: 'session.delegation.created', delegation: { id: 'work', target: 'client' } });
+  await pause(20);
+  assert.equal(f.runs.length, 0);
+  assert.equal((await f.api('/api/live/session/original/handoff', { sdp: 'v=0\r\n', route: 'recruiting', automatic: true, prewarm: true })).status, 502);
+  await until(() => f.runs.length === 1);
+  assert.equal(f.runs[0].liveSessionId, 'original');
+  assert.equal(old.readyState, 1);
+});
+
 test('provider connection failures return 502 and store only allowlisted diagnostic metadata', async (t) => {
   const f = await fixture(t, { create: () => { throw new OpenAI.APIConnectionError({
     cause: new TypeError('private input and credential must not be logged', {

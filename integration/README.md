@@ -2,6 +2,11 @@
 
 目的は「GPT Live共通受付 → 採用またはHaaS担当 → 共通MCPで人間へ依頼 → 回答を元担当へ戻す」を通すこと。採用と非採用のHaaS依頼を同じ入口で扱います。pupuのReact画面・Worker/DO/D1・Node 24を結合し、認証付き公開デモを動かしています。配置は[deployment/README.md](../deployment/README.md)、実接続の結果は[VERIFICATION.md](VERIFICATION.md)を参照してください。既存のCloudflare本番Workerへの反映は[Issue #33](https://github.com/pupuchan1/future-company/issues/33)、全体の合流点は[PR #39](https://github.com/pupuchan1/future-company/pull/39)です。
 
+## 担当の声を先に切り替える
+
+新しい受付クライアントは開始時に`handoff_before_work: true`を送る。現在の発話に対応する担当判定で候補Liveを準備し、旧音声の区切りでactivateする。業務Agentの回答は待たず、保留した業務を新しいLiveで一度だけ実行する。従来クライアントはこの項目を送らず、従来の業務回答後の切替を維持する。
+候補接続の失敗時は旧音声で業務を続ける。クライアントが準備できない場合も10秒で旧音声へ戻して処理を開始する。手動言語・同じcase・人間回答の元担当と再送の冪等性を保持する。
+
 ## 起動
 
 ```sh

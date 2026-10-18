@@ -1,5 +1,38 @@
 # 本番の起動と復帰
 
+## クラウド本番
+
+2026-10-18 17:24 JSTの配備記録では、公開入口と固定relayは`https://future-company-voice-node.r74.workers.dev`。
+NodeはCloudflare Containers上で動き、MacのNode4350とトンネルを停止した後にも公開経路を確認した。
+APIと保存先は既存の`https://future-company-demo.r74.workers.dev`、D1とCaseRoomを使い、Accessと秘密設定を維持する。
+最新の配備commit・Worker version・imageは[Issue #33](https://github.com/pupuchan1/future-company/issues/33)と[クラウド配備記録 #142](https://github.com/pupuchan1/future-company/issues/142)で照合する。
+Sitesは同じバックエンドにつながる予備入口として使う。
+
+固定commitで依存とフロントをbuildし、`deployment/cloud/wrangler.jsonc`でクラウドNodeと公開FEを配備する。
+同じcommitの`deployment/wrangler.production.jsonc`から既存API Workerを配備する。
+`NODE_RELAY_ORIGIN`と`HUMAN_MCP_URL`は同じクラウドURLを使い、古いQuick Tunnelへ戻さない。
+Cloudflareアカウントは設定済みのR74を照合する。秘密値は既存のWorker secretから読み、Docker imageへ含めない。
+
+```sh
+npm ci
+npm run build:frontend
+node_modules/.bin/wrangler whoami
+node_modules/.bin/wrangler deploy --dry-run --keep-vars --config deployment/cloud/wrangler.jsonc
+node_modules/.bin/wrangler deploy --keep-vars --config deployment/cloud/wrangler.jsonc
+node_modules/.bin/wrangler deploy --keep-vars --config deployment/wrangler.production.jsonc
+```
+
+実行前に通話終了を確認する。コンテナのimage更新で進行中LiveとSlack返信待ちは終了する。
+同じimageの稼働中Containerへsecretだけを更新しても既存プロセスの環境変数は変わらないため、無通話時の再起動とcase別statusの再取得で反映を確認する。
+無通信30分後に停止し、次の要求で起動する。停止後に進行中の会話は復元しない。
+配備後は公開入口の新規case、所有者証明、case別statusのlive/prewarm/slack/slack_replies、別所有者の拒否、実LiveとSlack回答返却を確認する。
+
+復帰は記録済みの固定commitのimage・両Workerを一組で戻す。
+Mac版へ戻す場合に限り、下記の旧構成を起動し、その回に有効なrelay URLへAPI Workerを更新する。
+状態ファイルとD1を削除・初期化しない。電話実機は本人裁定によりレビュー後の[#34](https://github.com/pupuchan1/future-company/issues/34)に残し、今回の完成条件はSlack回答までとする。
+
+## 以前のMac版と復帰用の記録
+
 配備版と戻り先は[配備記録](../docs/demo-deployment.md)を使う。
 Node、Worker、React assetsを同じ固定commitに揃える。
 実行中の通話が終了したことを画面で確認してから再起動する。
@@ -23,7 +56,7 @@ NodeのAccess変数は`CF_ACCESS_CLIENT_ID`と`CF_ACCESS_CLIENT_SECRET`を使う
 秘密値は既存の私有ファイルから読み、Issue、PR、CLI引数や`VITE_*`へ貼らない。
 既存D1、CaseRoomと本人限定Access、`preview_urls=false`を維持する。
 
-## 配備ホストの現在の起動方法
+## Mac版の起動方法
 
 2026-10-18に確認したホストではlaunchdの`dev.r74.future-company.production`がNodeとQuick Tunnelを起動する。
 ホスト固有の起動定義と秘密設定はGit管理外なので、この節は同じMacでの復帰用。
