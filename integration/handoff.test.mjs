@@ -317,6 +317,11 @@ test('automatic voice handoff preserves a confirmed task without starting anothe
   await pause(0);
   assert.equal(f.runs.length, 1, 'Changing voice must not repeat a completed business task');
   assert.match(next.sent.find(event => event.type === 'session.instructions.append').content, /automatic change only selects the department voice/);
+  assert.equal(next.sent.filter(event => event.type === 'session.commentary.append').length, 1,
+    'The new voice announces itself without requiring another caller utterance');
+  assert.equal((await f.activate(prepared)).status, 200);
+  assert.equal(next.sent.filter(event => event.type === 'session.commentary.append').length, 1,
+    'An activation retry must not repeat the voice introduction');
   next.receive({ type: 'session.input_transcript.delta', event_id: 'new-input', delta: 'I have another question.' });
   next.receive({ type: 'session.delegation.created', delegation: { id: 'new-task', target: 'client' } });
   await until(() => f.runs.length === 2);
@@ -344,6 +349,9 @@ test('a human answer queued during automatic handoff resumes once even before fr
   assert.equal(f.runs[0].source, 'human_event');
   assert.equal(f.runs[0].route, 'haas');
   assert.match(f.runs[0].transcript, /Fictional answer: TypeScript/);
+  await until(() => f.sockets.get(prepared.body.session.id).sent.some(event => event.type === 'session.commentary.append'));
+  assert.equal(f.sockets.get(prepared.body.session.id).sent.filter(event => event.type === 'session.commentary.append').length, 1,
+    'A queued human answer is delivered directly without an extra greeting');
   f.sockets.get(prepared.body.session.id).receive({ type: 'session.delegation.created', delegation: { id: 'duplicate-old-work', target: 'client' } });
   await pause(0);
   assert.equal(f.runs.length, 1);
@@ -368,6 +376,8 @@ test('prewarm prepares harema during old work, then catches up only new history 
   assert.equal(f.creates[1].session.audio.output.voice, 'harema');
   assert.equal(f.creates[1].session.input[0].content[0].text, '採用面談を希望します。');
   const next = f.sockets.get(prepared.body.session.id);
+  assert.equal(next.sent.filter(event => event.type === 'session.commentary.append').length, 0,
+    'A prepared voice must stay silent before activation');
   const busy = await f.activate(prepared);
   assert.equal(busy.status, 409);
   assert.equal(busy.body.code, 'busy');
