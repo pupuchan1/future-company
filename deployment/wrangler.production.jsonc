@@ -4,6 +4,7 @@
   "account_id": "a35a4c201dc020caa185829b1d74acbf",
   "main": "./worker-entry.ts",
   "compatibility_date": "2025-08-03",
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "workers_dev": true,
   "preview_urls": false,
   // Match the existing namespace created through cf CLI.

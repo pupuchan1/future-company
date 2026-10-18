@@ -4,6 +4,7 @@
   "account_id": "a35a4c201dc020caa185829b1d74acbf",
   "main": "./worker.mjs",
   "compatibility_date": "2026-10-18",
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "workers_dev": true,
   "preview_urls": false,
   "assets": {
