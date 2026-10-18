@@ -8,6 +8,7 @@ import type { BackendEnv, RoomResult } from './case-room'
 import { authorizeDemoStaff, isDemoStaffConfigured, requireStaffIdentity, staffSessionCookie } from './auth'
 import type { AuthorizeStaff, StaffAuthEnv } from './auth'
 import { persistCase } from './persistence'
+import { issueBridgeProof } from './bridge-proof'
 
 type ApiOptions = { authorizeStaff?: AuthorizeStaff }
 type AppEnv = { Bindings: BackendEnv & StaffAuthEnv }
@@ -135,6 +136,13 @@ export function createBackendApi(options: ApiOptions = {}): Hono<AppEnv> {
   })
 
   api.get('/cases/:id', async (c) => c.json({ case: unwrap(await c.env.CASES.getByName(caseId(c)).snapshot(await visitor(c))) }))
+  api.post('/cases/:id/bridge-token', async (c) => {
+    const id = caseId(c)
+    const state = unwrap(await c.env.CASES.getByName(id).snapshot(await visitor(c)))
+    if (state.status === 'resolved') throw new ApiError(409, 'case_resolved', 'This case is already resolved.')
+    if (!isDemoStaffConfigured(c.env)) throw new ApiError(503, 'staff_auth_unconfigured', 'Configure the server-only bridge credential first.')
+    return c.json({ caseId: id, bridgeToken: await issueBridgeProof(id, c.env.STAFF_API_TOKEN), expiresIn: 900 })
+  })
   api.post('/cases/:id/recruitment/submit', async (c) => {
     const input = await commandInput(c, 64 * 1024)
     const roleInterest = textField(input.data.roleInterest, 'roleInterest')
@@ -256,7 +264,8 @@ export function createBackendApi(options: ApiOptions = {}): Hono<AppEnv> {
     const actor = await staff(c)
     const id = idField(input.data.caseId, 'caseId')
     const state = unwrap(await c.env.CASES.getByName(id).snapshot(actor))
-    if (state.kind !== 'recruitment' && typeof input.data.stockAvailable !== 'boolean') throw new ApiError(400, 'invalid_input', 'stockAvailable must be a boolean.')
+    const linked = state.requests.find(item => item.id === c.req.param('id'))?.origin
+    if (!linked && state.kind !== 'recruitment' && typeof input.data.stockAvailable !== 'boolean') throw new ApiError(400, 'invalid_input', 'stockAvailable must be a boolean.')
     if (input.data.stockAvailable !== undefined && typeof input.data.stockAvailable !== 'boolean') throw new ApiError(400, 'invalid_input', 'stockAvailable must be a boolean when provided.')
     const stockAvailable = state.kind !== 'recruitment' && typeof input.data.stockAvailable === 'boolean' ? { stockAvailable: input.data.stockAvailable } : {}
     let answer: string
@@ -270,6 +279,26 @@ export function createBackendApi(options: ApiOptions = {}): Hono<AppEnv> {
       metadata = { answerLanguage: result.language, simulated: input.data.simulated }
     } else answer = textField(input.data.answer, 'answer')
     return c.json({ case: await execute(c.env, id, actor, input.commandId, input.expectedRevision, { type: 'answer', requestId: idField(c.req.param('id'), 'requestId'), answer, ...stockAvailable, ...metadata }) })
+  })
+  api.post('/staff/cases/:id/handoffs', async (c) => {
+    const input = await commandInput(c, 64 * 1024)
+    const route = input.data.route
+    if (route !== 'reception' && route !== 'recruiting' && route !== 'haas') throw new ApiError(400, 'invalid_input', 'Unknown source route.')
+    return c.json({ case: await execute(c.env, caseId(c), await staff(c), input.commandId, input.expectedRevision, {
+      type: 'register_handoff', handoffId: idField(input.data.handoffId, 'handoffId'), nodeCaseId: idField(input.data.nodeCaseId, 'nodeCaseId'), route,
+      summary: textField(input.data.summary, 'summary'), task: textField(input.data.task, 'task'),
+      targetRole: textField(input.data.targetRole, 'targetRole', 500), expectedResult: textField(input.data.expectedResult, 'expectedResult', 500)
+    }) })
+  })
+  api.post('/staff/cases/:id/handoffs/:handoffId/cancel', async (c) => {
+    const input = await commandInput(c)
+    return c.json({ case: await execute(c.env, caseId(c), await staff(c), input.commandId, input.expectedRevision, { type: 'cancel_handoff', handoffId: idField(c.req.param('handoffId'), 'handoffId') }) })
+  })
+  api.post('/staff/cases/:id/handoffs/:handoffId/delivery', async (c) => {
+    const input = await commandInput(c)
+    const status = input.data.status
+    if (status !== 'queued' && status !== 'agent_completed' && status !== 'live_submitted' && status !== 'failed') throw new ApiError(400, 'invalid_input', 'Unknown delivery status.')
+    return c.json({ case: await execute(c.env, caseId(c), await staff(c), input.commandId, input.expectedRevision, { type: 'delivery', handoffId: idField(c.req.param('handoffId'), 'handoffId'), status }) })
   })
   return api
 }
