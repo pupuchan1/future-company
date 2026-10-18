@@ -7,7 +7,6 @@ export interface OrbMotion {
   wave: number[]
   phase: number
 }
-export const ORB_DEFORMATION = 2
 export const createOrbMotion = (): OrbMotion => ({ input: 0, output: 0, wave: Array(32).fill(0), phase: 0 })
 const clamp = (n: number, low = 0, high = 1) => Number.isFinite(n) ? Math.max(low, Math.min(high, n)) : 0
 
@@ -35,17 +34,4 @@ export function advanceOrbMotion(previous: OrbMotion, input: AudioSignal = SILEN
     input: smooth(previous.input, inputLevel), output: smooth(previous.output, outputLevel), wave,
     phase: previous.phase + dt * (.22 + inputLevel * .65 + outputLevel * .95),
   }
-}
-
-/** Small, smooth deviations keep the silhouette recognizably circular at every volume. */
-export function orbContour(motion: OrbMotion, radius = 76, strength = ORB_DEFORMATION): [number, number][] {
-  return Array.from({ length: 96 }, (_, index) => {
-    const angle = index / 96 * Math.PI * 2
-    const position = index / 96 * motion.wave.length
-    const from = Math.floor(position)
-    const wave = (motion.wave[from % motion.wave.length] ?? 0) * (1 - position % 1) + (motion.wave[(from + 1) % motion.wave.length] ?? 0) * (position % 1)
-    const ripple = Math.sin(angle * 3 + motion.phase * 2.2) * .55 + Math.sin(angle * 5 - motion.phase * 1.4) * .25 + wave * .8
-    const r = radius + motion.input * 3 + motion.output * 7 + strength * motion.input * 5 * ripple
-    return [128 + Math.cos(angle) * r, 128 + Math.sin(angle) * r]
-  })
 }
