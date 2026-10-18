@@ -174,7 +174,12 @@ export function createProductionRelay({ target = 'http://127.0.0.1:4320', secret
           const id = value.session?.id;
           if (value.case_id !== caseId || !sessionPattern.test(id || '') || (sessionCases.has(id) && sessionCases.get(id) !== caseId)) throw new Error('Invalid upstream session binding.');
           if (['activate', 'language'].includes(route.kind) && id !== route.sessionId) throw new Error('Invalid activation response.');
-          sessionCases.set(id, caseId);
+          // Updates must not recreate a binding retired while the reply was in flight.
+          if (route.kind === 'create' || route.kind === 'handoff') sessionCases.set(id, caseId);
+          if (route.kind === 'activate' && value.active === true && value.old_session_id !== id
+            && sessionCases.get(value.old_session_id) === caseId) {
+            sessionCases.delete(value.old_session_id);
+          }
         } else if (route.kind === 'close') sessionCases.delete(route.sessionId);
       }
       json(res, response.status, value);
