@@ -70,14 +70,17 @@ export function ReceptionPage() {
         {text("本文へ移動", "Skip to content")}
       </a>
       <header className="site-header">
-        <a className="brand" href="/">
-          <span className="brand-mark" aria-hidden="true">
+        <a className="brand" href="/" aria-label={text("株式会社HaaS ホーム", "HaaS home")}>
+          <span className="brand-mark brand-reserved" aria-hidden="true">
             H<span>↗</span>
           </span>
-          <span className="haas-brand-name">
+          <span className="haas-brand-name brand-reserved" aria-hidden="true">
             {text("株式会社HaaS", "HaaS, Inc.")}
             <small lang="en">Human as a Service.</small>
           </span>
+          <svg className="haas-brand-logo" viewBox="190 165 1608 450" aria-hidden="true">
+            <image href="/images/haas-logo.png" width="1983" height="793" />
+          </svg>
         </a>
         <span className="reception-header-label">
           {text("AI総合受付", "AI RECEPTION")}
