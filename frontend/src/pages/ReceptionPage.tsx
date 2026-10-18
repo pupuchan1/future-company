@@ -121,7 +121,7 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
           >
             <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} conversation={s.conversation} onOpenConversation={openConversation} />
             <div className="reception-controls">
-            {!hasConversation && <ReceptionConsultation language={language} />}
+            {!hasConversation && <ReceptionConsultation language={language} showWelcome={s.phase === "idle"} />}
             <button
               className="button primary reception-start"
               onClick={() => void toggleCall()}
