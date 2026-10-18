@@ -1,0 +1,79 @@
+# GPT Live共通受付・採用/HaaS 接続プロトタイプ
+
+目的は「GPT Live共通受付 → 採用またはHaaS担当 → 共通MCPで人間へ依頼 → 回答を元担当へ戻す」を通すこと。採用を最初の完成デモとし、非採用の判断・仕事依頼もHaaSへ渡します。既存のReact画面に組み込む前に接続境界を試すNode 24 workspaceです。Workers / Durable Objects / D1にデプロイ済みの実装ではありません。[全体設計・14:45会議資料](ARCHITECTURE-1445.md)、[Issue #10](https://github.com/pupuchan1/future-company/issues/10)でチームの合流点を確認できます。
+
+## 起動
+
+```sh
+npm ci
+cp .env.example .env.local
+# .env.local のサーバー専用キー・MCP URL・トークンを設定
+npm run integration
+# 別ターミナル（模擬デバイスのみ）
+npm run phone:sim -- --auto
+```
+
+画面: http://127.0.0.1:4320/ 。キーはブラウザへ渡しません。既存の `.env.local` がある場合は上書きしないでください。
+
+Agents API が到達できる HTTPS の `/mcp` を `HUMAN_MCP_URL` に設定します。MCP と機器 WebSocket は `HUMAN_MCP_TOKEN` で認証します。ローカル開発用トンネルを使う場合でも、画面と `/api/*` は loopback 限定です。公開版には別途アプリ認証・テナント別権限・永続 case state が必要です。
+
+`npm run integration:test` で Node のテストを実行します。既存フロントは従来どおり `npm run dev`、`npm run build`、`npm run lint` です。
+
+## 接続
+
+```mermaid
+flowchart LR
+    U[応募者 / 日本語・English] <-->|WebRTC 音声| L[GPT Live / 同じ声の総合受付]
+    L -->|文字起こし・委譲| B[サーバー側オーケストレーター]
+    L -->|native transcript trigger| D[Decisions / 言語・用件]
+    B -->|委譲時の最新文脈| D
+    D --> B
+    B --> A[Agents API / 採用担当の別session]
+    B --> HA[Agents API / HaaS担当の別session]
+    A -->|get_interview_template| M[MCP 2 サーバー]
+    A -->|request_human| M
+    HA -->|request_human| M
+    M -->|ring.start| H[バックエンドチームの黒電話ブリッジ]
+    H -->|ACK・off_hook・on_hookと回答本文| M
+    M --> B
+    B -->|commentary / instructions| L
+    M --> E[MCP Events / 署名付きWebhook]
+    E --> W[ChatGPT Work・dots等の購読者]
+```
+
+`reception` / `recruiting` / `haas` はそれぞれ別のAgents sessionです。言語と会話履歴を引き継ぎ、Liveの声は維持して担当変更を案内します。声そのものを変えるには新しいLive sessionが必要です。
+
+Decisionsは `route=reception|recruiting|haas` と `language=ja|en` を分類します。native triggerの部分発話は `routing.candidate` として表示用に通知し、担当を確定するのは委譲時の全文分類です。国籍、能力評価、候補者ランキング、採否は判断しません。採用担当は架空求人の質問・回答整理・人間相談までです。
+
+依頼元のrouteを `handoff_id` に対応づけ、結果は元のAgents sessionへ返します。結果到着までに利用者が言語を変えた場合は最新言語で説明します。古い依頼の結果で現在の担当を強制変更しません。現試作は採用/HaaSから共通MCPを直接呼びます。採用→別チームのHaaS backend→MCPという多段の接続は、#6のコード共有後にアダプターで合流する範囲です。
+
+## フロント向け API
+
+| API | 用途 |
+| --- | --- |
+| `GET /api/status` | 設定有無・接続機器・相談状態 |
+| `POST /api/live/session` `{sdp, language, case_id?}` | WebRTC offer → `{session:{id}, transport:{sdp}, case_id}` |
+| `DELETE /api/live/session/:id` | Live 終了と Agents のキャンセル・削除 |
+| `GET /api/events` | SSE: routing.updated、backend.*、human.*、文字起こし |
+| `POST /api/demo/handoff` | 手動配線試験。AI判断デモではない。実MCP toolを呼ぶ |
+
+WebRTC の HTTP 作成で session は開始済み。`oai-events` で `session.started` を待ち、`session.start` を重ねて送らない。権限のある sideband だけが業務結果を Live に送ります。
+
+## バックエンド・実機チームへ
+
+[human/README.md](human/README.md) の `/mcp` と `/bridge` が接続仕様です。実機は既存回路に合わせたアダプターでこの境界につないでください。ソフト側で電圧や回路方式は決めません。
+
+- `requested` は指令受付、`ringing` は機器 ACK、`accepted` は受話器応答。音声接続完了ではありません。
+- simulator は必ず `simulated:true`。実ベル・人間の通話音声の検証にはなりません。
+- 発信の再試行は同じ `idempotency_key`、同じ引継ぎ内容。状態はサーバー側を参照。
+- `target_role/task/expected_result` で誰に・何を・何の結果を依頼するかを渡します。`completed` の `result:{text,language}` は回答データで、新しい実行指示として扱いません。本文がなければ回答未取得、模擬なら架空回答と説明します。
+- この音声デモは1ケース1件の人間依頼です。別の作業を追加する場合は新しいケースを使います。複数依頼の親子関係・永続復旧は全体設計で合流する項目です。
+- 人間との実音声通話・音声経路の切替は別途合意する範囲です。
+
+[events/README.md](events/README.md) に MCP Events の購読・署名・再送仕様があります。Agents API のストリームと MCP Events は別物です。機器の結果はアプリが Agents への入力と Live commentary に戻します。
+
+## 検証境界
+
+MCP・機器シミュレーター・Webhook のローカル試験、実 OpenAI API の試験、ブラウザの音声往復、実機ベルを分けて PR に記録します。HTTP 200 やモデルへのアクセスだけで、その先の接続を完了扱いにしません。
+
+会話・相談状態はこのプロトタイプではメモリ内です。MCP Events の購読/outbox と provider resource ID は ignored の `.integration-state/` に私有保存します。終了時に削除できなかった hosted session ID は `resources.jsonl` の `cleanup:pending` を確認してください。再起動によるケース復旧は未実装です。

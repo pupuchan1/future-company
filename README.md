@@ -1,94 +1,46 @@
-# Future Company
+# Future Company — 共通AI音声受付
 
-採用面談と社員への確認依頼を扱うCloudflare Workers・Honoバックエンド。案件の正本はSQLite Durable Objects、社員一覧の保存先はD1。
+音声の入口を一つにまとめ、発話の内容をAIが判定して採用AgentまたはHaaS Agentへ渡します。Reactは会話・担当・ツールや人への依頼状況を表示します。
 
 ## ローカル起動
 
-```sh
-bun install --frozen-lockfile
-bun run db:migrate:local
-bun run dev --host 127.0.0.1
-```
-
-Viteが表示するURLで起動する。ローカルDBだけを使い、Cloudflare accountやremote database IDは設定していない。
-
-社員APIを使う場合は、gitignore対象の`.dev.vars`へ`STAFF_API_TOKEN`を設定してから起動する。32〜200文字の英数字・`_`・`-`を使い、既存ファイルを上書きしない。`POST /api/v1/staff/session`にBearerで渡すと、固定のデモ社員としてログインできるHttpOnly cookieを取得する。未設定時は社員APIを503で拒否する。トークンをFEソース・URLへ埋め込まない。
-
-## 採用APIのデモ
-
-ローカルサーバーを起動し、サーバーと同じ`STAFF_API_TOKEN`を環境変数にexportしてから実行する。`curl`、`jq`、`uuidgen`が必要。`BASE_URL`はViteが表示するURLに合わせる。
-
-```sh
-BASE_URL=http://127.0.0.1:5173 bash scripts/demo-recruitment.sh
-```
-
-採用案件作成・面談送信・社員ログイン・引き受け・模擬回答の保存まで進み、最後に保存後の案件を表示する。cookie・案件ID・依頼ID・revisionは自動で引き継ぐ。実行ごとに新しい案件を作り、トークンはファイルへ保存しない。一時cookieは終了時に削除する。実AIや電話への接続は含まない。
-
-## 検証
-
-```sh
-bun run typecheck
-bun run test
-bun run build
-```
-
-`typecheck`は`bun run cf-typegen`でWorker型も生成する。テストはローカルworkerd・DO・D1とBunで実行し、実OpenAIや電話は呼び出さない。
-
-API契約は[docs/backend-api.md](docs/backend-api.md)、保存・環境設定・FEと音声担当への接続条件は[docs/backend-integration.md](docs/backend-integration.md)を参照。
-
-採用面談送信、社員の引き受け・回答、D1一覧保存まで接続済み。Live・AgentsのHTTP経路は登録済みだが、sideband・業務ツール・音声会話の再開は別担当との接続待ち。React FE、MCP Events、黒電話、remoteへのdeployも実接続・検証待ち。
-## Reactフロントエンド
-
-フロントエンドは`frontend/`に配置しています。React + TypeScript + Viteの構成です。Workerとは別の開発サーバーで起動します。ルートの`dev`・`build`・`typecheck`・`preview`はWorker用、`:frontend`付きのコマンドはReact用です。
-
-## 開発を始める
-
-Node.js 24.14 以上の 24 系と npm を使用します。nvm を使う場合は `nvm install` / `nvm use` で切り替えられます。
-
-リポジトリのルートで実行してください。
+Node.js 24.14以上の24系を使用します。
 
 ```sh
 npm ci
-npm run dev:frontend
+npm run db:migrate:local
+npm run dev
 ```
 
-ターミナルに表示される URL（通常は http://localhost:5173）を開きます。
-最初に編集する画面は `frontend/src/pages/HomePage.tsx` です。
+同じcheckoutでReact（http://127.0.0.1:5173）、音声・Agents・MCPのNodeサーバー（4320）、Workers/Hono/DO/D1（8787）を起動します。終了はCtrl+Cです。既に同じポートを使う開発サーバーがある場合は終了してから起動してください。
 
-## コマンド
+秘密設定はルートの `.env.local` に置きます（Git管理外）。変数名は [.env.example](.env.example) を参照してください。Node側にだけ渡し、VITE_へAPIキーを置きません。設定がない場合もローカルの画面とAPIの確認はでき、AI音声の開始は無効になります。
+
+### コマンド
 
 | コマンド | 内容 |
 | --- | --- |
-| `npm run dev:frontend` | React開発サーバーを起動 |
-| `npm run build:frontend` | Reactの型チェックと本番ビルド。出力先は `frontend/dist/` |
-| `npm run lint` | Oxlint でコードをチェック |
-| `npm run typecheck:frontend` | ReactのTypeScript型チェック |
-| `npm run preview:frontend` | Reactのビルド済み画面をローカルで確認 |
+| `npm run dev` | FE・音声BE・Workerをまとめて起動 |
+| `npm run dev:frontend` | Reactのみ起動 |
+| `npm run dev:worker` | ローカルWorkerのみ起動 |
+| `npm run integration` | 音声BEのみ起動 |
+| `npm run build` | ReactとWorkerの本番ビルド |
+| `npm run typecheck` | ReactとWorkerの型チェック |
+| `npm run test:frontend` | Reactの接続・状態テスト |
+| `npm run integration:test` | 音声・MCP・委譲のテスト |
+| `npm run test:worker` | DO/D1・認証・案件APIのテスト（Bunも必要） |
+| `npm run db:migrate:local` | ローカルD1のmigration |
 
-Reactはnpm workspacesを使用します。npmの依存関係はルートの`package-lock.json`、Bunの依存関係は`bun.lock`で管理します。ルートとfrontendのpackage.jsonを変更した場合は両方のlockfileを更新してください。
-パッケージ追加はルートから `npm install <package> -w frontend` を実行してください。
+## 取り込んだ実装と境界
 
-## 構成
+- PR #15: `frontend/` のReact UIとWebRTC/SSE接続。
+- PR #4: `integration/` の共通音声受付、Decisions、採用/HaaS Agents、共通MCP・模擬電話。
+- PR #12: `src/backend/` のHono案件API、社員認証、DO/D1永続化。
 
-```text
-frontend/
-├── public/           # そのまま配信する画像など
-├── src/
-│   ├── assets/       # import して使う画像など
-│   ├── components/   # 共通 UI 部品
-│   ├── features/     # 機能ごとの UI・処理
-│   ├── hooks/        # 共通カスタムフック
-│   ├── lib/          # API クライアント・共通処理
-│   ├── pages/        # 画面
-│   ├── styles/       # 共通 CSS
-│   ├── types/        # 共通の型定義
-│   ├── App.tsx       # アプリ全体の組み立て
-│   └── main.tsx      # エントリーポイント
-└── .env.example      # 環境変数の設定例
-```
+FEの `/api/status`・`/api/events`・`/api/live/*` はNodeへ、`/api/v1/*` はWorkerへ同一originで転送します。バックエンドの担当切替を表示し、FEでは発話から担当を決めません。
 
-`@/` で `frontend/src/` を参照できます（例: `@/components/Button`）。
-画面追加や API 接続は今後の実装に合わせて追加してください。ルーターや状態管理ライブラリはまだ導入していません。
+Nodeのcase/handoffとWorkerのcase/requestを対応付ける結果返却adapterは別の結合点です。両BEを起動できることを、AI会話とDO/D1の保存まで結合済みという意味にはしません。元のローカルデモはソースとテストを保持し、一般利用者の音声入口には表示しません。
 
-環境変数が必要になったら `frontend/.env.example` を `frontend/.env.local` にコピーしてください。
-`VITE_` から始まる環境変数はブラウザに公開されます。秘密鍵やサーバー専用の認証情報は保存しないでください。
+実APIの音声往復にはサーバー側のOpenAI設定と外部から到達できる認証付きMCP URLが必要です。黒電話の実機は別担当です。
+
+詳細: [音声BE](integration/README.md) / [React接続](frontend/LIVE-INTEGRATION.md) / [案件API](docs/backend-api.md) / [Workers接続](docs/backend-integration.md)。

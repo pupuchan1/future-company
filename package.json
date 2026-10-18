@@ -3,24 +3,35 @@
   "type": "module",
   "private": true,
   "version": "0.0.0",
-  "workspaces": ["frontend"],
+  "workspaces": [
+    "frontend",
+    "integration"
+  ],
   "engines": {
     "node": ">=24.14.0 <25"
   },
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "$npm_execpath run build && vite preview",
+    "dev": "node scripts/dev-local.mjs",
+    "build": "npm run build:frontend && npm run build:worker",
+    "preview": "npm run preview --workspace frontend --",
     "deploy": "$npm_execpath run build && wrangler deploy",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
-    "typecheck": "bun run cf-typegen && tsc --noEmit",
+    "typecheck": "npm run typecheck:frontend && npm run typecheck:worker",
     "test": "node --experimental-strip-types --test src/backend/backend.test.ts src/backend/api.test.ts src/backend/persistence.test.ts src/backend/persistence.integration.test.ts && bun test src/backend/auth.test.ts src/backend/mcp-events.test.ts src/backend/openai.test.ts",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "dev:frontend": "npm run dev --workspace frontend --",
     "build:frontend": "npm run build --workspace frontend",
     "lint": "npm run lint --workspace frontend",
     "typecheck:frontend": "npm run typecheck --workspace frontend",
-    "preview:frontend": "npm run preview --workspace frontend --"
+    "preview:frontend": "npm run preview --workspace frontend --",
+    "dev:worker": "vite --host 127.0.0.1 --port 8787 --strictPort",
+    "build:worker": "vite build",
+    "typecheck:worker": "npm run cf-typegen && tsc --noEmit",
+    "test:frontend": "node --test frontend/tests/*.test.ts",
+    "test:worker": "node --experimental-strip-types --test src/backend/backend.test.ts src/backend/api.test.ts src/backend/persistence.test.ts src/backend/persistence.integration.test.ts && bun test src/backend/auth.test.ts src/backend/mcp-events.test.ts src/backend/openai.test.ts",
+    "integration": "npm run start --workspace integration",
+    "integration:test": "npm run test --workspace integration",
+    "phone:sim": "npm run phone:sim --workspace integration --"
   },
   "dependencies": {
     "hono": "^4.13.13"

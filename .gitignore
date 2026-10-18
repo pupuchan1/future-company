@@ -11,13 +11,11 @@ dist-server/
 .idea/workspace.xml
 .idea/usage.statistics.xml
 .idea/shelf
-
 # deps
 node_modules/
 .wrangler
 coverage/
 *.tsbuildinfo
-
 # env
 .env
 .env.production
@@ -27,7 +25,6 @@ coverage/
 !.dev.vars.example
 !.env.example
 /worker-configuration.d.ts
-
 # logs
 logs/
 *.log
@@ -36,6 +33,6 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
-
 # misc
 .DS_Store
+.integration-state/
