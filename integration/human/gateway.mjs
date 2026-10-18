@@ -64,6 +64,7 @@ export function createHumanGateway({
   onEvent,
   handleEventRpc,
   notifyRecruiter,
+  completeInterview,
   allowedOrigins = [],
   onError = () => {},
   ...serviceOptions
@@ -106,6 +107,14 @@ export function createHumanGateway({
       inputSchema: z.object({ case_id: z.string().trim().min(1).max(160), applicant_summary: z.string().trim().min(1).max(1000).optional() }).strict(),
       annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false },
     }, toolResult(notifyRecruiter));
+    if (completeInterview) server.registerTool('complete_interview', {
+      description: 'After the caller explicitly asks to end the interview, send one concise interview completion report to the fixed recruiting Slack channel. Include only caller-stated experience, a factual interview summary and next actions for the human recruiter. Do not score, rank, recommend hiring or invent facts. Sent is delivery, not a hiring decision.',
+      inputSchema: z.object({ case_id: z.string().trim().min(1).max(160),
+        applicant_summary: z.string().trim().max(1000).optional(),
+        interview_summary: z.string().trim().min(1).max(1800),
+        next_actions: z.array(z.string().trim().min(1).max(300)).max(6) }).strict(),
+      annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false },
+    }, toolResult(completeInterview));
     server.registerTool('find_human_experts', {
       description: 'Find team-supplied skills matching a task. Availability remains unknown until a person accepts; an online shared phone is not confirmation of assignment.',
       inputSchema: z.object({ required_skills: z.array(z.enum(humanSkills)).min(1).max(6) }).strict(),
