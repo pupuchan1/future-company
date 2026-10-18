@@ -17,6 +17,9 @@ export class VoiceNode extends DurableObject {
 
   async ready() {
     const container = this.ctx.container;
+    // Durable Object-managed containers do not roll out a new image automatically.
+    const running = await container.inspect();
+    if (running?.image && running.image !== container.images.base) await container.destroy('Voice Node image update');
     if (!container.running) {
       const env = Object.fromEntries(ENVIRONMENT.filter(name => this.env[name]).map(name => [name, this.env[name]]));
       container.start({ image: container.images.base, instance: 'lite', enableInternet: true, env });
