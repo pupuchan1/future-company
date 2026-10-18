@@ -137,6 +137,8 @@ export function applyCommand(state: StoredCase, actor: Actor, command: Command, 
       const request = next.requests.find(item => item.origin?.handoffId === command.handoffId)
       if (!request || request.status !== 'answered' || !request.result) throw new ApiError(409, 'answer_required', 'Only a saved answer on an active linked request can be delivered.')
       const order = ['pending', 'queued', 'agent_completed', 'live_submitted']
+      if (command.status === 'queued' && request.delivery?.status !== 'pending') throw new ApiError(409, 'delivery_in_progress', 'Another consumer already reserved this result.')
+      if (request.delivery?.status === 'live_submitted' && command.status !== 'live_submitted') throw new ApiError(409, 'already_delivered', 'A submitted result cannot be overwritten.')
       if (request.delivery?.status === 'failed' || (command.status !== 'failed' && request.delivery && order.indexOf(command.status) < order.indexOf(request.delivery.status))) throw new ApiError(409, 'stale_delivery', 'Delivery cannot be repeated or moved backwards.')
       request.delivery = { status: command.status, updatedAt: now }
       break

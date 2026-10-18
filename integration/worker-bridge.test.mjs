@@ -24,7 +24,7 @@ function fixture({ deliver = async () => ({ status: 'live_submitted' }), conflic
   const receipts = [];
   const fetcher = async (url, options) => {
     assert.equal(options.headers.Authorization, `Bearer ${token}`);
-    assert.equal(options.redirect, 'manual');
+    assert.equal(options.redirect, 'error');
     const path = url.pathname.slice('/api/v1'.length);
     const body = options.body ? JSON.parse(options.body) : null;
     calls.push({ path, body });
@@ -40,7 +40,8 @@ function fixture({ deliver = async () => ({ status: 'live_submitted' }), conflic
     if (conflict && path.endsWith('/handoffs')) { conflict = false; state.revision++; return error(409, 'revision_conflict'); }
     if (body.expectedRevision !== state.revision) return error(409, 'revision_conflict');
     if (path.endsWith('/handoffs')) {
-      state.requests.push({ id: `request-${body.handoffId}`, status: 'pending', origin: { nodeCaseId: body.nodeCaseId, handoffId: body.handoffId, route: body.route }, summary: body.summary });
+      state.requests.push({ id: `request-${body.handoffId}`, status: 'pending', origin: { nodeCaseId: body.nodeCaseId, handoffId: body.handoffId,
+        route: body.route, targetRole: body.targetRole, expectedResult: body.expectedResult }, summary: body.summary, question: body.task });
     } else if (path.endsWith('/claim')) {
       const request = state.requests.find(r => path.includes(`/${r.id}/`));
       if (request.status !== 'pending') return error(409, 'already_claimed');
@@ -55,6 +56,7 @@ function fixture({ deliver = async () => ({ status: 'live_submitted' }), conflic
     } else if (path.endsWith('/delivery')) {
       const request = state.requests.find(r => path.includes(`/${r.origin.handoffId}/`));
       if (request.status !== 'answered') return error(409, 'answer_required');
+      if (body.status === 'queued' && request.delivery?.status !== 'pending') return error(409, 'delivery_in_progress');
       request.delivery = { status: body.status };
     } else throw new Error(`Unexpected external endpoint ${path}`);
     state.revision++;
@@ -339,4 +341,75 @@ test('a later gateway response cannot replace an earlier saved staff answer in s
   f.bridge.closeCase('case-one');
   assert.equal(f.bridge.overlayRequests([later.data])[0], later.data);
   f.bridge.close();
+});
+
+test('cached Worker result survives stale snapshots and a failed reservation without exposing an unsaved phone answer', async () => {
+  const f = fixture({ beforeRequest: ({ body }) => {
+    if (body?.status === 'queued') throw new Error('Synthetic reservation failure');
+  } });
+  await f.attach();
+  const first = requested();
+  first.data = { ...first.data, status: 'requested', revision: 1, device_id: 'black-phone-1' };
+  await f.bridge.humanEvent(first, 'recruiting');
+  const raw = { ...first.data, status: 'completed', revision: 4, result };
+  const [pending] = f.bridge.overlayRequests([raw]);
+  assert.equal(pending.status, 'requested');
+  assert.equal(pending.result, undefined);
+  await f.bridge.humanEvent({ name: 'human.accepted', data: { ...first.data, status: 'accepted', revision: 100 } }, 'haas');
+  const snapshot = f.snapshots.get('case-one');
+  const answer = { text: 'Saved employee answer before dispatch.', language: 'en' };
+  Object.assign(snapshot.requests[0], { status: 'answered', result: answer, simulated: false, delivery: { status: 'pending' } });
+  snapshot.revision++;
+  f.sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'case.snapshot', snapshot })));
+  await f.bridge.cases.get('case-one').deliveries.get('handoff-one');
+  assert.equal(f.deliveries.length, 0);
+  const stale = { ...raw, revision: 101, source_route: 'haas' };
+  const [official] = f.bridge.overlayRequests([stale]);
+  assert.ok(official.revision > stale.revision);
+  assert.equal(official.source_route, 'recruiting');
+  assert.equal(official.task, first.data.task);
+  assert.equal(official.target_role, first.data.target_role);
+  assert.equal(official.expected_result, first.data.expected_result);
+  assert.deepEqual(official.result, answer);
+  assert.equal(official.simulated, false);
+  assert.equal(official.worker_revision, snapshot.revision);
+  f.sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'case.snapshot', snapshot: { id: 'case-one', revision: 0, requests: [] } })));
+  assert.deepEqual(f.bridge.overlayRequests([stale])[0].result, answer);
+  assert.equal(f.bridge.overlayRequests([stale])[0].worker_revision, snapshot.revision);
+  f.bridge.close();
+});
+
+test('Cloudflare Access headers are limited to the configured HTTPS Worker for both HTTP and WebSocket', async () => {
+  const access = { accessClientId: 'fixture-id.access', accessClientSecret: 'fixture-secret' };
+  const proof = await issueBridgeProof('case-one', token);
+  for (const url of ['https://worker.example.invalid', 'http://127.0.0.1:8787']) {
+    const secure = new URL(url).protocol === 'https:';
+    const calls = [];
+    const check = (target, options) => {
+      assert.equal(target.host, new URL(url).host);
+      assert.equal(options.headers.Authorization, `Bearer ${token}`);
+      assert.equal(options.headers['CF-Access-Client-Id'], secure ? access.accessClientId : undefined);
+      assert.equal(options.headers['CF-Access-Client-Secret'], secure ? access.accessClientSecret : undefined);
+      calls.push(target.protocol);
+    };
+    const bridge = new WorkerBridge({ url, token, ...access, deliver: async () => ({ status: 'live_submitted' }),
+      fetcher: async (target, options) => {
+        check(target, options);
+        assert.equal(options.redirect, 'error');
+        return Response.json({ case: { id: 'case-one', revision: 0, status: 'active', requests: [] } });
+      }, socketFactory: (target, options) => {
+        check(target, options);
+        assert.equal(options.followRedirects, false);
+        const socket = new EventEmitter(); socket.close = () => {};
+        return socket;
+      },
+    });
+    try {
+      await bridge.attachCase('case-one', proof);
+      await bridge.syncCase('case-one', proof);
+      assert.deepEqual(calls, secure ? ['https:', 'wss:', 'https:'] : ['http:', 'ws:', 'http:']);
+    } finally { bridge.close(); }
+  }
+  assert.throws(() => new WorkerBridge({ url: 'https://worker.example.invalid', token,
+    accessClientId: access.accessClientId }), /both server-only credentials/);
 });
