@@ -8,6 +8,10 @@
   line-height: 1.3;
 }
 
+.reception-conversation-heading h1:focus {
+  outline: none;
+}
+
 .haas-homepage.haas-conversation-view .reception-hero {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
