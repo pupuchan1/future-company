@@ -1,6 +1,9 @@
 import { resolve } from 'node:path';
 import { createIntegration } from '../integration/server.mjs';
 import { createProductionRelay } from './relay.mjs';
+import { loadServerEnvironment } from '../integration/environment.mjs';
+
+loadServerEnvironment(new URL('../', import.meta.url));
 
 function port(value, fallback) {
   const result = Number(value || fallback);
