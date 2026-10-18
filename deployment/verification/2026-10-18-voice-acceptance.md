@@ -63,6 +63,16 @@ SSEはHTTPで再購読した結果であり、ブラウザEventSourceの自動�
 
 ## 続けて確認する項目
 
+16:41:15 JSTの実Live開始はcase`case-a5e9fe39bdada6aaa4ae048d7e4e0f2c0edafa00e9c2eb09cfae18310e9bd827`で403だった。
+bridge-tokenとvoice/status、SSEまでは200。Nodeのerrors.jsonlは`A valid case-scoped bridgeToken is required.`を記録した。
+画面は`Provider HTTP 403`と表示したが、失敗箇所はOpenAIへ到達する前のWorkerBridgeの証明検証だった。
+
+独立に新規caseを作り、Worker発行証明を同じSTAFF_API_TOKENで検証した。
+HMACとcaseは一致し、ローカル自己発行の証明は検証成功したが、Worker発行証明は残存期限902,173msだった。
+共有verifyBridgeProofの上限900,000msを超え、発行元Workerと検証元Nodeの時計差で拒否されることを確認した。
+時計差を許容する修正と回帰試験を別PRで進める。
+この開始失敗を自動声交代の成功には数えない。
+
 - 最新固定配備での自動声交代と、交代中に返る回答の1回の音声返却。
 - HaaSから採用への交代、候補接続失敗時の旧会話と終了操作の維持。
 - Live切断と再接続、ブラウザのSSE再購読、回答再送と遅着時の重複発話。
