@@ -118,9 +118,15 @@ export function ReceptionPage() {
           {!hasConversation && <ReceptionOffice language={language} />}
           <section
             className="reception-voice"
+            onClickCapture={(event) => {
+              if (event.target instanceof Element && event.target.closest(".voice-orb-dock")) {
+                event.stopPropagation();
+                openConversation();
+              }
+            }}
             aria-label={text("共通音声受付", "Shared voice reception")}
           >
-            <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} onOpenConversation={openConversation} />
+            <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} conversation={s.conversation} />
             <div className="reception-controls">
             <button
               className="button primary reception-start"

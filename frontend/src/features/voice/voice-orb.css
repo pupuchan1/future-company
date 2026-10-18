@@ -10,3 +10,8 @@
 .voice-orb-dock:focus-visible{outline:2px solid #1447e6;outline-offset:4px}
 .voice-orb-dock .voice-orb-art{width:84px}
 @media(max-width:600px){.voice-orb-art{width:188px}.voice-orb-dock{right:16px;width:72px;height:72px}.voice-orb-dock .voice-orb-art{width:72px}}
+
+/* Waiting is intent, not fake output energy. Keep the official sphere intact. */
+.voice-orb-art[data-waiting="true"]::after{content:"";position:absolute;inset:12%;border:1px dotted #777b83;border-radius:50%;animation:orb-wait 1.8s ease-in-out infinite;pointer-events:none}
+@keyframes orb-wait{0%,100%{opacity:.25;transform:scale(.98)}50%{opacity:.7;transform:scale(1.03)}}
+@media(prefers-reduced-motion:reduce){.voice-orb-art[data-waiting="true"]::after{animation:none;opacity:.5}}
