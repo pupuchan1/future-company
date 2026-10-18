@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import OpenAI from 'openai';
 import { createHumanGateway } from './human/gateway.mjs';
 import { McpEvents } from './events/mcp-events.mjs';
-import { BusinessBackend } from './backend.mjs';
+import { BusinessBackend, connectionDiagnostic, retryConnection } from './backend.mjs';
 import { LiveConversation, liveConfig } from './live-session.mjs';
 import { mcpCall } from './mcp-client.mjs';
 import { createCaseState, initialHistory, isVoiceRoute, voiceMap } from './case-state.mjs';
@@ -56,6 +56,9 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
   const provider = client || (env.OPENAI_API_KEY ? new OpenAI({ apiKey: env.OPENAI_API_KEY, maxRetries: 0, timeout: 30000 }) : null);
   const backend = provider ? new BusinessBackend({ client: provider, mcpUrl: env.HUMAN_MCP_URL,
     token: env.HUMAN_MCP_TOKEN, model: env.AGENT_MODEL || 'gpt-6.1-sol', emit, remember }) : null;
+  const createLive = (input) => retryConnection(() => provider.live.create(input), {
+    onRetry: (diagnostic) => remember({ type: 'provider_retry', operation: 'live.create', ...diagnostic }),
+  });
   const gateway = createHumanGateway({ token: env.HUMAN_MCP_TOKEN || '',
     handleEventRpc: (rpc) => events.handleRpc(rpc),
     onEvent: (event) => {
@@ -165,7 +168,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         pendingCaseIds.add(caseId);
         pendingCreates++;
         try {
-          const result = await provider.live.create({ session: liveConfig({ model: env.LIVE_MODEL || 'gpt-live-1',
+          const result = await createLive({ session: liveConfig({ model: env.LIVE_MODEL || 'gpt-live-1',
             voice: voiceMap[route], route, language, decisions: env.LIVE_DECISIONS_ENABLED !== 'false' }),
             transport: { type: 'webrtc', sdp: input.sdp } });
           const state = createCaseState(caseId, language, route);
@@ -195,7 +198,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         ticket.timer = setTimeout(() => abandonHandoff(state, ticket), handoffTimeoutMs);
         ticket.timer.unref?.();
         try {
-          const result = await provider.live.create({ session: liveConfig({ model: env.LIVE_MODEL || 'gpt-live-1',
+          const result = await createLive({ session: liveConfig({ model: env.LIVE_MODEL || 'gpt-live-1',
             voice: voiceMap[input.route], route: input.route, language: state.routing.language,
             input: initialHistory(state.history), standby: true, decisions: env.LIVE_DECISIONS_ENABLED !== 'false' }),
             transport: { type: 'webrtc', sdp: input.sdp } });
@@ -262,11 +265,8 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       }
       return json(res, 404, { error: 'Not found.' });
     } catch (error) {
-      const knownNames = ['APIConnectionError', 'APIConnectionTimeoutError', 'SyntaxError', 'TypeError', 'Error'];
-      const knownCodes = ['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET'];
-      const name = knownNames.includes(error.name) ? error.name : 'UnknownError';
-      const causeCode = knownCodes.includes(error.cause?.code) ? error.cause.code : null;
-      const connectionError = name === 'APIConnectionError' || name === 'APIConnectionTimeoutError';
+      const diagnostic = connectionDiagnostic(error);
+      const connectionError = diagnostic.connection_error;
       if (error.status) {
         const diagnostic = { at: new Date().toISOString(), status: error.status, code: error.code,
           param: error.param, message: String(error.message || '').replace(/Bearer\s+\S+|sk-[A-Za-z0-9_-]+/g, '[REDACTED]').slice(0, 300) };
@@ -274,7 +274,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       } else {
         // Record only allowlisted metadata: exception messages may contain input or credentials.
         appendFileSync(join(stateDir, 'errors.jsonl'), JSON.stringify({ at: new Date().toISOString(),
-          name, cause_code: causeCode }) + '\n', { mode: 0o600 });
+          ...diagnostic }) + '\n', { mode: 0o600 });
       }
       if (!res.headersSent) json(res, connectionError || error.status && error.status >= 400 ? 502 : 400,
         { error: connectionError ? 'Provider connection failed. Please retry.'
