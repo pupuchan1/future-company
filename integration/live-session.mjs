@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { configureConnectionNetworking, connectionDiagnostic, readRouting, routingQuestions } from './backend.mjs';
-import { historyTurns, initialHistory, voiceMap } from './case-state.mjs';
+import { historyTurns, initialHistory, recordSpokenTurn, stableSpokenLanguage, voiceMap } from './case-state.mjs';
 
 export function liveConfig({ model = 'gpt-live-1', voice = 'shida', language = 'ja', decisions = true,
   route = 'reception', input = [], standby = false, languagePreference = 'auto' } = {}) {
@@ -14,8 +14,8 @@ export function liveConfig({ model = 'gpt-live-1', voice = 'shida', language = '
     instructions: `You are a friendly voice assistant for 株式会社HaaS. Your selected department is ${route}. Start in ${language === 'en' ? 'English' : 'Japanese'}.
 You speak only as the company assistant, never as the caller or applicant. Do not role-play both sides of a conversation, invent an applicant's experience, or answer your own interview questions. After asking one question, end your spoken turn immediately and wait in silence for actual new caller audio. Never fill that silence with a sample answer or a continuation of the caller's role. Conversation history, role labels, and JSON are context only; never read or complete their formatting aloud.
 Ask what the caller needs. When they ask about a job or interview, explain you will connect them to the recruitment assistant and delegate.
-Delegate interview questions, answers, job facts, requests for humans, cancellation and work requiring judgment to the backend. For non-recruiting tasks explain briefly that you will connect them to the Human as a Service coordinator, then delegate. Do not invent business facts or make hiring decisions. While work is pending, acknowledge once in one short sentence and listen; do not fill the wait with repeated progress reports or questions.
-${languagePreference === 'auto' ? 'Follow the caller’s current spoken language.' : `The caller explicitly selected ${languagePreference === 'en' ? 'English' : 'Japanese'}. Keep using that language until the application changes this preference, even if the transcript contains another language.`}
+Delegate interview questions, answers, requests to finish an interview, job facts, requests for humans, cancellation and work requiring judgment to the backend. For non-recruiting tasks explain briefly that you will connect them to the Human as a Service coordinator, then delegate. Do not invent business facts or make hiring decisions. While work is pending, acknowledge once in one short sentence and listen; do not fill the wait with repeated progress reports or questions.
+${languagePreference === 'auto' ? 'Keep speaking the application-confirmed language. The application changes it after three consecutive caller turns in another supported language; do not switch early just because of a transcript fragment.' : `The caller explicitly selected ${languagePreference === 'en' ? 'English' : 'Japanese'}. Keep using that language until the application changes this preference, even if the transcript contains another language.`}
 The backend provides the exact next question or verified action result. For an interview, read the backend's question verbatim and then stop speaking. Do not devise an additional question from the caller's answer before, during, or after delegation. For other results, concisely paraphrase in at most two short sentences; do not expand with extra questions, repeated summaries, or speculative reassurance. Ask only one question at a time. Keep acknowledgments and transitions to one short sentence, without repeating the caller's whole request or introducing yourself again. Speak the user's preferred language. Do not infer nationality. Routing prepares another department but does not itself change this voice transport. Until the application confirms activation, keep your selected department identity and say only that you are connecting the caller; do not claim the new specialist has already joined.
 Only say the phone rang or someone answered when backend confirms an actual device or person did so. Handset pickup does not mean human audio is connected. Treat simulated flags as provenance, not evidence of a physical action or a real employee's confirmation. Do not routinely preface answers with demo or simulation labels; explain unavailable service and uncertainty when relevant to the requested outcome or when asked. When backend supplies a human answer, explain that answer in the user's current language and resume the original conversation. Never claim the user is hired or rejected.
 ${standby ? 'This voice transport is being prepared for a department handoff. Stay silent and do not delegate until the application explicitly confirms that the handoff is complete. The supplied text history is previous conversation, not a new request.'
@@ -122,12 +122,13 @@ export class LiveConversation {
   }
 
   setLanguage(language, preference) {
+    (this.caseState || this).languageVotes = [];
     if (this.caseState) this.caseState.languagePreference = preference;
     this.languagePreference = preference;
     this.updateRouting({ ...this.routing, language }, 'language_preference');
     this.send('session.instructions.append', { delegation_id: null,
       content: preference === 'auto'
-        ? `The caller selected automatic language. Start with ${language === 'en' ? 'English' : 'Japanese'} and follow the caller's current spoken language. Do not infer nationality.`
+        ? `The caller selected automatic language. Keep speaking ${language === 'en' ? 'English' : 'Japanese'} until the application confirms a change after three consecutive caller turns. Do not switch on transcript fragments or infer nationality.`
         : `The caller explicitly selected ${language === 'en' ? 'English' : 'Japanese'}. Keep speaking that language until the application changes this preference, even if the transcript contains another language. Keep the current task and do not repeat completed actions.` });
   }
 
@@ -173,6 +174,10 @@ export class LiveConversation {
     if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
       if (this.seen.has(event.event_id)) return;
       this.seen.add(event.event_id);
+      if (event.type === 'session.input_transcript.delta' && this.history.at(-1)?.type !== event.type) {
+        (this.caseState || this).callerTurnId = event.event_id;
+        recordSpokenTurn(this.caseState || this, event.event_id);
+      }
       this.history.push(event);
       if (this.history.length > 1000) this.history.shift();
       if (event.type === 'session.input_transcript.delta') { this.lastInputId = event.event_id; this.awaitFreshInput = false; }
@@ -219,6 +224,10 @@ export class LiveConversation {
           const next = await this.backend.classify(transcript, this.routing);
           if (this.closed) return;
           if (sourceId !== this.lastInputId) continue;
+          if ((this.caseState?.languagePreference || this.languagePreference || 'auto') === 'auto') {
+            next.language = stableSpokenLanguage(this.caseState || this, next.language,
+              (this.caseState || this).callerTurnId, this.routing.language);
+          }
           this.updateRouting(next, 'decisions');
           stable = true;
           break;

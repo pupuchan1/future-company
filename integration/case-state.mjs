@@ -1,6 +1,25 @@
 export const voiceMap = Object.freeze({ reception: 'shida', recruiting: 'harema', haas: 'marin' });
 export const isVoiceRoute = (route) => Object.hasOwn(voiceMap, route);
 
+// Reserve every caller turn, including turns which do not delegate to an Agent.
+export function recordSpokenTurn(state, turnId) {
+  if (!turnId) return;
+  const votes = state.languageVotes ||= [];
+  if (!votes.some(vote => vote.id === turnId)) votes.push({ id: turnId, language: null });
+  if (votes.length > 3) votes.splice(0, votes.length - 3);
+}
+
+// A streaming transcript can emit many deltas for one caller turn: count it once.
+export function stableSpokenLanguage(state, candidate, turnId, current) {
+  if (!turnId || !['ja', 'en'].includes(candidate)) return current;
+  const votes = state.languageVotes ||= [];
+  const existing = votes.find(vote => vote.id === turnId);
+  // A reset or newer turns invalidate late classification results.
+  if (!existing) return current;
+  existing.language = candidate;
+  return votes.length === 3 && votes.every(vote => vote.language === candidate) ? candidate : current;
+}
+
 // Business context belongs to a case, not to an individual voice transport.
 export function createCaseState(id, language = 'ja', route = 'reception') {
   return { id, routing: { route, language }, history: [], seen: new Set(), handoffRoutes: new Map(),
