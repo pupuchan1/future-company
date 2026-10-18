@@ -80,3 +80,18 @@ npm run build
 公式仕様: https://developers.openai.com/api/docs/guides/voice-webrtc
 
 関連: https://github.com/pupuchan1/future-company/issues/13
+# 担当別ボイスと音量の追加契約（PR #26）
+
+画面デザインはpupuさんの実装を採用します。この差分は既存 `features/live` を拡張し、App・トップページ・スタイルを置き換えません。
+
+- `useLiveConnection().start(route?)`: route省略で共通受付。
+- `switchDepartment(route)`: 同一caseの会話履歴・Agentsを保持して担当の声へ交代。
+- snapshot `inputLevel/outputLevel` は実音声のRMS（0〜1）、`speaking` は `user/assistant/both/silent`。オーブ表示に使えます。
+- snapshot `voiceRoute/voice` は現在の声、`route` は業務の担当で別概念です。`switchConfigured` と `voiceMap` はサーバーstatusから取得します。
+- `switching` 中は他の切替を止め、終了操作は有効にしてください。activate応答が不明な場合は無音を維持し、同じtokenで再試行した後に終了案内を表示します。
+- 自動の業務ルーティングだけでは声は変わりません。初回の入口を1つにし、声の交代UIの配置はpupuさん側で決めます。
+
+サーバーはPR #4の `POST /api/live/session/:oldId/handoff` →候補のWebRTC connectedとsession.started→`POST /api/live/session/:newId/activate` を使用します。失敗時は元の会話に戻し、同じマイクtrackを二重取得・停止しません。声の変更には新Live sessionが必要です（[公式ガイド](https://developers.openai.com/api/docs/guides/live-conversations)）。
+
+32テスト、型検査、buildが成功。公開Workersのcase ID・認証との結合は #18、保存済み人間回答の返却は #19 です。新しいデザイン案を採用した意味や、実機黒電話を検証した意味ではありません。
+

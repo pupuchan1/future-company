@@ -1,31 +1,4 @@
-# 株式会社HaaSのフロントエンド
-
-## 会社トップと実音声の入口（#16）
-
-`/` は、会社紹介・写真・大きな音声オーブを持つ1画面です。開始は共通受付のオーブ1つだけで、音声から採用またはHaaSへ業務を振り分けます。3つのカードは開始前は説明のみ、通話中は担当の声への切替操作を提供します。既存4画面は `/prototype` を入口として残しています。
-
-起動はこの `frontend` ディレクトリで実行します。別ターミナルでPR #4の `integration` を4320番で起動してください。
-
-```sh
-npm ci
-npm run dev -- --config vite.live.config.ts --port 4321
-npm run build
-node --experimental-strip-types --test tests/*.test.ts
-```
-
-音量表示はWeb AudioでマイクとAI音声のRMSを測定します。会話テキストをもとに発話中を装うことはありません。担当ごとの声は受付 `shida`、採用 `harema`、HaaS `marin`。Liveの声はセッション開始後に変更できないため、同一caseの履歴を持つ候補接続を準備し、接続確認後にactivateします。業務の自動振り分けだけでは声は変わらず、声の交代は担当ボタンで明示的に行います。終話・失敗時の後始末、切替中の停止、応答喪失時の再試行も実装しています。
-
-接続先の契約は `GET /api/status`、`GET /api/events`、`POST /api/live/session`、`POST /api/live/session/:id/handoff`、`POST /api/live/session/:id/activate`、`DELETE /api/live/session/:id` です。声の制約は[公式Live会話ガイド](https://developers.openai.com/api/docs/guides/live-conversations)を参照してください。
-
-**統合の残り:** この差分はローカルNode接続で検証します。Workers発行case IDと認証つきAPIの接続は #18、人間の保存済み回答を元Agent/Liveへ返すアダプターは #19。公開Workersへデプロイ済みという意味ではありません。模擬電話は「模擬デバイス」と表示し、受話器応答だけで人間音声がつながったとは表示しません。新しいユーザー導線に作業者ダッシュボードは追加しません。
-
-### 会社イメージ画像
-
-`public/images/haas-office.png` は組み込みimage_genで生成した架空のコンセプト写真です。ページにも生成イメージであることを記載しています。実在企業の所在地・社員・実績を表すものではありません。
-
-生成プロンプト: Modern Japanese design-engineering office, elegant black vintage rotary telephone on a light oak desk in the right foreground, two colleagues softly out of focus, floor-to-ceiling windows with greenery, warm natural daylight, subtle cobalt-blue notebook. Wide editorial architecture photograph with clean negative space. Authentic materials, no text, logos or watermark; fictional Human as a Service company concept, not a real company.
-
-## 維持している4画面プロトタイプ
+# Frontend prototype
 
 Issue [#7](https://github.com/pupuchan1/future-company/issues/7) の4画面を、[#9](https://github.com/pupuchan1/future-company/issues/9) のデザイン方針で実装しています。
 
@@ -40,7 +13,7 @@ node --test frontend/tests/demo.test.ts
 
 | URL | 画面 |
 | --- | --- |
-| `/prototype` | 従来の会社紹介・募集サンプル・AI受付への入口 |
+| `/` | 会社紹介・募集サンプル・AI受付への入口 |
 | `/session/:id` | 会話・担当切替・文字入力・確認依頼 |
 | `/session/:id/result` | 会話メモ・人の回答・未解決事項・再開 |
 | `/operator` | 依頼一覧・引受・回答・応答なし |

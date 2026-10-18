@@ -95,15 +95,14 @@ function Icon({
   );
 }
 function useRoute() {
-  const currentPath = () => location.pathname === "/prototype" ? "/" : location.pathname;
-  const [path, setPath] = useState(currentPath);
+  const [path, setPath] = useState(location.pathname);
   useEffect(() => {
-    const sync = () => setPath(currentPath());
+    const sync = () => setPath(location.pathname);
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
   }, []);
   function go(next: string) {
-    history.pushState(null, "", next === "/" ? "/prototype" : next);
+    history.pushState(null, "", next);
     setPath(next);
     window.scrollTo(0, 0);
   }
