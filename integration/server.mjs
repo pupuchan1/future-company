@@ -262,13 +262,23 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       }
       return json(res, 404, { error: 'Not found.' });
     } catch (error) {
+      const knownNames = ['APIConnectionError', 'APIConnectionTimeoutError', 'SyntaxError', 'TypeError', 'Error'];
+      const knownCodes = ['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET'];
+      const name = knownNames.includes(error.name) ? error.name : 'UnknownError';
+      const causeCode = knownCodes.includes(error.cause?.code) ? error.cause.code : null;
+      const connectionError = name === 'APIConnectionError' || name === 'APIConnectionTimeoutError';
       if (error.status) {
         const diagnostic = { at: new Date().toISOString(), status: error.status, code: error.code,
           param: error.param, message: String(error.message || '').replace(/Bearer\s+\S+|sk-[A-Za-z0-9_-]+/g, '[REDACTED]').slice(0, 300) };
         appendFileSync(join(stateDir, 'errors.jsonl'), JSON.stringify(diagnostic) + '\n', { mode: 0o600 });
+      } else {
+        // Record only allowlisted metadata: exception messages may contain input or credentials.
+        appendFileSync(join(stateDir, 'errors.jsonl'), JSON.stringify({ at: new Date().toISOString(),
+          name, cause_code: causeCode }) + '\n', { mode: 0o600 });
       }
-      if (!res.headersSent) json(res, error.status && error.status >= 400 ? 502 : 400,
-        { error: error.status ? `Provider HTTP ${error.status}` : 'Request failed. Check server configuration and input.' });
+      if (!res.headersSent) json(res, connectionError || error.status && error.status >= 400 ? 502 : 400,
+        { error: connectionError ? 'Provider connection failed. Please retry.'
+          : error.status ? `Provider HTTP ${error.status}` : 'Request failed. Check server configuration and input.' });
       else res.end();
     }
   });

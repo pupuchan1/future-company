@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
@@ -82,8 +82,22 @@ async function fixture(t, { create, handoffTimeoutMs = 30000 } = {}) {
   const prepare = async (id, route = 'haas') => api(`/api/live/session/${id}/handoff`, { sdp: 'v=0\r\n', route });
   const activate = async (prepared) => api(`/api/live/session/${prepared.body.session.id}/activate`, { handoff_token: prepared.body.handoff_token });
   t.after(async () => { await app.close(); await rm(stateDir, { recursive: true, force: true }); });
-  return { app, api, start, prepare, activate, sockets, creates, runs, closedCases };
+  return { app, api, start, prepare, activate, sockets, creates, runs, closedCases, stateDir };
 }
+
+test('provider connection failures return 502 and store only allowlisted diagnostic metadata', async (t) => {
+  const f = await fixture(t, { create: () => { throw Object.assign(new Error('private input and credential must not be logged'),
+    { name: 'APIConnectionError', cause: { code: 'ENOTFOUND', message: 'private host details' } }); } });
+  const response = await f.start();
+  assert.equal(response.status, 502);
+  assert.match(response.body.error, /Provider connection failed/);
+  const lines = await readFile(join(f.stateDir, 'errors.jsonl'), 'utf8');
+  const entry = JSON.parse(lines.trim());
+  assert.equal(entry.name, 'APIConnectionError');
+  assert.equal(entry.cause_code, 'ENOTFOUND');
+  assert.doesNotMatch(lines, /private|credential/);
+  assert.equal((await f.api('/api/status')).status, 200);
+});
 
 test('startup advertises fixed department voices and supports direct interview entry', async (t) => {
   const f = await fixture(t);
