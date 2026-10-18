@@ -84,7 +84,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       if (workerBridge) {
         const route = state.handoffRoutes.get(event.data.handoff_id) || state.routing.route;
         void workerBridge.humanEvent(event, route).then(linked => {
-          if (!linked || event.name !== 'human.completed') return receiveHuman(event);
+          if (!linked || event.name !== 'human.completed' || !event.data.result) return receiveHuman(event);
         }).catch(() => emit({ type: 'worker.error', case_id: state.id, message: 'Human result was not saved or synchronized; no Agent success is confirmed.' }));
       } else void receiveHuman(event);
     },
