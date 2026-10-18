@@ -401,6 +401,7 @@ test('specialist routes keep distinct Agents sessions and resume the original se
     await backend.run({ ...common, route: 'haas' });
     await backend.run({ ...common, liveSessionId: 'live-second', route: 'recruiting', source: 'human_event', transcript: '人間からの回答を受け、面談を再開します。' });
     assert.deepEqual(created.map(({ id }) => id), ['session-recruiting', 'session-haas']);
+    assert.deepEqual(created.map(({ input }) => input.agent.service_tier), ['fast', 'fast']);
     assert.deepEqual(resumed.map(({ id }) => id), ['session-recruiting']);
     assert.equal(backend.sessions.size, 2);
     assert.deepEqual(emitted.filter(event => event.type === 'backend.started')

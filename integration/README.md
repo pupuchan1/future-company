@@ -52,6 +52,8 @@ Decisionsは `route=reception|recruiting|haas` と `language=ja|en` を分類し
 
 依頼元のrouteを `handoff_id` に対応づけ、結果は元のAgents sessionへ返します。結果到着までに利用者が言語を変えた場合は最新言語で説明します。古い依頼の結果で現在の担当を強制変更しません。現試作は採用/HaaSから共通MCPを直接呼びます。採用→別チームのHaaS backend→MCPという多段の接続は、#6のコード共有後にアダプターで合流する範囲です。
 
+業務Agentの作成には`service_tier: fast`を指定します。速度を優先するための設定で、Slackへの固定文面による即時転送は別経路で実行します。
+
 ## フロント向け API
 
 | API | 用途 |
