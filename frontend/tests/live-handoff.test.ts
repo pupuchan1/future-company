@@ -324,7 +324,8 @@ test('confirmed routing switches voice once after backend result and actual spee
     f.meters[0].levels(0, .2)
     t.mock.timers.tick(2000); await tick()
     assert.equal(f.peers.length, 1, 'Backend work must finish first')
-    serverEvent(f, { type: 'backend.result', content: 'The verified answer' })
+    const result = { type: 'backend.result', event_id: 'result-1', content: 'The verified answer' }
+    serverEvent(f, result)
     f.meters[0].levels(0, 0)
     t.mock.timers.tick(2000); await tick()
     assert.equal(f.peers.length, 1, 'Do not interrupt a result before any audio is observed')
@@ -335,6 +336,7 @@ test('confirmed routing switches voice once after backend result and actual spee
     t.mock.timers.tick(1400); await tick()
     assert.equal(f.peers.length, 1, 'New caller speech postpones handoff')
     f.meters[0].levels(0, 0)
+    serverEvent(f, result)
     t.mock.timers.tick(1500); await tick()
     assert.equal(f.peers.length, 2)
     assert.equal(f.calls.find(call => call.path.endsWith('/handoff'))!.body.automatic, true)

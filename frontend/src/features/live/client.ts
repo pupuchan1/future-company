@@ -420,11 +420,13 @@ export class LiveClient {
     // A case can outlive several transports. Ignore delayed events from the old
     // session, including transcripts and backend results, for the orb only.
     const reduced = this.reducer.apply(this.state, event, source)
+    const accepted = reduced !== this.state
     const newTranscript = reduced.transcripts !== this.state.transcripts
     this.publish(reduced)
     const activeVoice = !this.voiceSwitch && this.connection &&
       (source === 'datachannel' ? connection === this.connection && (!sessionId || sessionId === this.connection.sessionId) : sessionId === this.connection.sessionId)
-    if (activeVoice) {
+    // Replays ignored by the reducer must not revive completed voice intent.
+    if (activeVoice && accepted) {
       const inputText = typeof body.delta === 'string' ? body.delta : object(body.delta).text ?? object(body.delta).transcript
       if (newTranscript && type === 'session.input_transcript.delta' && typeof inputText === 'string' && inputText.trim()) this.conversation.acceptInput()
       if (type === 'backend.started' || type === 'backend.result') this.conversation.awaitResponse()
@@ -445,8 +447,8 @@ export class LiveClient {
         }
       }
     }
-    if (this.automaticHandoff && (type === 'backend.started' || type === 'backend.result')) this.automaticHandoff.awaitingOutput = true
-    if (type === 'backend.error') this.cancelAutomaticHandoff()
+    if (accepted && this.automaticHandoff && (type === 'backend.started' || type === 'backend.result')) this.automaticHandoff.awaitingOutput = true
+    if (accepted && type === 'backend.error') this.cancelAutomaticHandoff()
     if (type === 'session.input_transcript.delta' || type === 'session.output_transcript.delta') this.lastSpeechAt = Date.now()
     this.scheduleAutomaticHandoff()
     if (closed) void this.stop()
