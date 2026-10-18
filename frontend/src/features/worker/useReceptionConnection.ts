@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLiveConnection } from '../live/useLiveConnection'
+import type { LiveLanguage, LiveLanguagePreference } from '../live/types'
 import { caseVoicePrefix } from '../live/client'
-import type { LiveLanguage } from '../live/types'
 import { WorkerCaseClient } from './cases'
 
 /** Issue #18: create/verify the Worker case before any Live session POST. */
-export function useReceptionConnection(language: LiveLanguage) {
+export function useReceptionConnection(language: LiveLanguage, languagePreference: LiveLanguagePreference = 'auto') {
   const [worker] = useState(() => new WorkerCaseClient())
   const [workerState, setWorkerState] = useState(() => worker.getSnapshot())
   const caseId = workerState.case?.id ?? ''
-  const live = useLiveConnection({ caseId, language, enabled: Boolean(caseId), apiPrefix: caseId ? caseVoicePrefix(caseId) : undefined })
+  const live = useLiveConnection({ caseId, language, languagePreference, enabled: Boolean(caseId), apiPrefix: caseId ? caseVoicePrefix(caseId) : undefined })
   const liveRef = useRef(live)
   useEffect(() => { liveRef.current = live }, [live])
   const generation = useRef(0)

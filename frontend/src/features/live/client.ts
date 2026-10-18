@@ -1,8 +1,8 @@
 import { measureSignal, SILENT_SIGNAL, VoiceActivityStore } from '../voice/activity.ts'
 import type { AudioSignal, VoiceActivity } from '../voice/activity.ts'
 import { LiveEventReducer, putRequest, readHumanRequest } from './events.ts'
-import { initialSnapshot, object } from './types.ts'
-import type { JsonObject, LiveLanguage, LiveRoute, LiveSnapshot, LiveSpeaking } from './types.ts'
+import { initialSnapshot, LANGUAGE_CHANGE_ERROR, object } from './types.ts'
+import type { JsonObject, LiveLanguage, LiveLanguagePreference, LiveRoute, LiveSnapshot, LiveSpeaking } from './types.ts'
 import { createEventTransport } from './event-transport.ts'
 import type { LiveEventTransport } from './event-transport.ts'
 import type { LiveMediaObserver } from '../recording/types.ts'
@@ -145,7 +145,7 @@ export interface LiveClientOptions {
 }
 
 export function caseVoicePrefix(caseId: string): string {
-  if (!/^[A-Za-z0-9_-]{1,200}$/.test(caseId)) throw new Error('Invalid Worker case ID.')
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(caseId)) throw new Error('Invalid Worker case ID.')
   return `/api/v1/cases/${encodeURIComponent(caseId)}/voice`
 }
 
@@ -222,6 +222,11 @@ export class LiveClient {
   private automaticTimer?: ReturnType<typeof setTimeout>
   private lastSpeechAt = 0
   private lastAutomaticRouting = ''
+  private desiredLanguage: { language: LiveLanguage; preference: LiveLanguagePreference } | null = null
+  private appliedLanguage = ''
+  private languageUpdate: Promise<void> | null = null
+  private languageConnection: Connection | null = null
+  private languageGeneration = 0
 
   constructor(caseId: string, language: LiveLanguage, runtime = browserRuntime(), options: LiveClientOptions = {}) {
     const prefix = options.apiPrefix
@@ -509,7 +514,7 @@ export class LiveClient {
     return sdp
   }
 
-  async start(language = this.state.language, route: LiveRoute = 'reception', preparedBridgeToken?: string) {
+  async start(language = this.state.language, route: LiveRoute = 'reception', preparedBridgeToken?: string, preference: LiveLanguagePreference = 'auto') {
     if (this.disposed || this.connection || this.closing) return
     if (!this.state.configured || !this.state.mcpConfigured) {
       this.patch({ error: '音声サーバーの設定・接続を確認してください。 / Check voice server configuration.' })
@@ -541,7 +546,8 @@ export class LiveClient {
       const sdp = await this.offer(connection)
       if (!sdp || this.connection !== connection) return
       // Do not abort this request on Stop: a late response still needs DELETE.
-      const created = await this.api(this.endpoints.session, { method: 'POST', body: JSON.stringify({ sdp, language, case_id: this.state.caseId, ...(route === 'reception' ? {} : { route }), ...(bridgeToken ? { bridge_token: bridgeToken } : {}) }) })
+      this.appliedLanguage = `${language}:${preference}`
+      const created = await this.api(this.endpoints.session, { method: 'POST', body: JSON.stringify({ sdp, language, ...(preference === 'auto' ? {} : { language_preference: preference }), case_id: this.state.caseId, ...(route === 'reception' ? {} : { route }), ...(bridgeToken ? { bridge_token: bridgeToken } : {}) }) })
       const id = object(created.session).id ?? created.session_id
       if (typeof id === 'string') connection.sessionId = id
       if (this.connection !== connection) { await this.finalize(connection); return }
@@ -682,6 +688,35 @@ export class LiveClient {
       await this.playAudio()
       if (automatic && error instanceof LiveApiError && error.status === 409 && error.code === 'busy') return 'busy'
     }
+  }
+
+  setLanguage(language: LiveLanguage, preference: LiveLanguagePreference = 'auto'): Promise<void> {
+    this.desiredLanguage = { language, preference }
+    const connection = this.connection
+    if (this.languageUpdate && this.languageConnection === connection) return this.languageUpdate
+    if (!connection?.sessionId || this.state.phase !== 'connected' || this.voiceSwitch || this.disposed) return Promise.resolve()
+    this.languageConnection = connection
+    const generation = ++this.languageGeneration
+    this.languageUpdate = (async () => {
+      while (this.connection === connection && !this.disposed && this.state.phase === 'connected' && !this.voiceSwitch) {
+        const desired = this.desiredLanguage!
+        const key = `${desired.language}:${desired.preference}`
+        if (key === this.appliedLanguage) break
+        // The server may apply this selection before its reply reaches the old peer.
+        // An unknown in-flight selection must not suppress a newer choice after handoff.
+        this.appliedLanguage = ''
+        const result = await this.api(`${this.endpoints.session}/${encodeURIComponent(connection.sessionId!)}/language`, {
+          method: 'POST', body: JSON.stringify({ case_id: this.state.caseId, language: desired.language, language_preference: desired.preference }),
+        })
+        if (this.connection !== connection || this.disposed) return
+        if (result.case_id !== this.state.caseId || result.language !== desired.language || result.language_preference !== desired.preference) throw new Error('Invalid language response')
+        this.appliedLanguage = key
+        this.patch({ language: desired.language, ...(this.state.error === LANGUAGE_CHANGE_ERROR ? { error: '' } : {}) })
+      }
+    })().catch(() => {
+      if (this.connection === connection && !this.disposed) this.patch({ error: LANGUAGE_CHANGE_ERROR })
+    }).finally(() => { if (generation === this.languageGeneration) this.languageUpdate = null })
+    return this.languageUpdate
   }
 
   private waitForIce(connection: Connection) {

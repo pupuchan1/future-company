@@ -4,16 +4,21 @@ import { LocalConversationRecorder } from '../recording/recorder.ts'
 import { LiveClient } from './client.ts'
 import type { LiveClientOptions } from './client.ts'
 import { initialSnapshot } from './types.ts'
-import type { LiveLanguage, LiveRoute } from './types.ts'
+import type { LiveLanguage, LiveLanguagePreference, LiveRoute } from './types.ts'
 
-export function useLiveConnection({ caseId, language, apiPrefix, bridgeToken, enabled = true }: { caseId: string; language: LiveLanguage; enabled?: boolean } & LiveClientOptions) {
+export function useLiveConnection({ caseId, language, languagePreference = 'auto', apiPrefix, bridgeToken, enabled = true }: { caseId: string; language: LiveLanguage; languagePreference?: LiveLanguagePreference; enabled?: boolean } & LiveClientOptions) {
   const [snapshot, setSnapshot] = useState(() => initialSnapshot(caseId, language))
   const [voice, setVoice] = useState(() => new VoiceActivityStore())
   const [recorder] = useState(() => new LocalConversationRecorder())
   const recording = useSyncExternalStore(recorder.subscribe, recorder.getSnapshot)
   const client = useRef<LiveClient | null>(null)
   const languageRef = useRef(language)
+  const preferenceRef = useRef(languagePreference)
   useEffect(() => { languageRef.current = language }, [language])
+  useEffect(() => { preferenceRef.current = languagePreference }, [languagePreference])
+  useEffect(() => {
+    if (snapshot.phase === 'connected') void client.current?.setLanguage(language, languagePreference)
+  }, [language, languagePreference, snapshot.phase])
   useEffect(() => {
     if (!enabled) return
     const next = new LiveClient(caseId, languageRef.current, undefined, { apiPrefix, bridgeToken, media: recorder })
@@ -39,7 +44,8 @@ export function useLiveConnection({ caseId, language, apiPrefix, bridgeToken, en
     snapshot: enabled && snapshot.caseId === caseId ? snapshot : initialSnapshot(caseId, language),
     voice,
     recording,
-    start: (route?: LiveRoute, bridgeToken?: string) => client.current?.start(languageRef.current, route, bridgeToken),
+    retryLanguage: () => client.current?.setLanguage(languageRef.current, preferenceRef.current),
+    start: (route?: LiveRoute, bridgeToken?: string) => client.current?.start(languageRef.current, route, bridgeToken, preferenceRef.current),
     switchDepartment: (route: LiveRoute) => client.current?.switchDepartment(route),
     stop: () => client.current?.stop(),
     toggleMuted: () => client.current?.setMuted(!client.current.getSnapshot().muted),

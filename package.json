@@ -30,6 +30,8 @@
     "test:frontend": "node --test frontend/tests/*.test.ts",
     "test:worker": "node --experimental-strip-types --test --test-concurrency=1 src/backend/backend.test.ts src/backend/api.test.ts src/backend/persistence.test.ts src/backend/persistence.integration.test.ts src/backend/reception.integration.test.mjs src/backend/bridge.integration.test.ts && bun test src/backend/auth.test.ts src/backend/mcp-events.test.ts src/backend/openai.test.ts src/backend/bridge.test.ts",
     "integration": "npm run start --workspace integration",
+    "integration:relay": "node --env-file-if-exists=.env.local deployment/start.mjs",
+    "test:conversation-backend": "node --test src/backend/conversation.integration.test.mjs",
     "integration:test": "npm run test --workspace integration",
     "phone:sim": "npm run phone:sim --workspace integration --"
   },

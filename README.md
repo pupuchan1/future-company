@@ -12,9 +12,9 @@ npm run db:migrate:local
 npm run dev
 ```
 
-同じcheckoutでReact（http://127.0.0.1:5173）、音声・Agents・MCPのNodeサーバー（4320）、Workers/Hono/DO/D1（8787）を起動します。終了はCtrl+Cです。既に同じポートを使う開発サーバーがある場合は終了してから起動してください。
+同じcheckoutでReact（http://127.0.0.1:5173）、音声・Agents・MCPのNodeサーバー（4320）、認可relay（設定時4330）、Workers/Hono/DO/D1（8787）を起動します。終了はCtrl+Cです。既に同じポートを使う開発サーバーがある場合は終了してから起動してください。
 
-秘密設定はルートの `.env.local` に置きます（Git管理外）。変数名は [.env.example](.env.example) を参照してください。Node側にだけ渡し、VITE_へAPIキーを置きません。設定がない場合もローカルの画面とAPIの確認はでき、AI音声の開始は無効になります。
+秘密設定はルートの `.env.local` に置きます（Git管理外）。変数名は [.env.example](.env.example) を参照してください。Node側にだけ渡し、VITE_へAPIキーを置きません。Workerの私有設定は `.dev.vars.example` も参照してください。設定がない場合も画面とAPIは起動しますが、開始時の準備処理で不足を表示して音声接続を止めます。詳細は [FEとBEの接続手順](frontend/LIVE-INTEGRATION.md) に記載しています。
 
 ### コマンド
 
@@ -37,7 +37,7 @@ npm run dev
 - PR #4: `integration/` の共通音声受付、Decisions、採用/HaaS Agents、共通MCP・模擬電話。
 - PR #12: `src/backend/` のHono案件API、社員認証、DO/D1永続化。
 
-FEの `/api/status`・`/api/events`・`/api/live/*` はNodeへ、`/api/v1/*` はWorkerへ同一originで転送します。バックエンドの担当切替を表示し、FEでは発話から担当を決めません。
+受付FEは `/api/v1/cases/:id/voice/*` をWorkerへ同一originで転送し、案件所有者の確認後に署名付きrelay経由でNodeへ接続します。バックエンドの担当切替を表示し、FEでは発話から担当を決めません。
 
 Nodeのcase/handoffとWorkerのcase/requestを対応付ける結果返却adapterは別の結合点です。両BEを起動できることを、AI会話とDO/D1の保存まで結合済みという意味にはしません。元のローカルデモはソースとテストを保持し、一般利用者の音声入口には表示しません。
 

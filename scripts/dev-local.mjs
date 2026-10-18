@@ -47,6 +47,10 @@ for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => stop());
 console.log(
   "Local reception: http://127.0.0.1:5173 (voice: 4320, Worker: 8787)",
 );
-run("Voice backend", ["run", "integration"]);
+if (process.env.NODE_RELAY_SECRET) {
+  process.env.INTEGRATION_PORT ||= "4320";
+  process.env.NODE_RELAY_PORT ||= "4330";
+  run("Voice backend and relay", ["run", "integration:relay"]);
+} else run("Voice backend", ["run", "integration"]);
 run("Worker backend", ["run", "dev:worker"]);
 run("React", ["run", "dev:frontend", "--", "--port", "5173", "--strictPort"]);

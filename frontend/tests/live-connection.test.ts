@@ -120,6 +120,66 @@ test('Worker proof reaches only the Live creation body for the same case', async
   } finally { client.dispose() }
 })
 
+test('manual English is included at start and selection updates the existing voice session', async () => {
+  const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+  await client.refreshStatus()
+  try {
+    await client.start('en', 'reception', 'proof', 'en')
+    assert.equal(JSON.parse(String(f.calls.find(call => call.path === '/api/live/session')!.options!.body)).language_preference, 'en')
+    f.channel.onmessage!({ data: JSON.stringify({ type: 'session.started', session: { id: 'live_1' } }) })
+    f.setCreate(async () => Response.json({ case_id: 'case-a', language: 'ja', language_preference: 'ja' }))
+    await client.setLanguage('ja', 'ja')
+    assert.equal(client.getSnapshot().language, 'ja')
+    assert.equal(client.getSnapshot().phase, 'connected')
+    assert.equal(f.track.stopped, false)
+    const update = f.calls.find(call => call.path === '/api/live/session/live_1/language')!
+    assert.deepEqual(JSON.parse(String(update.options!.body)), { case_id: 'case-a', language: 'ja', language_preference: 'ja' })
+    assert.equal(f.calls.filter(call => call.path === '/api/live/session').length, 1)
+  } finally { client.dispose() }
+})
+
+test('rapid selections serialize updates and the last selected language wins', async () => {
+  const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+  await client.refreshStatus(); await client.start()
+  f.channel.onmessage!({ data: JSON.stringify({ type: 'session.started', session: { id: 'live_1' } }) })
+  let resolve!: (response: Response) => void
+  let updates = 0
+  f.setCreate(async () => ++updates === 1 ? new Promise<Response>(r => { resolve = r })
+    : Response.json({ case_id: 'case-a', language: 'ja', language_preference: 'ja' }))
+  try {
+    const first = client.setLanguage('en', 'en')
+    const last = client.setLanguage('ja', 'ja')
+    assert.equal(updates, 1)
+    resolve(Response.json({ case_id: 'case-a', language: 'en', language_preference: 'en' }))
+    await Promise.all([first, last])
+    assert.equal(updates, 2)
+    assert.equal(client.getSnapshot().language, 'ja')
+  } finally { client.dispose() }
+})
+
+test('a failed language update can retry without ending the call, and late replies cannot revive Stop', async () => {
+  const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+  await client.refreshStatus(); await client.start()
+  f.channel.onmessage!({ data: JSON.stringify({ type: 'session.started', session: { id: 'live_1' } }) })
+  try {
+    f.setCreate(async () => Response.json({}, { status: 503 }))
+    await client.setLanguage('en', 'en')
+    assert.match(client.getSnapshot().error, /Could not change/)
+    assert.equal(client.getSnapshot().phase, 'connected')
+    f.setCreate(async () => Response.json({ case_id: 'case-a', language: 'en', language_preference: 'en' }))
+    await client.setLanguage('en', 'en')
+    assert.equal(client.getSnapshot().error, '')
+    let resolve!: (response: Response) => void
+    f.setCreate(async () => new Promise<Response>(r => { resolve = r }))
+    const updating = client.setLanguage('ja', 'auto')
+    await client.stop()
+    resolve(Response.json({ case_id: 'case-a', language: 'ja', language_preference: 'auto' }))
+    await updating
+    assert.equal(client.getSnapshot().phase, 'ended')
+    assert.equal(client.getSnapshot().language, 'en')
+  } finally { client.dispose() }
+})
+
 test('stop during session creation deletes the late server session and never reconnects', async () => {
   const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
   let resolveCreate!: (response: Response) => void
@@ -307,4 +367,41 @@ test('status auth and HTML failures stay visible, and a recovered status clears 
     assert.equal(client.getSnapshot().configured, true)
     assert.equal(client.getSnapshot().error, '')
   } finally { client.dispose() }
+})
+
+test('case transport rejects foreign or cross-origin prefixes before sending a request', () => {
+  const f = fixture()
+  for (const apiPrefix of ['https://example.invalid/api', '/api/v1/cases/case-b/voice', '/api/v1/cases/case-a/voice?x=1']) {
+    assert.throws(() => new LiveClient('case-a', 'ja', f.runtime, { apiPrefix }), /same origin/)
+  }
+  assert.equal(f.calls.length, 0)
+})
+
+test('case status failures are actionable, recover on retry, and never open the microphone', async () => {
+  const f = fixture()
+  let microphones = 0
+  let response = () => Response.json({ error: 'voice_relay_unconfigured' }, { status: 503 })
+  const client = new LiveClient('case-a', 'ja', { ...f.runtime,
+    fetch: async () => response(),
+    microphone: async () => { microphones++; return f.stream as unknown as MediaStream },
+  }, { apiPrefix: '/api/v1/cases/case-a/voice' })
+  try {
+    await client.refreshStatus()
+    assert.match(client.getSnapshot().error, /voice_relay_unconfigured/)
+    await client.start()
+    assert.equal(microphones, 0)
+    // Clear the unrelated Start error by using a fresh status-only client below.
+  } finally { client.dispose() }
+  const retry = new LiveClient('case-a', 'ja', { ...f.runtime, fetch: async () => response() }, { apiPrefix: '/api/v1/cases/case-a/voice' })
+  try {
+    await retry.refreshStatus()
+    response = () => Response.json({ live_configured: true, mcp_configured: true })
+    await retry.refreshStatus()
+    assert.equal(retry.getSnapshot().error, '')
+    assert.equal(retry.getSnapshot().configured, true)
+    response = () => new Response('<html>Login</html>', { status: 200 })
+    await retry.refreshStatus()
+    assert.equal(retry.getSnapshot().configured, null)
+    assert.match(retry.getSnapshot().error, /Check access/)
+  } finally { retry.dispose() }
 })

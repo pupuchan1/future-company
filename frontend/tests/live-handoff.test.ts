@@ -449,3 +449,36 @@ test('recording resumes the old call after a failed switch without restarting or
     assert.equal(inputs, 1); assert.equal(stopped, 0); assert.equal(f.track.stopped, 0)
   } finally { await f.client.stop(); f.client.dispose() }
 })
+
+test('the latest manual language survives a delayed old-session reply across handoff', async () => {
+  const f = fixture()
+  await f.start()
+  const originalFetch = f.runtime.fetch
+  let serverPreference = 'ja'
+  const languageCalls: { path: string; language: string }[] = []
+  let completeOld!: (response: Response) => void
+  f.runtime.fetch = (async (path: string, options?: RequestInit) => {
+    if (!path.endsWith('/language')) return originalFetch(path, options)
+    const input = JSON.parse(String(options?.body))
+    serverPreference = input.language_preference
+    languageCalls.push({ path, language: input.language })
+    const result = { session: { id: path.includes('/old/') ? 'old' : 'new' }, case_id: 'case-a', language: input.language, language_preference: input.language_preference }
+    if (input.language === 'en') return new Promise<Response>(resolve => { completeOld = resolve })
+    return Response.json(result)
+  }) as typeof fetch
+  try {
+    await f.client.setLanguage('ja', 'ja')
+    const first = f.client.setLanguage('en', 'en')
+    const latest = f.client.setLanguage('ja', 'ja')
+    assert.equal(serverPreference, 'en', 'The server applied English before its HTTP response arrives')
+    const switching = f.client.switchDepartment('recruiting')
+    await f.readyCandidate(); await switching
+    assert.equal(f.client.getSnapshot().phase, 'connected')
+    // useLiveConnection retries the current selection when the new transport connects.
+    await f.client.setLanguage('ja', 'ja')
+    completeOld(Response.json({ session: { id: 'old' }, case_id: 'case-a', language: 'en', language_preference: 'en' }))
+    await Promise.all([first, latest])
+    assert.equal(serverPreference, 'ja', 'The new session must receive the latest manual selection even if it equals the old cached selection')
+    assert.deepEqual(languageCalls.at(-1), { path: '/api/live/session/new/language', language: 'ja' })
+  } finally { await f.client.stop(); f.client.dispose() }
+})

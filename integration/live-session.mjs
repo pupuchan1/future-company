@@ -4,7 +4,7 @@ import { configureConnectionNetworking, connectionDiagnostic, readRouting, routi
 import { historyTurns, voiceMap } from './case-state.mjs';
 
 export function liveConfig({ model = 'gpt-live-1', voice = 'shida', language = 'ja', decisions = true,
-  route = 'reception', input = [], standby = false } = {}) {
+  route = 'reception', input = [], standby = false, languagePreference = 'auto' } = {}) {
   return {
     model, store: false, audio: { output: { voice } }, delegation: { type: 'client' },
     ...(input.length ? { input } : {}),
@@ -14,6 +14,7 @@ export function liveConfig({ model = 'gpt-live-1', voice = 'shida', language = '
     instructions: `You are a friendly voice assistant for 株式会社HaaS. Your selected department is ${route}. Start in ${language === 'en' ? 'English' : 'Japanese'}.
 Ask what the caller needs. When they ask about a job or interview, explain you will connect them to the recruitment assistant and delegate.
 Delegate interview questions, answers, job facts, requests for humans, cancellation and work requiring judgment to the backend. For non-recruiting tasks explain briefly that you will connect them to the Human as a Service coordinator, then delegate. Do not invent business facts or make hiring decisions. Keep chatting briefly while work is pending without announcing success.
+${languagePreference === 'auto' ? 'Follow the caller’s current spoken language.' : `The caller explicitly selected ${languagePreference === 'en' ? 'English' : 'Japanese'}. Keep using that language until the application changes this preference, even if the transcript contains another language.`}
 The backend provides the exact next question or verified action result. Ask only one question at a time. Speak the user's preferred language. Do not infer nationality. When backend changes department, announce that once, then follow its interviewing context; your voice remains the same.
 Only say the phone rang or someone answered when backend confirms an actual device or person did so. Handset pickup does not mean human audio is connected. Treat simulated flags as provenance, not evidence of a physical action or a real employee's confirmation. Do not routinely preface answers with demo or simulation labels; explain unavailable service and uncertainty when relevant to the requested outcome or when asked. When backend supplies a human answer, explain that answer in the user's current language and resume the original conversation. Never claim the user is hired or rejected.
 ${standby ? 'This voice transport is being prepared for a department handoff. Stay silent and do not delegate until the application explicitly confirms that the handoff is complete. The supplied text history is previous conversation, not a new request.'
@@ -99,7 +100,19 @@ export class LiveConversation {
       : 'Briefly introduce this department and continue from the shared context; ask what help is needed if it is not yet clear.'} Do not repeat completed human requests.`, this.voiceRoute);
   }
 
+  setLanguage(language, preference) {
+    if (this.caseState) this.caseState.languagePreference = preference;
+    this.languagePreference = preference;
+    this.updateRouting({ ...this.routing, language }, 'language_preference');
+    this.send('session.instructions.append', { delegation_id: null,
+      content: preference === 'auto'
+        ? `The caller selected automatic language. Start with ${language === 'en' ? 'English' : 'Japanese'} and follow the caller's current spoken language. Do not infer nationality.`
+        : `The caller explicitly selected ${language === 'en' ? 'English' : 'Japanese'}. Keep speaking that language until the application changes this preference, even if the transcript contains another language. Keep the current task and do not repeat completed actions.` });
+  }
+
   updateRouting(next, source) {
+    const preference = this.caseState?.languagePreference || this.languagePreference || 'auto';
+    if (preference !== 'auto') next = { ...next, language: preference };
     if (next.route === this.routing.route && next.language === this.routing.language) return;
     this.routing = next;
     if (this.caseState) this.caseState.routing = next;
