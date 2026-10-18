@@ -4,6 +4,45 @@
 起動、接続先更新と復帰は[本番運用手順](../deployment/PRODUCTION.md)を参照する。
 各表は2026-10-18に確認した配備であり、最新のPR HEADを配備済みとみなさない。
 
+## 16:56の更新と最終照合
+
+| 項目 | 本記録の最終照合でruntimeとCloudflare配信一覧から確認した値 |
+| --- | --- |
+| Node配備元 | `315720a5f96be310cf968ea346f8dee9175ca104` |
+| Nodeソース所在 | 配備ホストの`.local/deploy-315720a` |
+| Worker version | `2e7acce6-dbfb-4789-8baf-667042896251`、100%、07:56:59Z配信 |
+| relay origin | `https://queries-shopzilla-consequently-configure.trycloudflare.com` |
+| ポートと状態 | Node4350、relay4351、既存`.local/production-runtime/state` |
+
+07:59の配備担当の確認記録では、現originとloopbackのhealthは200、新規caseのvoice/status3回が200、cloudflaredのHA接続数は1だった。
+この時点の古いoils originは530/1033。古いoriginへ戻すだけでは復帰できない。
+本記録の最終照合でNode機器一覧は`devices=[]`。黒電話実機の成功は記録しない。
+ab9cedbから315720aへはNode/BE/FEにも変更があるため、前版の音声成功を最新版の全受入へ流用しない。
+本番の更新は配備担当が実施し、この文書作成では再起動・再配備していない。
+
+## 時計差修正後の配備
+
+| 項目 | 16:48の起動ファイルとruntimeから確認した値 |
+| --- | --- |
+| 配備元 | [PR #113](https://github.com/pupuchan1/future-company/pull/113)の`ab9cedb9d9fe2fea5abd245bdf9da90bc0ee4c47` |
+| 配置時のWorker version | `cb9d228d-56cd-48a3-8682-0f2213d8147a` |
+| Nodeソース所在 | 配備ホストの`.local/deploy-ab9cedb` |
+| relay origin | `https://rep-butter-obligations-vehicles.trycloudflare.com` |
+| MCPと実機bridge | 上記originの`/mcp`と`/bridge` |
+
+配備担当の記録は[PR #104](https://github.com/pupuchan1/future-company/pull/104)。
+07:48:00ZにWorker version`268f4a1b-6222-42a0-b5bc-86bd8637a7d2`へ更新されたことを配信一覧で確認した。
+この更新はPR #110のd22bc34。配備担当がab9cedbとの差分を調べ、Orbのfrontend3ファイルのみでNode/BEは差分なしと確認した。
+Worker versionは同PRの配備記録とCloudflareの配信一覧を照合する。
+以前のjamieとellenは履歴であり、接続先として固定しない。
+声交代の受入は[PR #109](https://github.com/pupuchan1/future-company/pull/109)へ続けて記録する。
+
+## 16:53の更新
+
+runtimeはsource`93bc6b5`、relay`https://oils-mia-require-eastern.trycloudflare.com`へ更新された。
+07:53:37Zの配信一覧はWorker version`a1b4c418-9cc7-47f2-9c2f-5864b5b398b4`、100%。
+起動ソースと配信versionは試験時に再取得し、過去のrelayを機器へ再設定しない。
+
 ## 16:36の更新
 
 | 項目 | 確認した値 |

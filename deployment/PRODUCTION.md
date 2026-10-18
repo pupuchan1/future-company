@@ -44,13 +44,13 @@ launchctl bootstrap "gui/$(id -u)" "$MEMORY/tmp/production-runtime.plist"
 ```
 
 この起動定義は`$MEMORY/tmp/production-runtime.mjs`を実行する。
-16:36更新後のNodeソースは`$REPO/.local/deploy-6176125`、復帰元は`$REPO/.local/worktrees/production-access`の319ffc1。状態保存先は`$REPO/.local/production-runtime/state`。
+本記録の最終照合ではNodeソースは`$REPO/.local/deploy-315720a`、復帰元は`$REPO/.local/worktrees/production-access`の319ffc1。状態保存先は`$REPO/.local/production-runtime/state`。
 更新が並行するため、実際の起動ソースはruntimeの`checkout`と配備記録を開いて確認する。
 OpenAI設定は元checkoutの`.env`、Nodeトークンは`/Users/r74/.codex/worktrees/issue19-voice-demo/future-company/.env.local`、Accessは`$REPO/.local/access/future-company-20261018/shared.env`を読む。
 これらの私有ファイルの存在を確認し、内容を出力しない。
 
 起動後にruntimeが生成する`state.json`と`deployment/wrangler.local.jsonc`のoriginを照合する。
-`sourceCommit`欄は16:36に6176125へ更新された。配備版はWorker versionとソースを照合し、Git checkoutであれば`git rev-parse HEAD`も使う。
+同時点の`sourceCommit`欄は`315720a5f96be310cf968ea346f8dee9175ca104`。配備版はWorker versionとソースを照合し、Git checkoutであれば`git rev-parse HEAD`も使う。
 標準出力は`$MEMORY/tmp/production-runtime.log`、標準エラーは`$MEMORY/tmp/production-runtime-error.log`。
 トンネル起動でoriginが変わった後は、必ず次のWorker更新まで行う。
 
@@ -117,3 +117,8 @@ version指定のrollbackは[Wrangler公式手順](https://developers.cloudflare.
 
 取消、切断、再接続、SSE再購読と交代中の回答は[#32](https://github.com/pupuchan1/future-company/issues/32)と[#35](https://github.com/pupuchan1/future-company/issues/35)の受入として別に記録する。
 実ベルと実人間回答は[#34](https://github.com/pupuchan1/future-company/issues/34)で確認し、模擬電話の成功で置き換えない。
+
+530が再発したら、時刻、case、path、CF-Rayとレスポンス本文のエラー番号を記録する。
+Workerのrelay失敗ログ、Nodeの終了ログ、同時点のruntime originとcloudflaredを照合する。
+2026-10-18の再発では`error code: 1033`を取得した。詳細は[受入記録PR #109](https://github.com/pupuchan1/future-company/pull/109)を参照する。
+古いQuick Tunnelの1033を、更新後の接続先の障害と取り違えない。
