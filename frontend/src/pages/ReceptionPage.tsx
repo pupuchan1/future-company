@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useLiveConnection } from "@/features/live/useLiveConnection";
-import { AudioOrb } from "@/features/live/AudioOrb";
-import type { LiveLanguage, LivePhase, LiveRoute } from "@/features/live/types";
+import { useReceptionConnection } from "@/features/worker/useReceptionConnection";
+import { VoiceOrb } from "@/features/voice/VoiceOrb";
+import type { LiveLanguage, LiveRoute } from "@/features/live/types";
+import { useDisplayLanguage } from "@/lib/useDisplayLanguage";
 
 const phrase = (language: LiveLanguage, ja: string, en: string) =>
   language === "ja" ? ja : en;
@@ -9,16 +10,6 @@ const routes: Record<LiveRoute, [string, string]> = {
   reception: ["AI受付", "AI reception"],
   recruiting: ["採用の相談", "Recruiting"],
   haas: ["仕事・人への依頼", "Work & human assistance"],
-};
-const phases: Record<LivePhase, [string, string]> = {
-  idle: ["受付待機中", "Ready"],
-  connecting: ["接続しています", "Connecting"],
-  connected: ["会話中", "Connected"],
-  reconnecting: ["再接続を待っています", "Reconnecting"],
-  switching: ["担当の声に切り替えています", "Switching the assistant voice"],
-  stopping: ["会話を終了しています", "Ending conversation"],
-  ended: ["会話を終了しました", "Conversation ended"],
-  error: ["接続を確認してください", "Check the connection"],
 };
 function Mic({ off = false }: { off?: boolean }) {
   return (
@@ -37,42 +28,26 @@ function Mic({ off = false }: { off?: boolean }) {
   );
 }
 export function ReceptionPage() {
-  const [language, setLanguage] = useState<LiveLanguage>(() =>
-    navigator.language.startsWith("ja") ? "ja" : "en",
-  );
-  const [caseId, setCaseId] = useState(() => crypto.randomUUID());
-  const live = useLiveConnection({ caseId, language });
+  const { language, preference, selectLanguage } = useDisplayLanguage();
+  const live = useReceptionConnection(language);
+  const caseId = live.caseId;
   const s = live.snapshot;
   const text = (ja: string, en: string) => phrase(language, ja, en);
   const [showDetails, setShowDetails] = useState(false);
   const log = useRef<HTMLDivElement>(null);
-  const orb = useRef<HTMLDivElement>(null);
-  const [orbVisible, setOrbVisible] = useState(true);
-  const active = [
+  const active = live.preparing || [
     "connecting",
     "connected",
     "reconnecting",
     "switching",
     "stopping",
   ].includes(s.phase);
-  const available = Boolean(s.configured && s.mcpConfigured);
+  const available = !caseId || Boolean(s.configured && s.mcpConfigured);
   const isEnglish = language === "en";
-  useEffect(() => {
-    document.documentElement.lang = language;
-  }, [language]);
-  useEffect(() => {
-    if (s.phase === "connected" && s.language !== language)
-      setLanguage(s.language);
-  }, [s.language, s.phase, language]);
+  const hasConversation = Boolean(s.transcripts.length || s.requests.length || s.backendResult || s.phase === "connected");
   useEffect(() => {
     if (log.current) log.current.scrollTop = log.current.scrollHeight;
   }, [s.transcripts]);
-  useEffect(() => {
-    if (!orb.current || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(([entry]) => setOrbVisible(entry.isIntersecting));
-    observer.observe(orb.current);
-    return () => observer.disconnect();
-  }, []);
   async function toggleCall() {
     if (active) await live.stop();
     else await live.start();
@@ -96,12 +71,16 @@ export function ReceptionPage() {
         <span className="reception-header-label">
           {text("AI総合受付", "AI RECEPTION")}
         </span>
-        <div className="language-switch" aria-label="Display language">
-          <button aria-pressed={!isEnglish} onClick={() => setLanguage("ja")}>
+        <div className="language-switch" role="group" aria-label={text("表示言語", "Display language")}>
+          <button type="button" aria-pressed={preference === "auto"} onClick={() => selectLanguage("auto")}>
+            {text("自動", "Auto")}
+          </button>
+          <span aria-hidden="true">/</span>
+          <button type="button" lang="ja" aria-label="日本語" aria-pressed={preference === "ja"} onClick={() => selectLanguage("ja")}>
             JP
           </button>
-          <span>/</span>
-          <button aria-pressed={isEnglish} onClick={() => setLanguage("en")}>
+          <span aria-hidden="true">/</span>
+          <button type="button" lang="en" aria-label="English" aria-pressed={preference === "en"} onClick={() => selectLanguage("en")}>
             EN
           </button>
         </div>
@@ -109,7 +88,7 @@ export function ReceptionPage() {
       <main id="main" className="page-width reception-main">
         <section className="reception-hero">
           <div className="reception-intro">
-            <p className="eyebrow">ONE CONVERSATION. THE RIGHT HELP.</p>
+            <p className="eyebrow">{text("ひとつの会話から、必要なサポートへ。", "ONE CONVERSATION. THE RIGHT HELP.")}</p>
             <h1>
               {text("まずは、", "Start with")}
               <br />
@@ -121,70 +100,13 @@ export function ReceptionPage() {
                 "A question about work. A request for a person.\nTell the AI what you need, and it will find the right help.",
               )}
             </p>
-            <div className="reception-examples">
-              <p>
-                {text(
-                  "たとえば、こんなお話から。",
-                  "For example, you can say:",
-                )}
-              </p>
-              <ul>
-                <li>
-                  {text(
-                    "「募集している仕事について聞きたい」",
-                    "“I’d like to hear about the open roles.”",
-                  )}
-                </li>
-                <li>
-                  {text(
-                    "「現場の担当者に確認してほしい」",
-                    "“Could you check with someone on the team?”",
-                  )}
-                </li>
-                <li>
-                  {text(
-                    "「この作業を人にお願いしたい」",
-                    "“I need someone to help with this task.”",
-                  )}
-                </li>
-              </ul>
-            </div>
+
           </div>
           <section
             className="reception-voice"
             aria-label={text("共通音声受付", "Shared voice reception")}
           >
-            <div className="row spread">
-              <span className="section-label">
-                {text("ひとつの窓口から", "ONE SHARED RECEPTION")}
-              </span>
-              <span className="connection">
-                <span className="status-square" />
-                {available || active
-                  ? phases[s.phase][isEnglish ? 1 : 0]
-                  : text("準備中", "Preparing")}
-              </span>
-            </div>
-            <div ref={orb}>
-              <AudioOrb {...s} language={language} />
-            </div>
-            <h2>
-              {active
-                ? text(
-                    "そのまま、お話しください。",
-                    "Go ahead. We’re listening.",
-                  )
-                : text(
-                    "用件は、話しながらで大丈夫。",
-                    "Tell us what’s on your mind.",
-                  )}
-            </h2>
-            <p className="small voice-description">
-              {text(
-                "最初に担当や言語を選ぶ必要はありません。\nAIが会話を聞いて、必要なツールへ引き継ぎます。",
-                "No need to choose a department or language first.\nThe AI listens and hands your request to the right tools.",
-              )}
-            </p>
+            <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} />
             <button
               className="button primary reception-start"
               onClick={() => void toggleCall()}
@@ -203,28 +125,17 @@ export function ReceptionPage() {
               </span>
               <span aria-hidden="true">{active ? "■" : "→"}</span>
             </button>
-            {active && s.phase !== "stopping" && (
+            {["connected", "switching"].includes(s.phase) && (
               <button
                 className="text-button reception-mute"
                 aria-pressed={s.muted}
                 onClick={live.toggleMuted}
-                disabled={s.phase === "switching"}
               >
                 <Mic off={s.muted} />
                 {s.muted
                   ? text("マイクをオンにする", "Unmute microphone")
                   : text("マイクをオフにする", "Mute microphone")}
               </button>
-            )}
-            {active && s.voice && (
-              <div className="reception-voice-switch">
-                <p className="small">{text("現在の声", "Current voice")}: {routes[s.voiceRoute][isEnglish ? 1 : 0]}</p>
-                {s.switchConfigured && s.voiceRoute !== s.route && s.phase === "connected" && (
-                  <button className="button secondary full" onClick={() => void live.switchDepartment(s.route)}>
-                    {text(`${routes[s.route][0]}の声に切り替える`, `Switch to the ${routes[s.route][1]} voice`)}
-                  </button>
-                )}
-              </div>
             )}
             <p className="small reception-consent">
               {text(
@@ -269,14 +180,14 @@ export function ReceptionPage() {
                 </button>
               </div>
             )}
-            {(s.error || s.cleanupWarning) && (
+            {(s.error || s.cleanupWarning || live.worker.error) && (
               <p role="alert" className="inline-error">
-                {s.error || s.cleanupWarning}
+                {s.error || s.cleanupWarning || live.worker.error}
               </p>
             )}
           </section>
         </section>
-        <section
+        {hasConversation && <section
           className="reception-progress"
           aria-label={text("仕事の進行", "Work progress")}
         >
@@ -316,8 +227,8 @@ export function ReceptionPage() {
                 : text("必要になったらAIが依頼", "The AI asks when needed")}
             </strong>
           </div>
-        </section>
-        <div className="reception-content">
+        </section>}
+        {hasConversation && <div className="reception-content">
           <section className="panel reception-transcript">
             <h2 className="panel-heading">
               {text("会話", "Conversation")}
@@ -463,12 +374,12 @@ export function ReceptionPage() {
               </div>
             </section>
           </aside>
-        </div>
+        </div>}
         <div className="reception-bottom">
           {["ended", "error"].includes(s.phase) && (
             <button
               className="text-button"
-              onClick={() => setCaseId(crypto.randomUUID())}
+              onClick={() => void live.resetCase()}
             >
               {text("新しい会話を用意する", "Prepare a new conversation")} →
             </button>
@@ -500,19 +411,10 @@ export function ReceptionPage() {
                 : text("設定待ち", "Not configured")}
             </dd>
             <dt>{text("会話ID", "Case ID")}</dt>
-            <dd>{caseId}</dd>
+            <dd>{caseId || text("音声開始時に作成", "Created when you start")}</dd>
           </dl>
         )}
       </main>
-      {active && !orbVisible && (
-        <div className="reception-floating-voice" aria-label={text("音声通話", "Voice call")}>
-          <AudioOrb {...s} language={language} compact />
-          <span>{phases[s.phase][isEnglish ? 1 : 0]}</span>
-          <button className="button secondary" disabled={s.phase === "stopping"} onClick={() => void live.stop()}>
-            {text("終了", "End")}
-          </button>
-        </div>
-      )}
       <footer className="site-footer">
         <span>FUTURE COMPANY</span>
         <span>

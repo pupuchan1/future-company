@@ -1,8 +1,10 @@
+import { measureSignal, SILENT_SIGNAL, VoiceActivityStore } from '../voice/activity.ts'
+import type { AudioSignal, VoiceActivity } from '../voice/activity.ts'
 import { LiveEventReducer, putRequest, readHumanRequest } from './events.ts'
 import { initialSnapshot, object } from './types.ts'
 import type { JsonObject, LiveLanguage, LiveRoute, LiveSnapshot, LiveSpeaking } from './types.ts'
 
-export interface LiveAudioLevels { inputLevel: number; outputLevel: number; inputWaveform?: number[] }
+export interface LiveAudioLevels { inputLevel: number; outputLevel: number }
 export interface LiveAudioMeter {
   setInput: (stream: MediaStream) => void
   setOutput: (stream: MediaStream) => void
@@ -14,6 +16,7 @@ type MeterSource = {
   stream: MediaStream
   source: MediaStreamAudioSourceNode
   analyser: AnalyserNode
+  signal: AudioSignal
   samples: Float32Array<ArrayBuffer>
 }
 
@@ -38,6 +41,7 @@ function browserAudioContext() {
 export function createAudioMeter(
   onLevels: (levels: LiveAudioLevels) => void,
   createContext: () => AudioContext = browserAudioContext,
+  onActivity?: (activity: VoiceActivity) => void,
 ): LiveAudioMeter | null {
   let context: AudioContext
   try { context = createContext() } catch { return null }
@@ -58,45 +62,41 @@ export function createAudioMeter(
       analyser.fftSize = 512
       analyser.smoothingTimeConstant = 0
       source.connect(analyser)
-      return { stream, source, analyser, samples: new Float32Array(analyser.fftSize) }
+      return { stream, source, analyser, signal: SILENT_SIGNAL, samples: new Float32Array(analyser.fftSize) }
     } catch {
       try { source?.disconnect() } catch { /* Best-effort partial setup cleanup. */ }
       try { analyser?.disconnect() } catch { /* Best-effort partial setup cleanup. */ }
       return undefined
     }
   }
-  const read = (slot?: MeterSource) => {
-    slot?.samples.fill(0)
-    if (!slot || context.state !== 'running') return 0
-    if (!slot.stream.getAudioTracks().some(track => track.enabled && track.readyState !== 'ended')) return 0
+  const read = (slot?: MeterSource): number => {
+    if (!slot) return 0
+    if (context.state !== 'running' || !slot.stream.getAudioTracks().some(track => track.enabled && !track.muted && track.readyState !== 'ended')) {
+      slot.signal = SILENT_SIGNAL
+      return 0
+    }
     try {
       slot.analyser.getFloatTimeDomainData(slot.samples)
+      if (onActivity) slot.signal = measureSignal(slot.samples, slot.signal)
       let squares = 0
       for (const sample of slot.samples) squares += Number.isFinite(sample) ? sample * sample : 0
       return Math.round(normalizedLevel(Math.sqrt(squares / slot.samples.length)) * 1000) / 1000
-    } catch { return 0 }
+    } catch { slot.signal = SILENT_SIGNAL; return 0 }
   }
   const resume = () => {
     if (disposed || context.state !== 'suspended') return
     try { void context.resume().catch(() => {}) } catch { /* Audio still works without the optional meter. */ }
   }
   resume()
+  // One graph and one sampling loop; only the orb receives the 30 Hz PCM frames.
+  // Conversation snapshots retain the existing ~10 Hz level updates.
+  let frame = 0
   const timer = setInterval(() => {
     if (disposed) return
-    const inputLevel = read(input)
-    const outputLevel = read(output)
-    const inputSamples = input?.samples
-    // Preserve signed peaks from each bucket instead of synthesizing a wave
-    // from the RMS level. No additional microphone or animation loop is used.
-    const inputWaveform = inputLevel > 0 && inputSamples ? Array.from({ length: 48 }, (_, i) => {
-      const start = Math.floor(i * inputSamples.length / 48)
-      const end = Math.floor((i + 1) * inputSamples.length / 48)
-      let peak = 0
-      for (let j = start; j < end; j++) if (Math.abs(inputSamples[j]) > Math.abs(peak)) peak = inputSamples[j]
-      return Number.isFinite(peak) ? Math.max(-1, Math.min(1, peak)) : 0
-    }) : []
-    onLevels({ inputLevel, outputLevel, inputWaveform })
-  }, 100)
+    const levels = { inputLevel: read(input), outputLevel: read(output) }
+    if (!onActivity || ++frame % 3 === 0) onLevels(levels)
+    onActivity?.({ available: context.state === 'running' && !!(input || output), input: input?.signal ?? SILENT_SIGNAL, output: output?.signal ?? SILENT_SIGNAL })
+  }, onActivity ? 100 / 3 : 100)
   return {
     setInput(stream) {
       if (disposed || input?.stream === stream) return
@@ -115,6 +115,7 @@ export function createAudioMeter(
       clearInterval(timer)
       disconnect(input); disconnect(output)
       input = undefined; output = undefined
+      onActivity?.({ available: false, input: SILENT_SIGNAL, output: SILENT_SIGNAL })
       try { void context.close().catch(() => {}) } catch { /* Context is already closed. */ }
     },
   }
@@ -128,12 +129,14 @@ export interface LiveRuntime {
   audio: () => HTMLAudioElement
   supported: () => boolean
   /** Optional so existing transports and non-Web-Audio runtimes still work. */
-  metering?: (onLevels: (levels: LiveAudioLevels) => void) => LiveAudioMeter | null
+  metering?: (onLevels: (levels: LiveAudioLevels) => void, onActivity?: (activity: VoiceActivity) => void) => LiveAudioMeter | null
 }
 
 export interface LiveClientOptions {
   /** Omit only for the loopback development API. */
   apiPrefix?: string
+  /** A fresh case-scoped proof; never persisted in a snapshot or storage. */
+  bridgeToken?: () => Promise<string>
 }
 
 export function caseVoicePrefix(caseId: string): string {
@@ -151,6 +154,7 @@ interface Connection {
   disconnectTimer?: ReturnType<typeof setTimeout>
   cancelIce?: () => void
   meter?: LiveAudioMeter | null
+  outputPlaying?: boolean
   audio?: HTMLAudioElement
   failure?: Error
   ready?: () => void
@@ -184,11 +188,12 @@ const browserRuntime = (): LiveRuntime => ({
   events: (url = '/api/events') => new EventSource(url),
   audio: () => { const audio = new Audio(); audio.autoplay = true; return audio },
   supported: () => window.isSecureContext && typeof navigator.mediaDevices?.getUserMedia === 'function' && typeof window.RTCPeerConnection === 'function',
-  metering: createAudioMeter,
+  metering: (onLevels, onActivity) => createAudioMeter(onLevels, browserAudioContext, onActivity),
 })
 
 /** PR #4 transport only. It never sends disallowed frontend Live commands. */
 export class LiveClient {
+  readonly voice = new VoiceActivityStore()
   private state: LiveSnapshot
   private runtime: LiveRuntime
   private listeners = new Set<(snapshot: LiveSnapshot) => void>()
@@ -204,12 +209,14 @@ export class LiveClient {
   private disposed = false
   private closing: Promise<void> | null = null
   private endpoints: { status: string; events: string; session: string }
+  private bridgeToken?: () => Promise<string>
 
   constructor(caseId: string, language: LiveLanguage, runtime = browserRuntime(), options: LiveClientOptions = {}) {
     const prefix = options.apiPrefix
     if (prefix !== undefined && prefix !== caseVoicePrefix(caseId)) throw new Error('Voice API must use this Worker case on the same origin.')
     this.endpoints = prefix ? { status: `${prefix}/status`, events: `${prefix}/events`, session: `${prefix}/session` }
       : { status: '/api/status', events: '/api/events', session: '/api/live/session' }
+    this.bridgeToken = options.bridgeToken
     this.state = initialSnapshot(caseId, language)
     this.runtime = runtime
   }
@@ -227,23 +234,32 @@ export class LiveClient {
   }
   private patch(next: Partial<LiveSnapshot>) { this.publish({ ...this.state, ...next }) }
 
+  private audioActivity(connection: Connection, activity: VoiceActivity) {
+    if (this.disposed || this.connection !== connection) return
+    const audio = connection.audio
+    const audible = connection.outputPlaying && !this.voiceSwitch && !this.state.playbackBlocked && audio && !audio.paused && !audio.muted && audio.volume > 0
+    this.voice.publish({
+      available: activity.available,
+      input: this.state.muted || this.voiceSwitch ? SILENT_SIGNAL : activity.input,
+      output: audible ? { ...activity.output, level: activity.output.level * normalizedLevel(audio.volume) } : SILENT_SIGNAL,
+    })
+  }
+
   private audioLevels(connection: Connection, levels: LiveAudioLevels) {
     if (this.disposed || this.connection !== connection) return
     const inputLevel = this.state.muted || this.voiceSwitch ? 0 : normalizedLevel(levels.inputLevel)
     const audio = connection.audio
-    const audible = audio && !this.voiceSwitch && !this.state.playbackBlocked && !audio.paused && !audio.muted
+    const audible = connection.outputPlaying && audio && !this.voiceSwitch && !this.state.playbackBlocked && !audio.paused && !audio.muted
     const outputLevel = audible ? normalizedLevel(levels.outputLevel) * normalizedLevel(audio!.volume ?? 1) : 0
     const speaking = speakerFor(inputLevel, outputLevel)
-    const inputWaveform = inputLevel >= SPEAKING_RMS && Array.isArray(levels.inputWaveform)
-      ? levels.inputWaveform.slice(0, 48).map(sample => Number.isFinite(sample) ? Math.max(-1, Math.min(1, sample)) : 0) : []
-    if (inputLevel !== this.state.inputLevel || outputLevel !== this.state.outputLevel || speaking !== this.state.speaking || inputWaveform.length || this.state.inputWaveform.length) {
-      this.patch({ inputLevel, outputLevel, inputWaveform, speaking })
+    if (inputLevel !== this.state.inputLevel || outputLevel !== this.state.outputLevel || speaking !== this.state.speaking) {
+      this.patch({ inputLevel, outputLevel, speaking })
     }
   }
 
   private async api(path: string, options: RequestInit = {}) {
     const response = await this.runtime.fetch(path, {
-      credentials: 'same-origin', ...options,
+      credentials: 'same-origin', redirect: 'manual', cache: 'no-store', ...options,
       headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers },
       signal: options.signal ?? AbortSignal.timeout(35000),
     })
@@ -352,7 +368,7 @@ export class LiveClient {
   }
 
   private createMeter(connection: Connection) {
-    try { connection.meter = this.runtime.metering?.(levels => this.audioLevels(connection, levels)) }
+    try { connection.meter = this.runtime.metering?.(levels => this.audioLevels(connection, levels), activity => this.audioActivity(connection, activity)) }
     catch { connection.meter = null }
   }
 
@@ -438,11 +454,15 @@ export class LiveClient {
     const connection: Connection = { started: false }
     this.connection = connection
     this.reducer.reset()
-    this.patch({ phase: 'connecting', language, route, voiceRoute: route, voice: '', transcripts: [], muted: false, playbackBlocked: false, error: '', backend: 'idle', backendResult: '', cleanupWarning: '', inputLevel: 0, outputLevel: 0, inputWaveform: [], speaking: 'silent', meteringAvailable: false })
+    this.voice.reset()
+    this.patch({ phase: 'connecting', language, route, voiceRoute: route, voice: '', transcripts: [], muted: false, playbackBlocked: false, error: '', backend: 'idle', backendResult: '', cleanupWarning: '', inputLevel: 0, outputLevel: 0, speaking: 'silent', meteringAvailable: false })
     try {
       // Construct/resume inside the user's Start gesture, before microphone await.
       this.createMeter(connection)
       this.patch({ meteringAvailable: !!connection.meter })
+      const bridgeToken = this.bridgeToken ? await this.bridgeToken() : undefined
+      if (this.connection !== connection) return
+      if (this.bridgeToken && (!bridgeToken || typeof bridgeToken !== 'string')) throw new Error('受付の認証を確認してください。 / Case authorization could not be verified.')
       const stream = await this.runtime.microphone()
       if (this.connection !== connection) { stream.getTracks().forEach(track => track.stop()); return }
       connection.stream = stream
@@ -450,7 +470,7 @@ export class LiveClient {
       const sdp = await this.offer(connection)
       if (!sdp || this.connection !== connection) return
       // Do not abort this request on Stop: a late response still needs DELETE.
-      const created = await this.api(this.endpoints.session, { method: 'POST', body: JSON.stringify({ sdp, language, case_id: this.state.caseId, ...(route === 'reception' ? {} : { route }) }) })
+      const created = await this.api(this.endpoints.session, { method: 'POST', body: JSON.stringify({ sdp, language, case_id: this.state.caseId, ...(route === 'reception' ? {} : { route }), ...(bridgeToken ? { bridge_token: bridgeToken } : {}) }) })
       const id = object(created.session).id ?? created.session_id
       if (typeof id === 'string') connection.sessionId = id
       if (this.connection !== connection) { await this.finalize(connection); return }
@@ -513,10 +533,12 @@ export class LiveClient {
     const candidate: Connection = { started: false, stream: previous.stream }
     const attempt: VoiceSwitch = { previous, candidate, route, muted: this.state.muted, phase: 'preparing', cancelled: false, previousEnded: false }
     this.voiceSwitch = attempt
+    this.voice.reset()
+    previous.outputPlaying = false
     previous.stream.getAudioTracks().forEach(track => { track.enabled = false })
     if (previous.audio) { previous.audio.autoplay = false; previous.audio.pause() }
     clearTimeout(previous.disconnectTimer)
-    this.patch({ phase: 'switching', muted: true, playbackBlocked: false, error: '', inputLevel: 0, outputLevel: 0, inputWaveform: [], speaking: 'silent' })
+    this.patch({ phase: 'switching', muted: true, playbackBlocked: false, error: '', inputLevel: 0, outputLevel: 0, speaking: 'silent' })
     try {
       this.createMeter(candidate)
       candidate.meter?.setInput(previous.stream)
@@ -551,7 +573,7 @@ export class LiveClient {
         phase: candidate.peer?.connectionState === 'connected' ? 'connected' : 'reconnecting',
         voiceRoute: route, voice: typeof active.voice === 'string' ? active.voice : typeof created.voice === 'string' ? created.voice : '',
         muted: attempt.muted, playbackBlocked: false, meteringAvailable: !!candidate.meter,
-        inputLevel: 0, outputLevel: 0, inputWaveform: [], speaking: 'silent', error: '',
+        inputLevel: 0, outputLevel: 0, speaking: 'silent', error: '',
       })
       if (candidate.failure || candidate.peer?.connectionState === 'failed' || candidate.peer?.connectionState === 'closed') {
         await this.stop('切替先の音声接続が終了しました。再接続してください。 / The new voice connection ended. Please reconnect.')
@@ -602,7 +624,8 @@ export class LiveClient {
     if (!this.connection?.stream || this.voiceSwitch) return
     this.connection.stream.getAudioTracks().forEach(track => { track.enabled = !muted })
     const inputLevel = muted ? 0 : this.state.inputLevel
-    this.patch({ muted, inputLevel, inputWaveform: muted ? [] : this.state.inputWaveform, speaking: speakerFor(inputLevel, this.state.outputLevel) })
+    this.patch({ muted, inputLevel, speaking: speakerFor(inputLevel, this.state.outputLevel) })
+    if (muted) this.voice.publish({ ...this.voice.getSnapshot(), input: SILENT_SIGNAL })
   }
 
   async playAudio() {
@@ -610,8 +633,14 @@ export class LiveClient {
     const audio = connection?.audio
     if (!audio || !connection || this.voiceSwitch) return
     connection.meter?.resume?.()
-    try { await audio.play(); if (this.connection === connection) this.patch({ playbackBlocked: false }) }
-    catch { if (this.connection === connection) this.patch({ playbackBlocked: true }) }
+    connection.outputPlaying = false
+    this.voice.publish({ ...this.voice.getSnapshot(), output: SILENT_SIGNAL })
+    try {
+      await audio.play()
+      if (this.connection === connection) { connection.outputPlaying = true; this.patch({ playbackBlocked: false }) }
+    } catch {
+      if (this.connection === connection) { connection.outputPlaying = false; this.patch({ playbackBlocked: true }) }
+    }
   }
 
   private async deleteSession(id: string, keepalive = false) {
@@ -634,6 +663,7 @@ export class LiveClient {
   }
 
   private releaseTransport(connection: Connection) {
+    connection.outputPlaying = false
     clearTimeout(connection.startTimer)
     clearTimeout(connection.disconnectTimer)
     connection.cancelIce?.()
@@ -650,6 +680,7 @@ export class LiveClient {
     const attempt = this.voiceSwitch
     const connections = attempt ? [attempt.candidate, connection] : [connection]
     this.connection = null
+    this.voice.reset()
     this.voiceSwitch = null
     if (attempt) { attempt.cancelled = true; attempt.candidate.failure = new Error('Voice switch cancelled'); attempt.candidate.rejectReady?.(attempt.candidate.failure) }
     const tracks = new Set(connections.flatMap(item => item.stream?.getTracks() ?? []))
@@ -661,7 +692,7 @@ export class LiveClient {
       if (item.peer) { item.peer.ontrack = null; item.peer.onconnectionstatechange = null }
       if (item.audio) { item.audio.pause(); item.audio.srcObject = null }
     }
-    this.patch({ phase: 'stopping', error, muted: false, playbackBlocked: false, inputLevel: 0, outputLevel: 0, inputWaveform: [], speaking: 'silent', meteringAvailable: false })
+    this.patch({ phase: 'stopping', error, muted: false, playbackBlocked: false, inputLevel: 0, outputLevel: 0, speaking: 'silent', meteringAvailable: false })
     // Stop capture immediately, retain transport until backend finalization, then close it.
     this.closing = (async () => {
       try { for (const item of connections) await this.finalize(item, keepalive) }

@@ -1,3 +1,4 @@
+import { VoiceOrb } from '../voice/VoiceOrb.tsx'
 import { useEffect } from 'react'
 import { useLiveConnection } from './useLiveConnection.ts'
 import type { LiveLanguage, LivePhase, LiveSnapshot } from './types.ts'
@@ -32,6 +33,7 @@ export function LiveConnectionPanel({ caseId, language, onSnapshot }: LiveConnec
   return <section className="panel" aria-label={text('AI音声接続', 'AI voice connection')}>
     <h2 className="panel-heading">{text('AI音声接続', 'AI voice connection')}</h2>
     <div className="task-body">
+      <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} />
       <div className="row spread"><strong>{phases[s.phase][en ? 1 : 0]}</strong><span className="tag">{text('サーバー接続モード', 'Server connection mode')}</span></div>
       <p className="small">{text('音声はAIに送信されます。開始するとマイクを使います。言語と担当は会話から自動判定します。', 'Audio is sent to the AI. Starting uses your microphone. Language and department are detected from the conversation.')}</p>
       <p role="status">{s.configured === null

@@ -1,3 +1,5 @@
+import { measureSignal, SILENT_SIGNAL } from '../src/features/voice/activity.ts'
+import type { VoiceActivity } from '../src/features/voice/activity.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createAudioMeter, LiveClient } from '../src/features/live/client.ts'
@@ -47,19 +49,19 @@ test('Web Audio reads RMS at 10 Hz, silences inactive tracks/context and disconn
   t.mock.timers.tick(99)
   assert.equal(samples.length, 0)
   t.mock.timers.tick(1)
-  assert.deepEqual(samples.at(-1), { inputLevel: 0.25, outputLevel: 0.5, inputWaveform: Array(48).fill(0.25) })
+  assert.deepEqual(samples.at(-1), { inputLevel: 0.25, outputLevel: 0.5 })
   assert.equal(samples.length, 1)
   assert.equal(f.sources[0].connected, f.analysers[0], 'Microphone connects only to its analyser, never destination')
   microphone.track.enabled = false
   t.mock.timers.tick(100)
-  assert.deepEqual(samples.at(-1), { inputLevel: 0, outputLevel: 0.5, inputWaveform: [] })
+  assert.deepEqual(samples.at(-1), { inputLevel: 0, outputLevel: 0.5 })
   remote.track.readyState = 'ended'
   t.mock.timers.tick(100)
-  assert.deepEqual(samples.at(-1), { inputLevel: 0, outputLevel: 0, inputWaveform: [] })
+  assert.deepEqual(samples.at(-1), { inputLevel: 0, outputLevel: 0 })
   microphone.track.enabled = true
   f.context.state = 'suspended'
   t.mock.timers.tick(100)
-  assert.deepEqual(samples.at(-1), { inputLevel: 0, outputLevel: 0, inputWaveform: [] })
+  assert.deepEqual(samples.at(-1), { inputLevel: 0, outputLevel: 0 })
   meter.resume?.()
   assert.equal(f.context.resumed, 1)
   const replacement = streamFixture()
@@ -90,34 +92,16 @@ test('unavailable Web Audio is optional; partially attached sources still discon
   meter.setInput(streamFixture().stream)
   assert.equal(f.sources[0].disconnected, 1)
   t.mock.timers.tick(100)
-  assert.deepEqual(samples, [{ inputLevel: 0, outputLevel: 0, inputWaveform: [] }])
+  assert.deepEqual(samples, [{ inputLevel: 0, outputLevel: 0 }])
   meter.dispose()
   assert.equal(f.context.closed, 1)
-})
-
-test('the input waveform preserves measured positive and negative samples and clears when muted', t => {
-  t.mock.timers.enable({ apis: ['setInterval'] })
-  const f = audioContextFixture()
-  const microphone = streamFixture()
-  let latest: LiveAudioLevels | undefined
-  const meter = createAudioMeter(value => { latest = value }, () => f.context as unknown as AudioContext)!
-  meter.setInput(microphone.stream)
-  f.analysers[0].getFloatTimeDomainData = data => {
-    data.fill(0.25, 0, data.length / 2)
-    data.fill(-0.5, data.length / 2)
-  }
-  t.mock.timers.tick(100)
-  assert.deepEqual(latest?.inputWaveform, [...Array(24).fill(0.25), ...Array(24).fill(-0.5)])
-  microphone.track.enabled = false
-  t.mock.timers.tick(100)
-  assert.deepEqual(latest?.inputWaveform, [])
-  meter.dispose()
 })
 
 function clientFixture() {
   const microphone = streamFixture()
   const remote = streamFixture()
   let publish: (levels: LiveAudioLevels) => void = () => assert.fail('Meter not constructed')
+  let publishActivity: ((activity: VoiceActivity) => void) | undefined
   let meterDisposed = 0
   let input: MediaStream | undefined
   let output: MediaStream | undefined
@@ -140,14 +124,18 @@ function clientFixture() {
         : Response.json({ session: { id: 'live_1' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }),
     microphone: async () => microphone.stream, peer: () => peer, audio: () => audio, supported: () => true,
     events: () => ({ close() {} }),
-    metering: (callback: (levels: LiveAudioLevels) => void) => {
+    metering: (callback: (levels: LiveAudioLevels) => void, activity?: (value: VoiceActivity) => void) => {
       publish = callback
+      publishActivity = activity
       return { setInput(stream: MediaStream) { input = stream }, setOutput(stream: MediaStream) { output = stream }, dispose() { meterDisposed++ } }
     },
   } as unknown as LiveRuntime
   const client = new LiveClient('case-a', 'ja', runtime)
   return { client, runtime, microphone, remote, audio, peer, channel,
-    sample: (inputLevel: number, outputLevel: number, inputWaveform?: number[]) => publish({ inputLevel, outputLevel, inputWaveform }),
+    sample: (inputLevel: number, outputLevel: number) => {
+      publish({ inputLevel, outputLevel })
+      publishActivity?.({ available: true, input: measureSignal(new Float32Array(512).fill(inputLevel)), output: measureSignal(new Float32Array(512).fill(outputLevel)) })
+    },
     disposed: () => meterDisposed, input: () => input, output: () => output,
   }
 }
@@ -162,21 +150,25 @@ test('speaking comes from measured audio only; muted/paused/inaudible output and
     f.sample(0.03, 0.5)
     assert.equal(f.client.getSnapshot().speaking, 'user', 'No output stream is playing yet')
     assert.equal(f.client.getSnapshot().outputLevel, 0)
+    assert.ok(f.client.voice.getSnapshot().input.active)
+    assert.equal(f.client.voice.getSnapshot().output, SILENT_SIGNAL)
     f.peer.ontrack!({ streams: [f.remote.stream] })
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(f.output(), f.remote.stream)
-    f.sample(0.03, 0.04, [0.2, -0.3])
+    f.sample(0.03, 0.04)
     assert.equal(f.client.getSnapshot().speaking, 'both')
-    assert.deepEqual(f.client.getSnapshot().inputWaveform, [0.2, -0.3])
+    assert.ok(f.client.voice.getSnapshot().input.active && f.client.voice.getSnapshot().output.active)
     f.client.setMuted(true)
+    assert.equal(f.client.voice.getSnapshot().input, SILENT_SIGNAL)
+    assert.ok(f.client.voice.getSnapshot().output.active)
     assert.equal(f.client.getSnapshot().inputLevel, 0)
-    assert.deepEqual(f.client.getSnapshot().inputWaveform, [])
     assert.equal(f.client.getSnapshot().speaking, 'assistant')
     f.sample(0.8, 0.04)
     assert.equal(f.client.getSnapshot().inputLevel, 0)
     f.audio.paused = true
     f.sample(0.8, 0.04)
     assert.equal(f.client.getSnapshot().speaking, 'silent')
+    assert.equal(f.client.voice.getSnapshot().output, SILENT_SIGNAL)
     f.audio.paused = false; f.audio.muted = true
     f.sample(0.8, 0.04)
     assert.equal(f.client.getSnapshot().outputLevel, 0)
@@ -197,6 +189,7 @@ test('speaking comes from measured audio only; muted/paused/inaudible output and
     assert.equal(f.client.getSnapshot().outputLevel, 0)
     assert.equal(f.client.getSnapshot().meteringAvailable, false)
     f.sample(1, 1)
+    assert.equal(f.client.voice.getSnapshot().available, false)
     assert.equal(f.client.getSnapshot().speaking, 'silent')
   } finally { f.client.dispose() }
   assert.equal(f.disposed(), 1)
@@ -211,11 +204,13 @@ test('autoplay refusal keeps remote samples silent until explicit playback succe
     await new Promise(resolve => setImmediate(resolve))
     f.sample(0, 0.5)
     assert.equal(f.client.getSnapshot().playbackBlocked, true)
+    assert.equal(f.client.voice.getSnapshot().output, SILENT_SIGNAL)
     assert.equal(f.client.getSnapshot().speaking, 'silent')
     f.audio.play = async () => { f.audio.paused = false }
     await f.client.playAudio()
     f.sample(0, 0.5)
     assert.equal(f.client.getSnapshot().speaking, 'assistant')
+    assert.ok(f.client.voice.getSnapshot().output.active)
   } finally { await f.client.stop(); f.client.dispose() }
 })
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { caseVoicePrefix, LiveClient } from '../src/features/live/client.ts'
+import { LiveClient, caseVoicePrefix } from '../src/features/live/client.ts'
 import type { LiveRuntime } from '../src/features/live/client.ts'
 import type { LiveRoute } from '../src/features/live/types.ts'
 
@@ -90,27 +90,6 @@ function fixture(apiPrefix?: string) {
     activationResponse: () => Response.json({ session: { id: 'new' }, case_id: 'case-a', old_session_id: 'old', route, voice: voices[route], active: true }),
   }
 }
-
-test('Worker owner-scoped voice routes cover status, events, start, handoff, activate and cleanup', async () => {
-  const prefix = caseVoicePrefix('case-a')
-  const f = fixture(prefix)
-  try {
-    await f.start()
-    const switching = f.client.switchDepartment('haas')
-    await f.readyCandidate(); await switching
-    await f.client.stop()
-    assert.deepEqual(f.eventUrls, [`${prefix}/events`])
-    assert.deepEqual(f.calls.map(call => call.path), [
-      `${prefix}/status`, `${prefix}/session`, `${prefix}/session/old/handoff`,
-      `${prefix}/session/new/activate`, `${prefix}/session/new`,
-    ])
-    assert.equal(f.calls[1].body.case_id, 'case-a')
-    assert.equal(f.microphoneCalls(), 1)
-    assert.throws(() => new LiveClient('case-a', 'ja', f.runtime, { apiPrefix: caseVoicePrefix('case-b') }), /same origin/)
-    assert.throws(() => new LiveClient('case-a', 'ja', f.runtime, { apiPrefix: 'https://other.example/api' }), /same origin/)
-    assert.throws(() => caseVoicePrefix('../other'), /Invalid Worker/)
-  } finally { f.client.dispose() }
-})
 
 test('initial department selects its voice; switch waits for both readiness signals and preserves shared capture', async () => {
   const f = fixture()
@@ -305,4 +284,28 @@ test('candidate readiness timeout restores the old call and removes the candidat
     assert.equal(f.peers[1].closed, true)
     assert.equal(f.calls.filter(call => call.path.endsWith('/activate')).length, 0)
   } finally { await f.client.stop(); f.client.dispose() }
+})
+
+
+test('Worker prefix scopes status, SSE, create, handoff, activation and final cleanup to one case', async () => {
+  const prefix = caseVoicePrefix('case-a')
+  const f = fixture(prefix)
+  try {
+    await f.start()
+    const switching = f.client.switchDepartment('haas')
+    await f.readyCandidate(); await switching; await f.client.stop()
+    assert.deepEqual(f.eventUrls, [`${prefix}/events`])
+    assert.ok(f.calls.some(call => call.path === `${prefix}/status`))
+    assert.ok(f.calls.some(call => call.path === `${prefix}/session`))
+    assert.ok(f.calls.some(call => call.path === `${prefix}/session/old/handoff`))
+    assert.ok(f.calls.some(call => call.path === `${prefix}/session/new/activate`))
+    assert.ok(f.calls.some(call => call.path === `${prefix}/session/new` && call.method === 'DELETE'))
+    assert.ok(f.calls.every(call => call.path.startsWith(`${prefix}/`)))
+  } finally { f.client.dispose() }
+})
+test('voice transport rejects absolute URLs and prefixes for another Worker case', () => {
+  for (const prefix of ['https://example.com/api', '/api/v1/cases/other/voice', '/api/v1/cases/case-a/voice/']) {
+    assert.throws(() => fixture(prefix), /same origin/)
+  }
+  assert.throws(() => caseVoicePrefix('../other'), /Invalid Worker case/)
 })

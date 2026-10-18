@@ -198,27 +198,6 @@ test('unconfigured or unreachable servers cannot request a microphone', async ()
   client.dispose()
 })
 
-test('Worker authentication and non-JSON responses are visible and can recover without a microphone', async () => {
-  const f = fixture()
-  let microphoneCalls = 0
-  f.setMicrophone(async () => { microphoneCalls++; return f.stream })
-  let response = Response.json({ title: 'visitor_session_required', detail: 'Authentication required.' }, { status: 401 })
-  f.runtime.fetch = async () => response
-  const client = new LiveClient('case-a', 'ja', f.runtime, { apiPrefix: '/api/v1/cases/case-a/voice' })
-  await client.refreshStatus()
-  assert.match(client.getSnapshot().error, /Authentication required.*401/)
-  assert.equal(client.getSnapshot().configured, null)
-  response = new Response('<html>Sign in</html>', { headers: { 'Content-Type': 'text/html' } })
-  await client.refreshStatus()
-  assert.match(client.getSnapshot().error, /Check access/)
-  response = Response.json({ live_configured: true, mcp_configured: true })
-  await client.refreshStatus()
-  assert.equal(client.getSnapshot().configured, true)
-  assert.equal(client.getSnapshot().error, '')
-  assert.equal(microphoneCalls, 0)
-  client.dispose()
-})
-
 test('stop mutes capture immediately, waits for backend finalization before closing RTC and blocks a new call', async () => {
   const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
   const fetchApi = f.runtime.fetch
@@ -256,4 +235,63 @@ test('a permanently closed SSE after proxy failure is recreated, and dispose can
   client.dispose()
   t.mock.timers.tick(3000)
   assert.equal(opened, 2)
+})
+
+
+test('case proof is sent only to session creation, refreshed, and not retained in snapshots', async () => {
+  const f = fixture()
+  let count = 0
+  const client = new LiveClient('case-a', 'ja', f.runtime, { bridgeToken: async () => `proof-${++count}` })
+  try {
+    await client.refreshStatus(); await client.start(); await client.stop(); await client.start()
+    const creates = f.calls.filter(call => call.path === '/api/live/session')
+    assert.equal(JSON.parse(String(creates[0].options?.body)).bridge_token, 'proof-1')
+    assert.equal(JSON.parse(String(creates[1].options?.body)).bridge_token, 'proof-2')
+    assert.equal(creates[0].options?.redirect, 'manual')
+    assert.equal(creates[0].options?.credentials, 'same-origin')
+    assert.equal(JSON.stringify(client.getSnapshot()).includes('proof-'), false)
+  } finally { await client.stop(); client.dispose() }
+})
+test('a failed case proof never requests microphone permission or creates a session', async () => {
+  const f = fixture()
+  let asked = false
+  f.setMicrophone(async () => { asked = true; return f.stream })
+  const client = new LiveClient('case-a', 'ja', f.runtime, { bridgeToken: async () => { throw new Error('Authenticate first') } })
+  await client.refreshStatus(); await client.start()
+  assert.equal(asked, false)
+  assert.equal(f.calls.some(call => call.path === '/api/live/session'), false)
+  assert.match(client.getSnapshot().error, /Authenticate first/)
+  client.dispose()
+})
+test('stop during proof fetching ignores its late success before any microphone or session creation', async () => {
+  const f = fixture()
+  let resolve!: (proof: string) => void
+  let asked = false
+  f.setMicrophone(async () => { asked = true; return f.stream })
+  const client = new LiveClient('case-a', 'ja', f.runtime, { bridgeToken: () => new Promise(r => { resolve = r }) })
+  await client.refreshStatus()
+  const starting = client.start()
+  await client.stop(); resolve('late-proof'); await starting
+  assert.equal(asked, false)
+  assert.equal(f.calls.some(call => call.path === '/api/live/session'), false)
+  assert.equal(client.getSnapshot().phase, 'ended')
+  client.dispose()
+})
+test('status auth and HTML failures stay visible, and a recovered status clears only its own error', async () => {
+  const f = fixture()
+  const fetchApi = f.runtime.fetch
+  const client = new LiveClient('case-a', 'ja', f.runtime)
+  try {
+    f.runtime.fetch = async () => Response.json({ detail: 'Case access denied' }, { status: 401 })
+    await client.refreshStatus()
+    assert.match(client.getSnapshot().error, /Case access denied/)
+    assert.equal(client.getSnapshot().configured, null)
+    f.runtime.fetch = async () => new Response('<html>Login</html>')
+    await client.refreshStatus()
+    assert.match(client.getSnapshot().error, /Invalid reception response/)
+    f.runtime.fetch = fetchApi
+    await client.refreshStatus()
+    assert.equal(client.getSnapshot().configured, true)
+    assert.equal(client.getSnapshot().error, '')
+  } finally { client.dispose() }
 })

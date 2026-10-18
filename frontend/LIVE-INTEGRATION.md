@@ -1,10 +1,11 @@
-# ReactとPR #4の音声接続
+# Reactと共通音声窓口の接続
 
-利用者向け画面はReactを使い、PR #4のNodeサーバーへWebRTCとSSEで接続します。
-画面担当が`App.tsx`でデモ/音声を切り替え、接続担当は`src/features/live/`を実装します。
-デモの文字・ローカルoperatorの操作は、実接続へ送信しません。
+利用者向けの共通受付は `ReceptionPage` → `useReceptionConnection` → `useLiveConnection` です。
+開始ボタンでWorker案件を作成し、所有者cookieで認可された案件単位のAPIからNodeへ接続します。
+案件と開始証明の契約は [WORKER-CASE-CONTRACT.md](./WORKER-CASE-CONTRACT.md) を参照してください。
+オーブはpupuの `VoiceOrb` と同じWeb Audio解析を使います。表示用の合成波形は実音声の証拠にしません。
 
-## 起動
+## Node単体の開発用接続
 
 PR #4の`integration/`があるcheckoutで、サーバー側の設定を用意して起動します。
 ブラウザにAPIキーやMCPトークンを渡す必要はありません。設定方法はPR #4の`integration/README.md`を参照してください。
@@ -28,7 +29,7 @@ npm run dev -- --config vite.live.config.ts
 トップから会話画面に進み「AI音声に接続」を選びます。パネルの表示は設定・イベントの
 取得のみで、マイクは「AI音声を開始」を押すまで使いません。未設定時は開始できません。
 
-## 画面との契約
+## 開発用パネルとの契約
 
 ```tsx
 import { LiveConnectionPanel } from '@/features/live/LiveConnectionPanel'
@@ -36,8 +37,8 @@ import { LiveConnectionPanel } from '@/features/live/LiveConnectionPanel'
 <LiveConnectionPanel caseId={session.id} language={session.language} />
 ```
 
-- `caseId`はPR #4 Nodeサーバーで会話・依頼を関連付けるIDです。現在はReactのデモセッションUUIDを流用します。
-  Workersのcaseを作成する処理はなく、同一UUIDでもWorkersに存在するとは限りません。
+- この開発用パネルの`caseId`はNodeの会話・依頼を関連付けるIDです。単体で使う場合はWorker案件の存在・所有を保証しません。
+  共通受付はWorker発行IDを使い、デモセッションUUIDを流用しません。
 - `language`は接続開始時の初期言語です。担当と言語はサーバーの`routing.updated`を表示します。
   ブラウザは言語・国籍やルーティングを推測しません。
 - 任意の`onSnapshot(snapshot: LiveSnapshot)`で状態を購読できます。これは表示用です。
@@ -46,14 +47,19 @@ import { LiveConnectionPanel } from '@/features/live/LiveConnectionPanel'
   mode切替・画面離脱・pagehideでも同じ片付けを行います。
 - 音声会話の内容はメモリ内のみです。デモの結果画面や再読込後の履歴へは保存されません。
 
-利用するHTTPは`GET /api/status`、`GET /api/events`、
+Node単体で利用するHTTPは`GET /api/status`、`GET /api/events`、
 `POST /api/live/session {sdp,language,case_id}`、`DELETE /api/live/session/:id`です。
 WebRTCは`oai-events`を使います。HTTP作成が開始を行うので`session.start`を送らず、
 `session.started`を待ちます。PR #4はfrontend commandを許可していないため、文字送信も行いません。
 
+共通受付は `apiPrefix: /api/v1/cases/:caseId/voice` を指定し、`status`・`events`・
+`session`・担当交代・終了をすべてこの配下へ送ります。公開受付は空の案件IDでNodeの全体APIを呼びません。
+開始時の短命な `bridge_token` は毎回取得し、初回session作成本文だけに含めます。
+ブラウザからの秘密設定UIはありません。
+
 ## 状態の扱い
 
-SSEはサーバー全体のイベントなのでcase IDを必須にして他の会話を除外します。
+公開SSEはWorkerが案件ごとに認可します。開発用の全体SSEもあるため、ブラウザもcase IDを必須にして他の会話を除外します。
 DataChannelとSSEに重複する文字起こしはevent IDで重複排除します。
 人間依頼はrevisionが古い更新を無視し、simulatedと回答`{text,language}`を保ちます。
 `accepted`は受話器の応答で、音声通話の確立を意味しません。
@@ -68,11 +74,10 @@ Workers/operator接続と実機・実モデルの通し検証は別途必要で�
 ## 確認
 
 ```sh
-node --test frontend/tests/live-connection.test.ts
-npx tsc -p frontend/tsconfig.live.json
-npm run typecheck
+npm run test:frontend
+npm run typecheck:frontend
 npm run lint
-npm run build
+npm run build:frontend
 ```
 
 テストはイベント分離・重複排除・古い依頼の除外・遅れた接続応答の削除・
@@ -80,31 +85,3 @@ npm run build
 公式仕様: https://developers.openai.com/api/docs/guides/voice-webrtc
 
 関連: https://github.com/pupuchan1/future-company/issues/13
-# 担当別ボイスと音量の追加契約（PR #26）
-
-画面デザインはpupuさんの実装を採用します。この差分は既存 `features/live` を拡張し、App・トップページ・スタイルを置き換えません。
-
-- `useLiveConnection().start(route?)`: route省略で共通受付。
-- `switchDepartment(route)`: 同一caseの会話履歴・Agentsを保持して担当の声へ交代。
-- snapshot `inputLevel/outputLevel` は実音声のRMS（0〜1）、`speaking` は `user/assistant/both/silent`。オーブ表示に使えます。
-- snapshot `voiceRoute/voice` は現在の声、`route` は業務の担当で別概念です。`switchConfigured` と `voiceMap` はサーバーstatusから取得します。
-- `switching` 中は他の切替を止め、終了操作は有効にしてください。activate応答が不明な場合は無音を維持し、同じtokenで再試行した後に終了案内を表示します。
-- 自動の業務ルーティングだけでは声は変わりません。初回の入口を1つにし、声の交代UIの配置はpupuさん側で決めます。
-
-サーバーはPR #4の `POST /api/live/session/:oldId/handoff` →候補のWebRTC connectedとsession.started→`POST /api/live/session/:newId/activate` を使用します。失敗時は元の会話に戻し、同じマイクtrackを二重取得・停止しません。声の変更には新Live sessionが必要です（[公式ガイド](https://developers.openai.com/api/docs/guides/live-conversations)）。
-
-32テスト、型検査、buildが成功。公開Workersのcase ID・認証との結合は #18、保存済み人間回答の返却は #19 です。新しいデザイン案を採用した意味や、実機黒電話を検証した意味ではありません。
-
-## 共通受付への統合
-
-`ReceptionPage` の既存レイアウトを保ち、信号表示を `AudioOrb` へ差し替えています。入力は既存マイクの時間領域データを48点へ縮約した実波形、出力は再生成功と再生状態を確認したRMSに連動する青いリングです。更新は最大10Hzで、音量だけから波形を生成しません。無音・ミュート・担当交代・終了時には波形を止めます。`prefers-reduced-motion` では補間と待機アニメーションを止めます。
-
-通話中にオーブが画面外へ出た場合は、小さな音声表示と終了操作を残します。業務担当が変わった場合にのみ、その担当の声へ切り替える明示ボタンを表示します。写真・App・共通CSSのデザインは変更していません（#29 / #30）。実音声と実機の検証は、このブラウザ表示・モック試験とは別です。
-
-## Worker認可を通す音声経路
-
-`useLiveConnection({caseId, language, apiPrefix: caseVoicePrefix(caseId)})` は、同一originの `/api/v1/cases/:caseId/voice` 配下に `status`・`events`・`session`・`session/:id/handoff`・`session/:id/activate`・`DELETE session/:id` をまとめます。Workerが既存の来訪者cookieで認可してNodeへ中継する契約です。ブラウザへ社員トークンやNodeの秘密値を渡しません。別caseや外部originのprefixは拒否します。`apiPrefix`省略時はローカル開発用の従来 `/api` 経路です。
-
-`useWorkerLiveConnection({conversationKey, language, kind})` は `POST /api/v1/cases` が返した実IDでのみ音声hookを有効にします。kindはWorkerの確定契約を呼び出し側が指定します。作成前・認証失敗・保存失敗・AccessのHTML応答を実案件として表示しません。再試行は同じcommandIdと初回localeを使用し、React Strict Modeの重複effectでも作成リクエストは一つです。音声のマイク許可は引き続き利用者の開始操作後です。
-
-この段階では共通受付用kindの確定待ちで、ReceptionPageは従来hookのままです。接続時は同ページのローカルUUIDをconversationKeyとして渡し、表示IDには `snapshot.caseId` を使います。Worker/Nodeの返却adapterと公開proxyの実装・通し試験は別の統合点です。

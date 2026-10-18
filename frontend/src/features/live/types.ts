@@ -43,8 +43,6 @@ export interface LiveSnapshot {
   /** Measured RMS amplitude, 0..1; transcripts never change these values. */
   inputLevel: number
   outputLevel: number
-  /** Downsampled, signed microphone samples for the input waveform. */
-  inputWaveform: number[]
   speaking: LiveSpeaking
   meteringAvailable: boolean
   transcripts: LiveTranscript[]
@@ -63,7 +61,7 @@ export function initialSnapshot(caseId: string, language: LiveLanguage): LiveSna
   return {
     caseId, language, route: 'reception', voiceRoute: 'reception', voice: '', switchConfigured: false, voiceMap: {}, phase: 'idle', events: 'connecting',
     configured: null, mcpConfigured: null, muted: false, playbackBlocked: false,
-    inputLevel: 0, outputLevel: 0, inputWaveform: [], speaking: 'silent', meteringAvailable: false,
+    inputLevel: 0, outputLevel: 0, speaking: 'silent', meteringAvailable: false,
     transcripts: [], requests: [], backend: 'idle', backendResult: '', error: '', cleanupWarning: '',
   }
 }
