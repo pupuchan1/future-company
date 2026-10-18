@@ -33,7 +33,7 @@ export class WorkerBridge {
     const { case: snapshot } = await this.api(`/staff/cases/${caseId}`);
     if (snapshot.id !== caseId || snapshot.status === 'resolved') throw Object.assign(new Error('Worker case is unavailable.'), { status: 409 });
     if (this.cases.has(caseId)) throw Object.assign(new Error('Case bridge already exists.'), { status: 409 });
-    const state = { id: caseId, closed: false, queue: Promise.resolve(), handoffs: new Map(), deliveries: new Map() };
+    const state = { id: caseId, closed: false, queue: Promise.resolve(), handoffs: new Map(), deliveries: new Map(), retryableDeliveries: new Set() };
     this.cases.set(caseId, state);
     const url = new URL(`/api/v1/staff/cases/${caseId}/ws`, this.url);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -102,21 +102,39 @@ export class WorkerBridge {
     return true;
   }
 
-  observe(state, snapshot) {
+  observe(state, snapshot, { retry = false } = {}) {
     if (state.closed || snapshot.id !== state.id) return;
     for (const request of snapshot.requests || []) {
       const origin = request.origin;
       const known = origin && state.handoffs.get(origin.handoffId);
-      if (!known || known.cancelled || origin.nodeCaseId !== state.id || origin.route !== known.route || request.status !== 'answered'
-        || !request.result || typeof request.simulated !== 'boolean' || request.delivery?.status !== 'pending' || state.deliveries.has(origin.handoffId)) continue;
+      if (!known || origin.nodeCaseId !== state.id || origin.route !== known.route) continue;
+      // Worker-side cancellation must invalidate even a delivery already awaiting
+      // its Agent, so Live can suppress the answer after that await completes.
+      if (request.status === 'cancelled') known.cancelled = true;
       const id = origin.handoffId;
+      const retryable = state.retryableDeliveries.has(id);
+      if (known.cancelled || request.status !== 'answered' || !request.result || typeof request.simulated !== 'boolean'
+        || state.deliveries.has(id) || (retryable && !retry)
+        || (request.delivery?.status !== 'pending' && !(retry && retryable && request.delivery?.status === 'queued'))) continue;
+      state.retryableDeliveries.delete(id);
       // One in-flight delivery per stable case/handoff, even across repeated snapshots.
-      const job = this.forward(state, request).catch(error => this.emit({ type: 'worker.error', case_id: state.id, handoff_id: id, message: error.message }));
+      const attempt = { started: false };
+      const job = this.forward(state, request, attempt).catch(() => {
+        // A lost queued-write response is safe to recover using its stable command
+        // ID, but once deliver() was invoked its outcome may be ambiguous.
+        if (!attempt.started && !state.closed && !known.cancelled) {
+          state.deliveries.delete(id);
+          state.retryableDeliveries.add(id);
+        }
+        this.emit({ type: 'worker.error', case_id: state.id, handoff_id: id,
+          message: attempt.started ? 'Worker delivery receipt could not be saved; no automatic redelivery.'
+            : 'Worker answer synchronization failed before delivery; use explicit result synchronization.' });
+      });
       state.deliveries.set(id, job);
     }
   }
 
-  async forward(state, request) {
+  async forward(state, request, attempt) {
     const origin = request.origin;
     const valid = () => !state.closed && !state.handoffs.get(origin.handoffId)?.cancelled;
     const path = `/staff/cases/${state.id}/handoffs/${origin.handoffId}/delivery`;
@@ -128,6 +146,7 @@ export class WorkerBridge {
     const event = { name: 'human.completed', eventId: `worker-result-${state.id}-${origin.handoffId}`, isValid: valid,
       data: { case_id: origin.nodeCaseId, handoff_id: origin.handoffId, request_id: request.id, status: 'completed', result: request.result, simulated: request.simulated, source_route: origin.route } };
     let result;
+    attempt.started = true;
     try { result = await this.deliver(event); }
     catch { result = { status: 'failed' }; }
     if (!valid()) return;
@@ -149,7 +168,7 @@ export class WorkerBridge {
     const state = this.cases.get(caseId);
     if (!state || state.closed || !await verifyBridgeProof(proof, caseId, this.token)) throw Object.assign(new Error('A valid active case proof is required.'), { status: 403 });
     const { case: snapshot } = await this.api(`/staff/cases/${caseId}`);
-    this.observe(state, snapshot);
+    this.observe(state, snapshot, { retry: true });
     return { case_id: caseId, status: 'accepted', delivery: snapshot.requests.filter(r => r.origin).map(r => ({ handoff_id: r.origin.handoffId, request_id: r.id, status: r.delivery?.status || r.status })) };
   }
 
