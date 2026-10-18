@@ -185,7 +185,7 @@ export function applyCommand(state: StoredCase, actor: Actor, command: Command, 
       next.messages.push({ id: `message-${state.revision + 1}`, role: 'staff', text: answer, createdAt: now })
       next.proposal = { text: answer, canReplace: state.kind !== 'recruitment' && command.stockAvailable === true }
       next.status = 'ready'
-      next.ai = { status: 'resume_pending', reason: 'Staff has answered. The voice and Agents adapters are not connected.' }
+      next.ai = { status: 'resume_pending', reason: 'Staff has answered. Business continuation is pending.' }
       break
     }
     case 'begin_replacement':

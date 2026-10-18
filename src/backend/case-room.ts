@@ -136,7 +136,7 @@ export class CaseRoom extends DurableObject<BackendEnv> {
       state.integration.agentStatus = value.status
       state.revision += 1
       state.updatedAt = new Date().toISOString()
-      if (value.turnOutcome) state.ai = { status: 'resume_pending', reason: value.turnOutcome }
+      // Provider turn events do not confirm that this case's staff answer was consumed.
       this.ctx.storage.sql.exec('UPDATE case_state SET data=? WHERE id=1', JSON.stringify(state))
       return snapshotFor(state, actor)
     }))

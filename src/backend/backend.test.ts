@@ -230,7 +230,9 @@ test('recruitment intake persists self-reported information and an existing huma
   const { snapshot: state, actor } = await createRecruitment('recruitment-create')
   const command = { type: 'submit_recruitment', roleInterest: 'バックエンドエンジニア', experience: 'TypeScriptでAPI開発を3年', questions: ['勤務時間を教えてください', 'Can I work remotely?'] }
   const args = [actor, 'recruitment-submit', 0, command, '2026-10-18T05:00:00Z']
-  const submitted = roomSnapshot(await roomCall(state.id, actor, 'command', args))
+  const simultaneous = await Promise.all([roomCall(state.id, actor, 'command', args), roomCall(state.id, actor, 'command', args)])
+  const submitted = roomSnapshot(simultaneous[0])
+  assert.deepEqual(roomSnapshot(simultaneous[1]), submitted)
   assert.deepEqual(submitted.recruitment, { roleInterest: command.roleInterest, experience: command.experience, questions: command.questions, source: 'visitor_self_report', submittedAt: '2026-10-18T05:00:00Z' })
   assert.equal(submitted.revision, 1)
   assert.equal(submitted.status, 'awaiting_human')
@@ -261,6 +263,9 @@ test('recruitment claims are exclusive and only assigned staff can answer withou
   const second: Actor = { role: 'staff', id: 'recruiter-b' }
   const claims = await Promise.all([roomCommand(state, first, 'claim-a', { type: 'claim', requestId }), roomCommand(state, second, 'claim-b', { type: 'claim', requestId })])
   assert.equal(claims.filter(result => result.ok).length, 1)
+  const rejectedClaim = claims.find(result => !result.ok)!
+  assert.ok(!rejectedClaim.ok)
+  assert.equal(rejectedClaim.code, 'revision_conflict')
   const winner = claims[0].ok ? first : second
   const loser = claims[0].ok ? second : first
   state = roomSnapshot(claims.find(result => result.ok)!)
@@ -274,6 +279,9 @@ test('recruitment claims are exclusive and only assigned staff can answer withou
   const visitor = await roomCommand(state, actor, 'visitor-answer', answer)
   assert.ok(!visitor.ok)
   assert.equal(visitor.code, 'staff_required')
+  const staleAnswer = await roomCall(state.id, winner, 'command', [winner, 'answer-stale', state.revision - 1, answer, state.updatedAt])
+  assert.ok(!staleAnswer.ok)
+  assert.equal(staleAnswer.code, 'revision_conflict')
   const answered = roomSnapshot(await roomCommand(state, winner, 'answer', answer))
   assert.equal(answered.requests[0].answer, answer.answer)
   assert.equal(answered.requests[0].stockAvailable, undefined)
@@ -288,6 +296,37 @@ test('recruitment claims are exclusive and only assigned staff can answer withou
   const publicCase = roomSnapshot(await roomCall(state.id, actor, 'snapshot', [actor]))
   assert.equal(publicCase.requests[0].assignedTo, undefined)
   assert.ok(!JSON.stringify(publicCase).includes('ownerHash'))
+})
+
+test('agent events cannot replace staff waiting or mark a staff answer as resumed', async () => {
+  const { snapshot, actor } = await createRecruitment('recruitment-agent-wait-create')
+  let state = roomSnapshot(await roomCall(snapshot.id, actor, 'reserveIntegration', [actor, 'agent', snapshot.revision, 'agent', 'recruitment-context']))
+  state = roomSnapshot(await roomCall(state.id, actor, 'completeIntegration', [actor, 'agent', { sessionId: 'recruitment-agent-wait', agentStatus: 'in_progress' }]))
+  state = roomSnapshot(await roomCommand(state, actor, 'submit', { type: 'submit_recruitment', roleInterest: 'Engineer', experience: 'API development', questions: ['What tools does the team use?'] }))
+  const waiting = state.ai
+  const requestId = state.requests[0].id
+  state = roomSnapshot(await roomCall(state.id, actor, 'recordAgentEvent', ['recruitment-agent-wait', 'finished-intake', { status: 'idle', turnOutcome: 'completed' }]))
+  assert.deepEqual(state.ai, waiting)
+  assert.equal(state.status, 'awaiting_human')
+  assert.equal(state.requests[0].status, 'pending')
+  assert.equal(state.requests[0].answer, undefined)
+  const staff: Actor = { role: 'staff', id: 'recruiter' }
+  state = roomSnapshot(await roomCommand(state, staff, 'claim', { type: 'claim', requestId }))
+  const claimed = state
+  const answer: Command = { type: 'answer', requestId, answer: 'We use TypeScript.', answerLanguage: 'en', simulated: false }
+  state = roomSnapshot(await roomCommand(state, staff, 'answer', answer))
+  assert.equal(state.ai.status, 'resume_pending')
+  const resumePending = state.ai
+  for (const [eventId, status, turnOutcome] of [['old-turn', 'idle', 'completed'], ['running', 'in_progress', undefined], ['failed-turn', 'failed', 'failed']]) {
+    state = roomSnapshot(await roomCall(state.id, actor, 'recordAgentEvent', ['recruitment-agent-wait', eventId, { status, turnOutcome }]))
+    assert.deepEqual(state.ai, resumePending)
+    assert.equal(state.requests[0].answer, 'We use TypeScript.')
+    assert.equal(state.messages.length, 1)
+  }
+  await roomCommand(claimed, staff, 'answer', answer)
+  assert.deepEqual(roomSnapshot(await roomCall(state.id, staff, 'snapshot', [staff])), state)
+  const alarm = await mf.dispatchFetch(`${origin}/__integration`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: state.id, actor, method: 'scheduledAlarm' }) })
+  assert.equal(await alarm.json(), null)
 })
 
 test('recruitment commands reject other owners, staff submissions and other case kinds', async () => {
@@ -356,7 +395,12 @@ test('updated recruitment intake supersedes pending staff work and cannot enable
 
 test('recruitment WebSockets restore actor attachments after hibernation and reconnect to the latest answer', { timeout: 15000 }, async () => {
   const { snapshot, actor } = await createRecruitment('recruitment-ws-create')
-  let state = await readCase(await request(`/cases/${snapshot.id}/recruitment/submit`, { commandId: 'submit', expectedRevision: 0, roleInterest: 'Engineer', experience: 'API development', questions: [] }))
+  let state = snapshot
+  for (const kind of ['live', 'agent'] as const) {
+    state = roomSnapshot(await roomCall(state.id, actor, 'reserveIntegration', [actor, `private-${kind}`, state.revision, kind, `private-${kind}-fingerprint`]))
+    state = roomSnapshot(await roomCall(state.id, actor, 'completeIntegration', [actor, `private-${kind}`, { sessionId: `private-${kind}-session`, ...(kind === 'live' ? { sdp: 'private-sdp' } : { agentStatus: 'idle' }) }]))
+  }
+  state = await readCase(await request(`/cases/${snapshot.id}/recruitment/submit`, { commandId: 'submit', expectedRevision: state.revision, roleInterest: 'Engineer', experience: 'API development', questions: [] }))
   const requestId = state.requests[0].id
   const staff: Actor = { role: 'staff', id: 'employee-a' }
   const visitorResponse = await mf.dispatchFetch(`${origin}/api/v1/cases/${state.id}/ws`, { headers: { Upgrade: 'websocket', Cookie: cookie, Origin: origin } })
@@ -376,7 +420,9 @@ test('recruitment WebSockets restore actor attachments after hibernation and rec
     await mf.unsafeEvictDurableObject('test-backend', 'CaseRoom', { name: state.id, webSockets: 'hibernate' })
     const restored = nextSnapshot(visitorWs)
     visitorWs.send('sync')
-    assert.equal((await restored).revision, state.revision)
+    const restoredSnapshot = await restored
+    assert.equal(restoredSnapshot.revision, state.revision)
+    assert.ok(!JSON.stringify(restoredSnapshot).includes('private-'))
     const claimed = [nextSnapshot(visitorWs), nextSnapshot(staffWs)]
     state = roomSnapshot(await roomCommand(state, staff, 'claim', { type: 'claim', requestId }))
     const [publicClaim, staffClaim] = await Promise.all(claimed)
@@ -392,6 +438,8 @@ test('recruitment WebSockets restore actor attachments after hibernation and rec
     assert.equal(staffAnswer.requests[0].assignedTo, 'employee-a')
     assert.ok(!JSON.stringify(publicAnswer).includes('ownerHash'))
     assert.ok(!JSON.stringify(publicAnswer).includes('integration'))
+    assert.ok(!JSON.stringify(publicAnswer).includes('private-'))
+    assert.ok(!JSON.stringify(staffAnswer).includes('private-'))
   } finally {
     visitorWs.close(1000, 'Test complete')
     staffWs.close(1000, 'Test complete')
