@@ -1,5 +1,7 @@
 # Cloudflareバックエンドの接続とローカル起動
 
+Issue #19のcase限定証明、NodeとWorkerのID対応、回答返却状態、サーバー設定は[worker-result-bridge.md](worker-result-bridge.md)を参照。下記の保存基盤の試験と、元Agent・Liveへの返却試験は分けて扱う。
+
 完了基準は、採用面談と社員回答が同じDO案件へ保存され、D1一覧に最新revisionで反映されること。音声側の完成条件は、応募者の開発環境の質問を人間へ照会し、回答本文を元の採用AIが応募者の言語で説明すること。
 
 2026-10-18にローカルの実コード、[Issue #3](https://github.com/pupuchan1/future-company/issues/3)、[PR #4](https://github.com/pupuchan1/future-company/pull/4)、[Issue #8](https://github.com/pupuchan1/future-company/issues/8)、Slackのgeneralの14:24投稿を確認した。Cloudflare側の保存とHTTP接続は実装済み。音声・Agents・電話を含む完成条件は未達である。
