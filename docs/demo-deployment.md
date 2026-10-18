@@ -1,4 +1,117 @@
-# React画面を含む試験デプロイ
+# 本人限定本番の配備記録
+
+入口はhttps://future-company-demo.r74.workers.dev/。
+起動、接続先更新と復帰は[本番運用手順](../deployment/PRODUCTION.md)を参照する。
+各表は2026-10-18に確認した配備であり、最新のPR HEADを配備済みとみなさない。
+
+## 16:56の更新と最終照合
+
+| 項目 | 本記録の最終照合でruntimeとCloudflare配信一覧から確認した値 |
+| --- | --- |
+| Node配備元 | `315720a5f96be310cf968ea346f8dee9175ca104` |
+| Nodeソース所在 | 配備ホストの`.local/deploy-315720a` |
+| Worker version | `2e7acce6-dbfb-4789-8baf-667042896251`、100%、07:56:59Z配信 |
+| relay origin | `https://queries-shopzilla-consequently-configure.trycloudflare.com` |
+| ポートと状態 | Node4350、relay4351、既存`.local/production-runtime/state` |
+
+07:59の配備担当の確認記録では、現originとloopbackのhealthは200、新規caseのvoice/status3回が200、cloudflaredのHA接続数は1だった。
+この時点の古いoils originは530/1033。古いoriginへ戻すだけでは復帰できない。
+本記録の最終照合でNode機器一覧は`devices=[]`。黒電話実機の成功は記録しない。
+ab9cedbから315720aへはNode/BE/FEにも変更があるため、前版の音声成功を最新版の全受入へ流用しない。
+本番の更新は配備担当が実施し、この文書作成では再起動・再配備していない。
+
+## 時計差修正後の配備
+
+| 項目 | 16:48の起動ファイルとruntimeから確認した値 |
+| --- | --- |
+| 配備元 | [PR #113](https://github.com/pupuchan1/future-company/pull/113)の`ab9cedb9d9fe2fea5abd245bdf9da90bc0ee4c47` |
+| 配置時のWorker version | `cb9d228d-56cd-48a3-8682-0f2213d8147a` |
+| Nodeソース所在 | 配備ホストの`.local/deploy-ab9cedb` |
+| relay origin | `https://rep-butter-obligations-vehicles.trycloudflare.com` |
+| MCPと実機bridge | 上記originの`/mcp`と`/bridge` |
+
+配備担当の記録は[PR #104](https://github.com/pupuchan1/future-company/pull/104)。
+07:48:00ZにWorker version`268f4a1b-6222-42a0-b5bc-86bd8637a7d2`へ更新されたことを配信一覧で確認した。
+この更新はPR #110のd22bc34。配備担当がab9cedbとの差分を調べ、Orbのfrontend3ファイルのみでNode/BEは差分なしと確認した。
+Worker versionは同PRの配備記録とCloudflareの配信一覧を照合する。
+以前のjamieとellenは履歴であり、接続先として固定しない。
+声交代の受入は[PR #109](https://github.com/pupuchan1/future-company/pull/109)へ続けて記録する。
+
+## 16:53の更新
+
+runtimeはsource`93bc6b5`、relay`https://oils-mia-require-eastern.trycloudflare.com`へ更新された。
+07:53:37Zの配信一覧はWorker version`a1b4c418-9cc7-47f2-9c2f-5864b5b398b4`、100%。
+起動ソースと配信versionは試験時に再取得し、過去のrelayを機器へ再設定しない。
+
+## 16:36の更新
+
+| 項目 | 確認した値 |
+| --- | --- |
+| 製品ソース | `617612592fda658304fe87f68d2166ceeac5f9c7` |
+| Worker version | `66e5c8ad-22ff-491d-a735-d90f9b1aefbe`、100%配信 |
+| Nodeソース所在 | 配備ホストの`.local/deploy-6176125` |
+| relay origin | `https://ellen-grid-entrance-mails.trycloudflare.com` |
+| MCPと実機bridge | 上記originの`/mcp`と`/bridge` |
+| 戻り先 | 下記319ffc1。旧jamie originを固定せず、復帰時に生存するrelayで再配備 |
+
+runtimeの起動ソース、state.jsonとWrangler deployment一覧を開いて確認した。
+この更新で`sourceCommit`は6176125へ修正された。
+最新版の全受入成功とは扱わず、試験ごとの版と結果を[後続PR #109の声交代と復帰の受入記録](https://github.com/pupuchan1/future-company/pull/109)に残す。
+
+## PR #28の画面を反映した配備
+
+16:44時点の配信は`1a928084-a992-416c-9c7b-3761dd3df3d1`で100%。
+ソースは[PR #110](https://github.com/pupuchan1/future-company/pull/110)の`73eb9ba4c8713e862068388845be432f67c63f62`。
+FEは#28の3e036ab、NodeとBEは6176125を組み合わせた版。
+Nodeとrelayのoriginは上表と同じ。
+本番Live開始403の診断と修正は[PR #113](https://github.com/pupuchan1/future-company/pull/113)で進める。
+
+## 16:06の配備と復帰元
+
+| 項目 | 確認した値 |
+| --- | --- |
+| ソース | `feature/production-access`の`319ffc17ddecea0d3b9ff3a0a98efa65af42f818`、[#101](https://github.com/pupuchan1/future-company/pull/101)で共有 |
+| 統合元 | #39の`7439949`を基点に既存の本番設定を統合 |
+| Worker version | `c27057a9-c69b-4d7e-9ba6-dcb69cc383b9`、100%配信 |
+| 配備時刻 | 2026-10-18 16:06 JST |
+| 本番Nodeとrelay | 配備ホストのloopback4350と4351 |
+| relay origin | `https://jamie-journey-redhead-smart.trycloudflare.com` |
+| MCPと実機bridge | 上記originの`/mcp`と`/bridge`。実機はWSSとBearer認証 |
+| 状態保存先 | 配備ホストの`.local/production-runtime/state` |
+| 戻り先 | 上記319ffc1とWorker version。トンネル再起動後は現在のoriginで同じソースから再配備 |
+
+配信versionと割合は今回`wrangler deployments list --config deployment/wrangler.local.jsonc --json`でも確認した。
+Quick TunnelのURLは再起動で変わるため、利用前にホストの`.local/production-runtime/state.json`と実際のWorker設定を照合する。
+16:06配備時の同ファイルの`sourceCommit`は`26020e5`のままだったため、その時点の配備版の判定には使わなかった。
+gitのHEAD、Worker versionと配備ログで確認する。
+
+## 本番で記録された結果と受入待ち
+
+16:13頃までの[一次記録](https://github.com/pupuchan1/future-company/issues/33#issuecomment-6247048799)では、実LiveとAgents、公開MCP、合成マイク、模擬電話で次を確認した。
+
+- 同じHaaS caseでWorkerに人間回答を保存し、元HaaS AgentからLiveの英語音声と字幕へ返却した。
+- caseは`case-c7ca555ff08dd0387dbd50c6932e253617ad501258f0156c7ffd090cbbe4ddc3`、requestは`request-handoff-d4abe369-2686-40a5-85a5-5bcc54a40eda`。D1はrevision5、answered、delivery=`live_submitted`、`simulated=true`。
+- 同一commandでの社員回答再送、案件証明、case限定statusとSSE、所有者なし401、異Origin403、未認証Access302を確認した。
+- 終了は200、`live_finalized=true`、`cleanup_pending=[]`だった。
+
+この結果は実機のベル、実人間回答、実マイクによる聞こえ方の成功を含まない。
+今回確認した本番Node4350の`GET /api/status`は`devices=[]`だった。
+初回試験の`voice/status`530は原因未特定のままであり、恒久解消とは記録しない。
+16:06の配備版には後続の自動声交代、全文字幕とMP3、新版会話画面を含めていない。
+
+| Issue | 残る受入 |
+| --- | --- |
+| [#35](https://github.com/pupuchan1/future-company/issues/35) | 最新本番での自動声交代、交代中の回答、HaaSから採用への交代、候補接続失敗時の旧会話維持 |
+| [#32](https://github.com/pupuchan1/future-company/issues/32) | 最新本番での取消、切断、再接続、SSE再購読、回答再送と遅着時の別case隔離、二重依頼と重複発話の確認 |
+| [#34](https://github.com/pupuchan1/future-company/issues/34) | 同じ本番Nodeの実機接続後、新しい依頼で実ベル、受諾、実人間回答保存と音声返却 |
+
+530が再発した場合は時刻、case、path、HTTP status、CF-Ray、Workerログ、Nodeログとトンネルの生存を同じ試験記録へ残す。
+過去のoffline依頼へ回答を追記して実機成功へ変更しない。
+
+## 旧React試験デプロイの記録
+
+以下は`2732ac45-f00d-4c84-9895-cd165aef3f25`の旧試験配信手順と結果。
+そのlocalStorageデモの画面確認と、上記の実LiveからWorker保存までの確認は別の結果として扱う。
 
 > 以下は初期の静的画面配信の記録です。現在の配置手順は [deployment/README.md](../deployment/README.md)、担当・受入範囲は [Issue #94](https://github.com/pupuchan1/future-company/issues/94) を使用してください。現在の本番デプロイ担当はr74techで、PR #39の統合版を既存Worker・Nodeへ反映します。
 

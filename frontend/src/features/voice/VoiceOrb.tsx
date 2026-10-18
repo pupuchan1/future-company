@@ -65,7 +65,7 @@ export function VoiceOrb({ activity = idleSource, conversation, phase = 'idle', 
   }, [floating])
 
   return <>
-    <div className="voice-orb-stage" data-conversation={turn} ref={host} aria-label={text('音声の入出力', 'Voice input and output')}>
+    <div className="voice-orb-stage" data-conversation={turn} data-phase={phase} ref={host} aria-label={text('音声の入出力', 'Voice input and output')}>
       <OrbArt input={input} output={output} waiting={waiting} />
       <p className="voice-orb-status" role="status">{status}</p>
     </div>
