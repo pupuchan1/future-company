@@ -79,6 +79,15 @@ export function ReceptionOffice({ language }: Props) {
   return <ReceptionHeroCarousel language={language} />;
 }
 
+export function ReceptionConsultation({ language }: Props) {
+  const c = copy[language];
+  return (
+    <ul className="haas-consultation" aria-label={c.servicesLabel}>
+      {c.services.map((service) => <li key={service.title}>{service.title}</li>)}
+    </ul>
+  );
+}
+
 export function ReceptionCapabilities({ language }: Props) {
   const c = copy[language];
   return (

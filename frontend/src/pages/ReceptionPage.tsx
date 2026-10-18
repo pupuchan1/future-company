@@ -9,7 +9,7 @@ import { useDisplayLanguage } from "@/lib/useDisplayLanguage";
 import { LanguageSelector } from "@/components/LanguageSelector";
 import { systemMessage } from "@/lib/system-message";
 import { LANGUAGE_CHANGE_ERROR } from "@/features/live/types";
-import { ReceptionIntro, ReceptionOffice, ReceptionCapabilities } from "@/components/ReceptionHome";
+import { ReceptionIntro, ReceptionOffice, ReceptionConsultation, ReceptionCapabilities } from "@/components/ReceptionHome";
 import "@/styles/reception-conversation.css";
 
 const phrase = (language: LiveLanguage, ja: string, en: string) =>
@@ -121,6 +121,7 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
           >
             <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} conversation={s.conversation} onOpenConversation={openConversation} />
             <div className="reception-controls">
+            {!hasConversation && <ReceptionConsultation language={language} />}
             <button
               className="button primary reception-start"
               onClick={() => void toggleCall()}
