@@ -57,3 +57,22 @@ aiortcで同じケースの一般受付→採用→HaaSを試験した。入力�
 | 接続直後の自動挨拶 | 入力前の25秒は無音。合成入力後の挨拶は確認。入力なしでの自動発話は未確認 |
 
 ローカル証跡は`/Users/limo/Documents/Codex/2026-10-18/moj/work/`の`webrtc-handoff.py`、`voice-handoff-1792303785.json`（型エラー・正常終了）、`voice-handoff-1792303855.json`（受付→採用の実切替）、`voice-handoff-1792303986.json`（限定再試行）。局所テストログは`/Users/limo/Documents/Development/logs/dev-runs/2026-10-18/run-15i9lleu.log`。受信フレームとサーバーのvoice設定を検証したもので、人による音色・聞き取りやすさの評価ではない。
+
+## 2026-10-18 15:30 JST: 接続原因の切り分けと単一HaaS音声の再確認
+
+上記の接続障害について、実SDKの原因例外まで取得した。Node 24のアドレス選択待ち時間250 msでは、IPv4の`connect ETIMEDOUT`とIPv6の`EHOSTUNREACH`を含む`AggregateError`で、約531 ms後に接続前の失敗となった。同じ実SDKの待ち時間だけを2,000 msへ変更した比較では、Decisions、Agents作成、公開MCP、人間模擬回答、同じAgentsへの結果返却、削除が成功した。認証エラーではなかった。
+
+修正`430e5c5`はサーバープロセスの接続待ちを最低2,000 msにし、TCP接続前と判定できる失敗だけを最大3回まで再試行する。途中のsocket resetや応答不明のPOSTは再送しない。実SDKの`APIConnectionError.name`は`Error`だったため、SDKの型と深い`cause`も使ってHTTP 502へ分類する。失敗したAgents削除はIDを保持する。診断には許可した例外名・原因コードのみを記録し、入力やキーを含めない。`2c6da3f`はLiveの終了理由、期待した終了か、sideband終了コードを追加した。
+
+| 確認 | 結果 |
+| --- | --- |
+| 接続・handoff・オーケストレーターの局所試験 | 29/29成功。実SDKの多重cause、HTTP 502、有限再試行、曖昧なPOSTの再送禁止、終了中の再試行停止、削除失敗後の再試行を含む。終了理由追加後は影響する23/23を再確認 |
+| 単一声HaaSの実WebRTC | `haas-reliability-1792304899`で成功。合成英語入力→`marin`→HaaS Agents→公開MCP→模擬人間回答→同じAgents sessionの`human_event`→Live音声 |
+| 回答内容 | TypeScript/React、PRレビュー、CIという架空回答を英語で説明し、simulatorの回答で実人間ではないと明示 |
+| 音声・接続 | 3,319音声フレーム、非無音1,658、回答到着後の非無音1,266、受信エラー0。終了要求までWebRTC接続とICEを維持 |
+| 終了 | `session.closed`の`reason=close_requested`、`live_finalized=true`、Agents削除成功、`cleanup_pending=[]` |
+| 三担当の声切替 | 別の`voice-handoff-1792304437`では受付→採用、受付で伝えた名前の引継ぎ、実MCPへの依頼と模擬回答まで確認。その後Liveが閉じて元Agent復帰を中断。閉鎖理由の記録追加前だったため原因未確定。3担当の結合成功とはせずP1として残す |
+
+ローカル証跡は同じ`moj/work/`の`network-probe-1792304274265.json`（接続前失敗）、`network-probe-1792304294546.json`（2,000 ms比較成功）、`webrtc-haas-reliability.py`、`haas-reliability-1792304899.json`（最終成功）、`webrtc-haas-reliability-confirm.log`。先行する`haas-reliability-1792304772.json`も回答音声と正常終了を確認できたが、試験が`human_event`後の同じ語の再発話を要求してタイムアウトした。判定の起点を実際の回答到着`human.completed`へ修正し、最終試行で成功を確認した。元の失敗証跡は変更していない。
+
+この確認はNode単独・合成音声・模擬電話の範囲。pupuのフロント、Worker結果アダプター、公開デプロイ、技能検索、秋月の交換機キットや実機ベル・人間の音声は、この試験では検証していない。
