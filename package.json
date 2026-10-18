@@ -1,0 +1,16 @@
+{
+  "name": "future-company",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": ["frontend"],
+  "engines": {
+    "node": ">=24.14.0 <25"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace frontend --",
+    "build": "npm run build --workspace frontend",
+    "lint": "npm run lint --workspace frontend",
+    "typecheck": "npm run typecheck --workspace frontend",
+    "preview": "npm run preview --workspace frontend --"
+  }
+}
