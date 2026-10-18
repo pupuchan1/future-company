@@ -39,3 +39,9 @@ node --test frontend/tests/demo.test.ts
 - 実音声アダプターは別担当の `features/live/` に分離し、「AI音声に接続」モードへ組み込み済みです。起動と接続範囲は [LIVE-INTEGRATION.md](LIVE-INTEGRATION.md) を参照してください。デモの文字・依頼は音声サーバーへ送信しません。
 
 主要UIは `src/App.tsx`、デモ状態と更新処理は `src/lib/demo.ts`、共通スタイルは `src/styles/global.css` です。秘密鍵はフロントに置かず、接続の際はサーバー側で扱います。
+
+## 2026-10-18: 共通音声入口へ変更
+
+現在の入口は `src/pages/ReceptionPage.tsx` の1画面です。「AIに話しかける」で共通受付に接続し、会話から採用/HaaSを選ぶ処理はNodeのAI側に任せます。採用直通・デモ/実接続モード選択は一般画面に表示しません。旧4画面は `src/LegacyPrototype.tsx` とデモテストとして保持しています。
+
+通常の `frontend/vite.config.ts` がNode（4320）とWorker（8787）へ転送します。`vite.live.config.ts` は同じ設定への互換エイリアスです。全体の起動はルートから `npm run dev`。音声の設定がないときは主ボタンが無効になり、会話やツールの結果は作りません。

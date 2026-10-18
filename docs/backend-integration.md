@@ -136,3 +136,11 @@ Access認証済みブラウザから案件作成201、面談送信200、社員�
 元の採用Agentsが人間の回答本文を受け取って応募者の言語で説明し、Live音声へ返す部分、HaaS・電話、MCP認証と配信は別担当との実接続待ち。React画面を経由して同じAPIで面談送信・社員回答を行う操作は、本試験の対象外。`ai.resume_pending`や電話の`accepted/completed`だけで、この部分まで動いたとは発表しない。
 
 参照した公式仕様は[Prepared statements](https://developers.cloudflare.com/d1/worker-api/prepared-statements/)、[D1 local development](https://developers.cloudflare.com/d1/best-practices/local-development/)、[D1 migrations](https://developers.cloudflare.com/d1/reference/migrations/)、[Hono routing](https://hono.dev/docs/api/routing)。
+
+## Reactとのローカル合流（2026-10-18）
+
+統合ブランチではPR #4の `integration/` と本PRのWorkerを同じcheckoutへ取り込んでいます。ルートの `npm run dev` はNode 4320・Worker 8787・React 5173を起動し、Reactのproxyが音声/status/SSEと案件APIの経路を分けます。ローカルD1は `npm run db:migrate:local` で初期化します。
+
+画面の入口は共通音声受付の一つのみです。FE側では用件を推測せず、Node側のDecisions/委譲結果から担当・処理・人間への依頼を表示します。Node case/handoffとWorker case/requestのID対応および認証付きの結果返却adapterは、このコード取り込みだけでは完成していません。
+
+起動確認ではReact origin経由の `/api/status`、`/api/v1/company`、案件作成201とowner cookieによる再取得200を確認しました。異なるOriginの音声APIは403を維持します。キー未設定の音声開始は無効で、模擬発話を表示しません。
