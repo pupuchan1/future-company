@@ -9,10 +9,42 @@ import type { CaseSnapshot } from './contracts'
 let mf: Miniflare
 const origin = 'http://localhost'
 const staffToken = 'test-only-demo-credential-0123456789'
+const providerRequests: { sessionId: string; body: unknown }[] = []
+let providerGate: { entered: () => void; released: Promise<void> } | undefined
 
 before(async () => {
-  const bundle = await build({ stdin: { contents: `import { Hono } from 'hono'; import { createBackendApi } from './src/backend/api'; import { authorizeDemoStaff } from './src/backend/auth'; export { CaseRoom } from './src/backend/case-room'; const app = new Hono(); app.route('/api/v1', createBackendApi({ authorizeStaff: async (request, env) => { const id = request.headers.get('x-test-staff'); return id ? { id } : authorizeDemoStaff(request, env) } })); app.route('/closed', createBackendApi()); export default app;`, resolveDir: resolve('.') }, bundle: true, write: false, format: 'esm', platform: 'browser', external: ['cloudflare:workers'] })
-  mf = new Miniflare(convertV4MiniflareOptions({ name: 'test-api', modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2025-08-03', bindings: { STAFF_API_TOKEN: staffToken }, durableObjects: { CASES: { className: 'CaseRoom', useSQLite: true } }, d1Databases: ['DB'] }))
+  const bundle = await build({ stdin: { contents: `
+    import { Hono } from 'hono';
+    import { authorizeVisitorCase, createBackendApi, projectCase } from './src/backend/api';
+    import { authorizeDemoStaff } from './src/backend/auth';
+    import { createOpenAIApi } from './src/backend/openai';
+    export { CaseRoom } from './src/backend/case-room';
+    const app = new Hono();
+    app.route('/api/v1', createBackendApi({ authorizeStaff: async (request, env) => {
+      const id = request.headers.get('x-test-staff');
+      return id ? { id } : authorizeDemoStaff(request, env);
+    } }));
+    app.route('/api/v1', createOpenAIApi({ authorizeCase: authorizeVisitorCase, projectCase,
+      agentTools: async () => [{ type: 'function', name: 'read_case', parameters: { type: 'object', properties: {} } }],
+    }));
+    app.route('/closed', createBackendApi());
+    export default app;
+  `, resolveDir: resolve('.') }, bundle: true, write: false, format: 'esm', platform: 'browser', external: ['cloudflare:workers'] })
+  mf = new Miniflare(convertV4MiniflareOptions({ name: 'test-api', modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2025-08-03',
+    bindings: { STAFF_API_TOKEN: staffToken, OPENAI_API_KEY: 'test-only-provider-key', OPENAI_AGENTS_MODEL: 'test-only-model' },
+    durableObjects: { CASES: { className: 'CaseRoom', useSQLite: true } }, d1Databases: ['DB'],
+    outboundService: async (request) => {
+      assert.equal(request.url, 'https://api.openai.com/v1/agents/sessions')
+      assert.equal(request.method, 'POST')
+      const sessionId = `agent-test-${providerRequests.length + 1}`
+      providerRequests.push({ sessionId, body: await request.json() })
+      const gate = providerGate
+      providerGate = undefined
+      gate?.entered()
+      await gate?.released
+      return Response.json({ id: sessionId, status: 'in_progress' })
+    },
+  }))
   const db = await mf.getD1Database('DB')
   for (const file of (await readdir('migrations')).filter((name) => name.endsWith('.sql')).sort()) {
     for (const sql of (await readFile(`migrations/${file}`, 'utf8')).split(';').filter((part) => part.trim())) await db.exec(sql.replaceAll('\n', ' '))
@@ -210,4 +242,73 @@ test('HaaS result passes through staff login, claim, answer and D1 without infer
   assert.equal(summary.requests[0].simulated, true)
   assert.equal(summary.requests[0].id, requestId)
   assert.equal(summary.id, state.id)
+})
+
+test('Agents start reuses pending and completed requests while keeping ownership and input guards', async () => {
+  const { state, headers } = await create()
+  const path = `/cases/${state.id}/agents`
+  const input = { commandId: 'agent-stable-start', expectedRevision: state.revision }
+  const callsBefore = providerRequests.length
+  const entered = Promise.withResolvers<void>()
+  const released = Promise.withResolvers<void>()
+  providerGate = { entered: entered.resolve, released: released.promise }
+  const first = request(path, input, headers)
+  let response: Awaited<ReturnType<typeof request>>
+  try {
+    await Promise.race([entered.promise, first.then((result) => { throw new Error(`Provider was not called: HTTP ${result.status}`) })])
+    const pending = await request(path, input, headers)
+    assert.equal(pending.status, 409)
+    assert.equal((await pending.json() as { title: string }).title, 'session_request_pending')
+    assert.equal(providerRequests.length, callsBefore + 1)
+  } finally {
+    released.resolve()
+    response = await first
+  }
+  assert.equal(response.status, 202)
+  const started = await response.json() as { sessionId: string }
+  assert.equal(started.sessionId, providerRequests.at(-1)!.sessionId)
+  const replay = await request(path, input, headers)
+  assert.equal(replay.status, 202)
+  assert.equal((await replay.json() as { sessionId: string }).sessionId, started.sessionId)
+
+  let current = await snapshot(await request(`/cases/${state.id}`, undefined, headers))
+  assert.equal(current.revision, state.revision + 2)
+  current = await snapshot(await request(`/cases/${state.id}/messages`, {
+    commandId: 'after-agent-start', expectedRevision: current.revision, text: '追加の質問があります。',
+  }, headers))
+  const afterMessage = await request(path, input, headers)
+  assert.equal(afterMessage.status, 202)
+  assert.equal((await afterMessage.json() as { sessionId: string }).sessionId, started.sessionId)
+  const changed = await request(path, { ...input, expectedRevision: current.revision }, headers)
+  assert.equal(changed.status, 409)
+  assert.equal((await changed.json() as { title: string }).title, 'idempotency_conflict')
+  assert.equal((await request(path, input)).status, 401)
+  const other = await create()
+  assert.equal((await request(path, input, other.headers)).status, 404)
+  assert.equal(providerRequests.length, callsBefore + 1)
+})
+
+test('Agents start retry repairs D1 projection after provider completion without creating another session', async () => {
+  const { state, headers } = await create()
+  const path = `/cases/${state.id}/agents`
+  const input = { commandId: 'agent-project-retry', expectedRevision: state.revision }
+  const callsBefore = providerRequests.length
+  const db = await mf.getD1Database('DB')
+  await db.exec("CREATE TRIGGER fail_agent_projection BEFORE INSERT ON cases BEGIN SELECT RAISE(ABORT, 'simulated D1 outage'); END")
+  try {
+    const failed = await request(path, input, headers)
+    assert.equal(failed.status, 503)
+    assert.equal((await failed.json() as { title: string }).title, 'projection_failed')
+  } finally { await db.exec('DROP TRIGGER fail_agent_projection') }
+  assert.equal(providerRequests.length, callsBefore + 1)
+  assert.equal((await snapshot(await request(`/cases/${state.id}`, undefined, headers))).revision, 2)
+  const stale = await db.prepare('SELECT revision FROM cases WHERE id=?').bind(state.id).first<{ revision: number }>()
+  assert.equal(stale?.revision, 0)
+  const retried = await request(path, input, headers)
+  assert.equal(retried.status, 202)
+  assert.equal((await retried.json() as { sessionId: string }).sessionId, providerRequests.at(-1)!.sessionId)
+  const saved = await db.prepare('SELECT revision,summary FROM cases WHERE id=?').bind(state.id).first<{ revision: number; summary: string }>()
+  assert.equal(saved?.revision, 2)
+  assert.equal(JSON.parse(saved!.summary).integration.agentSessionId, providerRequests.at(-1)!.sessionId)
+  assert.equal(providerRequests.length, callsBefore + 1)
 })
