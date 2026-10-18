@@ -1,5 +1,7 @@
 # Worker と Node 音声の配置
 
+配備するcommitと未検証項目は[配備候補と受入状況](./RELEASE-CANDIDATE.md)を確認する。
+
 既存の Worker に React・DO・D1 を残し、Node 24 の音声・人間MCPを常駐プロセスで動かす。`server.mjs` の localhost guard はそのまま使う。Worker 側の既存 Access 本人限定設定と社員認証も変更しない。
 
 ```text
