@@ -123,9 +123,13 @@
   padding: 24px 0;
 }
 
-.haas-homepage .reception-start {
+.haas-homepage .reception-start,
+.haas-homepage .reception-start:disabled {
   margin-top: 15px;
   min-height: 60px;
+  background: var(--blue);
+  color: var(--white);
+  border-color: var(--blue);
 }
 
 .haas-capabilities {
@@ -576,9 +580,6 @@
     padding: 24px 28px;
     font-size: 22px;
     font-weight: 600;
-    background: var(--blue);
-    color: var(--white);
-    border-color: var(--blue);
   }
 
   .haas-homepage .reception-start svg {
