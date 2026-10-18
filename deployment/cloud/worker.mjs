@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { proxyVisitorApi } from '../sites/proxy.mjs';
 
 const INACTIVITY_MS = 30 * 60 * 1000;
 const ENVIRONMENT = ['OPENAI_API_KEY', 'STAFF_API_TOKEN', 'NODE_RELAY_SECRET', 'HUMAN_MCP_TOKEN',
@@ -51,6 +52,11 @@ export class VoiceNode extends DurableObject {
 
 export default {
   fetch(request, env) {
+    const path = new URL(request.url).pathname;
+    if (path.startsWith('/api/')) return proxyVisitorApi(request, env);
+    if (!(path === '/health' || path === '/mcp' || path === '/bridge' || path.startsWith('/relay/voice/'))) {
+      return env.ASSETS.fetch(request);
+    }
     return env.VOICE_NODE.getByName('production').fetch(request);
   },
 };

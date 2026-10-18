@@ -65,6 +65,8 @@ relayの公開pathは `/relay/voice/*`（HMAC）、`/mcp`（Bearer）、`/bridge
 
 `deployment/cloud/wrangler.jsonc`は同じR74アカウントの`future-company-voice-node`へNode24を配置する。`production`という固定コンテナへ全案件を送り、既存relayのHMAC署名とMCP/bridgeのBearer認証を維持する。Node内部APIはloopbackのみ、認証付きrelayだけをコンテナの4351番ポートへ公開する。Dockerイメージへ秘密設定をコピーしない。
 
+同じWorkerからビルド済みFEも配信する。ブラウザーのvisitor APIは既存Sitesと同じ`proxyVisitorApi`を通して既存Workerへ転送し、サーバーのAccess認証と案件所有cookieを保持する。`https://future-company-voice-node.r74.workers.dev/`がMacに依存しない公開入口になる。
+
 ```sh
 npx wrangler deploy --config deployment/cloud/wrangler.jsonc
 npx wrangler secret bulk /private/path/cloud-node-secrets.json --config deployment/cloud/wrangler.jsonc
