@@ -217,6 +217,8 @@ export class LiveClient {
   private languageGeneration = 0
   private endpoints: { status: string; events: string; session: string }
   private bridgeToken?: () => Promise<string>
+  private automaticVoice: { route: LiveRoute; ready: boolean; outputStarted: boolean } | null = null
+  private automaticVoiceTimer?: ReturnType<typeof setTimeout>
 
   constructor(caseId: string, language: LiveLanguage, runtime = browserRuntime(), options: LiveClientOptions = {}) {
     const prefix = options.apiPrefix
@@ -238,8 +240,30 @@ export class LiveClient {
     if (this.disposed || next === this.state) return
     this.state = next
     this.listeners.forEach(listener => listener(next))
+    this.scheduleAutomaticVoice()
   }
   private patch(next: Partial<LiveSnapshot>) { this.publish({ ...this.state, ...next }) }
+
+  private scheduleAutomaticVoice() {
+    const pending = this.automaticVoice
+    if (!pending?.ready || !pending.outputStarted || this.state.phase !== 'connected' || this.state.backend === 'running'
+      || this.state.speaking !== 'silent' || this.state.playbackBlocked || this.voiceSwitch || this.closing) {
+      clearTimeout(this.automaticVoiceTimer); this.automaticVoiceTimer = undefined
+      return
+    }
+    if (this.automaticVoiceTimer !== undefined) return
+    this.automaticVoiceTimer = setTimeout(() => {
+      this.automaticVoiceTimer = undefined
+      if (this.automaticVoice !== pending || this.disposed) return
+      this.automaticVoice = null
+      void this.switchDepartment(pending.route, true)
+    }, 1000)
+  }
+
+  private cancelAutomaticVoice() {
+    clearTimeout(this.automaticVoiceTimer); this.automaticVoiceTimer = undefined
+    this.automaticVoice = null
+  }
 
   private audioActivity(connection: Connection, activity: VoiceActivity) {
     if (this.disposed || this.connection !== connection) return
@@ -258,6 +282,7 @@ export class LiveClient {
     const audio = connection.audio
     const audible = connection.outputPlaying && audio && !this.voiceSwitch && !this.state.playbackBlocked && !audio.paused && !audio.muted
     const outputLevel = audible ? normalizedLevel(levels.outputLevel) * normalizedLevel(audio!.volume ?? 1) : 0
+    if (this.automaticVoice?.ready && outputLevel > 0) this.automaticVoice.outputStarted = true
     const speaking = speakerFor(inputLevel, outputLevel)
     if (inputLevel !== this.state.inputLevel || outputLevel !== this.state.outputLevel || speaking !== this.state.speaking) {
       this.patch({ inputLevel, outputLevel, speaking })
@@ -331,7 +356,10 @@ export class LiveClient {
       const message = error instanceof Error ? error.message : '受付へ接続できません。 / Cannot reach reception.'
       const replaceError = !this.state.error || this.state.error === this.statusError
       this.statusError = message
-      this.patch({ configured: null, mcpConfigured: null, switchConfigured: false, error: replaceError ? message : this.state.error })
+      // A status timeout cannot revoke capabilities already negotiated for an active call.
+      const transient = !(error instanceof LiveApiError) || error.status >= 500 || [408, 429].includes(error.status)
+      this.patch({ ...(!this.connection || !transient ? { configured: null, mcpConfigured: null, switchConfigured: false } : {}),
+        error: replaceError ? message : this.state.error })
     } finally { this.statusBusy = false }
   }
 
@@ -365,7 +393,21 @@ export class LiveClient {
       this.voiceSwitch.previousEnded = true
       return
     }
-    this.publish(this.reducer.apply(this.state, event, source))
+    const next = this.reducer.apply(this.state, event, source)
+    if (type === 'routing.updated' && body.source === 'decisions' && next.route !== this.state.route) {
+      this.cancelAutomaticVoice()
+      if (next.route !== this.state.voiceRoute) this.automaticVoice = { route: next.route, ready: false, outputStarted: false }
+    }
+    if ((type === 'backend.result' || type === 'backend.started') && this.automaticVoice) {
+      this.automaticVoice.ready = type === 'backend.result'
+      this.automaticVoice.outputStarted = false
+    }
+    const currentOutput = source === 'datachannel' ? connection === this.connection && (sessionId === undefined || sessionId === connection?.sessionId)
+      : sessionId !== undefined && sessionId === this.connection?.sessionId
+    if (type === 'session.output_transcript.delta' && this.automaticVoice?.ready && !this.state.meteringAvailable
+      && currentOutput && typeof body.delta === 'string' && body.delta.length > 0) this.automaticVoice.outputStarted = true
+    if (type === 'backend.error') this.cancelAutomaticVoice()
+    this.publish(next)
     if (closed) void this.stop()
     if (type === 'error' && source === 'datachannel') void this.stop(this.state.error)
   }
@@ -530,7 +572,8 @@ export class LiveClient {
     throw new ActivationUncertainError('担当の声の切替結果を確認できません。音声は一時停止しています。終了して再接続してください。 / Voice switch outcome is unconfirmed. End the call and reconnect.')
   }
 
-  async switchDepartment(route: LiveRoute) {
+  async switchDepartment(route: LiveRoute, automatic = false) {
+    if (!automatic) this.cancelAutomaticVoice()
     const previous = this.connection
     if (this.disposed || !previous?.stream || !previous.sessionId || this.closing || this.voiceSwitch) return
     if (route === this.state.voiceRoute) return
@@ -553,7 +596,7 @@ export class LiveClient {
       const sdp = await this.offer(candidate)
       if (!sdp || attempt.cancelled || this.voiceSwitch !== attempt) return
       const created = await this.api(`${this.endpoints.session}/${encodeURIComponent(previous.sessionId)}/handoff`, {
-        method: 'POST', body: JSON.stringify({ sdp, route }),
+        method: 'POST', body: JSON.stringify({ sdp, route, ...(automatic ? { automatic: true } : {}) }),
       })
       const id = object(created.session).id
       if (typeof id !== 'string' || !id || id === previous.sessionId) throw new Error('切替先のセッションIDが不正です。 / Invalid candidate session ID.')
@@ -708,6 +751,7 @@ export class LiveClient {
   }
 
   async stop(error = '', keepalive = false) {
+    this.cancelAutomaticVoice()
     if (this.closing) return this.closing
     const connection = this.connection
     if (!connection) return

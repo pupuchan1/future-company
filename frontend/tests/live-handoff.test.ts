@@ -37,6 +37,7 @@ function fixture() {
   }
   const audios: { srcObject: unknown; autoplay: boolean; paused: boolean; muted: boolean; volume: number; plays: number; play(): Promise<void>; pause(): void }[] = []
   const meters: { disposed: number; dispose(): void; setInput(): void; setOutput(): void }[] = []
+  let levels: (value: { inputLevel: number; outputLevel: number }) => void = () => {}
   let route: LiveRoute = 'reception'
   let handoff = async (): Promise<Response> => Response.json({ session: { id: 'new' }, transport: { sdp: 'answer-new' }, case_id: 'case-a', old_session_id: 'old', route, voice: voices[route], handoff_token: 'token-1' })
   let activate = async (): Promise<Response> => Response.json({ session: { id: 'new' }, case_id: 'case-a', old_session_id: 'old', route, voice: voices[route], active: true })
@@ -62,7 +63,7 @@ function fixture() {
       return audio
     },
     supported: () => true,
-    metering() { const meter = { disposed: 0, dispose() { this.disposed++ }, setInput() {}, setOutput() {} }; meters.push(meter); return meter },
+    metering(onLevels) { levels = onLevels; const meter = { disposed: 0, dispose() { this.disposed++ }, setInput() {}, setOutput() {} }; meters.push(meter); return meter },
   } as unknown as LiveRuntime
   const client = new LiveClient('case-a', 'ja', runtime)
   async function start(initialRoute: LiveRoute = 'reception') {
@@ -83,6 +84,7 @@ function fixture() {
     peer.connectionState = 'connected'; peer.onconnectionstatechange!()
   }
   return { client, runtime, peers, track, stream, source, audios, meters, calls, start, readyCandidate,
+    levels: (inputLevel: number, outputLevel: number) => levels({ inputLevel, outputLevel }),
     microphoneCalls: () => microphoneCalls,
     setHandoff: (next: typeof handoff) => { handoff = next },
     setActivate: (next: typeof activate) => { activate = next },
@@ -126,6 +128,121 @@ test('initial department selects its voice; switch waits for both readiness sign
     assert.equal(f.meters[1].disposed, 1)
     assert.deepEqual(f.calls.filter(call => call.method === 'DELETE').map(call => call.path), ['/api/live/session/new'])
   } finally { f.client.dispose() }
+})
+
+test('confirmed routing automatically changes voice once after backend work and speech finish', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = fixture(); await f.start()
+  const event = (value: Record<string, unknown>) => f.source.onmessage!({ data: JSON.stringify({ case_id: 'case-a', ...value }) })
+  try {
+    event({ type: 'routing.candidate', route: 'haas' })
+    event({ type: 'routing.updated', case_id: 'case-other', route: 'haas', source: 'decisions' })
+    t.mock.timers.tick(2000); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 0)
+    event({ type: 'routing.updated', route: 'haas', source: 'decisions' })
+    event({ type: 'backend.started', route: 'haas' })
+    t.mock.timers.tick(2000); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 0)
+    event({ type: 'backend.result', route: 'haas', content: 'One verified result.' })
+    t.mock.timers.tick(3000); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 0)
+    f.levels(0, 0.5)
+    t.mock.timers.tick(1500); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 0)
+    f.levels(0, 0)
+    t.mock.timers.tick(999); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 0)
+    t.mock.timers.tick(1); await tick()
+    assert.equal(f.calls.find(call => call.path.endsWith('/handoff'))?.body.automatic, true)
+    await f.readyCandidate(); await tick(); await tick()
+    assert.equal(f.client.getSnapshot().voiceRoute, 'haas')
+    assert.equal(f.client.getSnapshot().voice, 'marin')
+    assert.equal(f.client.getSnapshot().route, 'haas')
+    assert.equal(f.microphoneCalls(), 1)
+    assert.equal(f.track.stopped, 0)
+    event({ type: 'routing.updated', route: 'haas', source: 'decisions' })
+    event({ type: 'backend.result', route: 'haas', content: 'Same result notification.' })
+    t.mock.timers.tick(2000); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 1)
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+test('automatic voice change waits for current-session speech after the backend result', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = fixture(); f.runtime.metering = undefined; await f.start()
+  const event = (value: Record<string, unknown>) => f.source.onmessage!({ data: JSON.stringify({ case_id: 'case-a', ...value }) })
+  try {
+    event({ type: 'routing.updated', route: 'haas', source: 'decisions' })
+    event({ type: 'backend.result', route: 'haas', content: 'The result is not spoken yet.' })
+    t.mock.timers.tick(5000); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 0)
+    for (const value of [
+      { case_id: 'case-other', session_id: 'old' },
+      { case_id: 'case-a', session_id: 'older' },
+      { case_id: 'case-a' },
+    ]) event({ type: 'session.output_transcript.delta', delta: 'Unrelated voice', ...value })
+    f.peers[0].channel.onmessage!({ data: JSON.stringify({ type: 'session.output_transcript.delta', case_id: 'case-a', session_id: 'older', delta: 'Old session output.' }) })
+    t.mock.timers.tick(2000); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 0)
+    event({ type: 'session.output_transcript.delta', session_id: 'old', delta: 'The verified result.' })
+    t.mock.timers.tick(1000); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 1)
+    await f.readyCandidate(); await tick(); await tick()
+    assert.equal(f.client.getSnapshot().voiceRoute, 'haas')
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+test('Stop cancels a pending automatic voice change', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = fixture(); await f.start()
+  try {
+    for (const value of [{ type: 'routing.updated', route: 'recruiting', source: 'decisions' }, { type: 'backend.result', route: 'recruiting' }]) {
+      f.source.onmessage!({ data: JSON.stringify({ case_id: 'case-a', ...value }) })
+    }
+    f.levels(0, 0.5); f.levels(0, 0)
+    t.mock.timers.tick(500)
+    await f.client.stop()
+    t.mock.timers.tick(2000); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 0)
+    assert.equal(f.client.getSnapshot().phase, 'ended')
+  } finally { f.client.dispose() }
+})
+
+test('a rejected automatic handoff retains the old voice and never loops on the same routing intent', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = fixture(); await f.start()
+  f.setHandoff(async () => Response.json({ error: 'busy' }, { status: 409 }))
+  const route = { type: 'routing.updated', case_id: 'case-a', route: 'haas', source: 'decisions' }
+  const result = { type: 'backend.result', case_id: 'case-a', route: 'haas' }
+  try {
+    f.source.onmessage!({ data: JSON.stringify(route) })
+    f.source.onmessage!({ data: JSON.stringify(result) })
+    f.levels(0, 0.5); f.levels(0, 0)
+    t.mock.timers.tick(1000); await tick(); await tick()
+    assert.equal(f.client.getSnapshot().phase, 'connected')
+    assert.equal(f.client.getSnapshot().voiceRoute, 'reception')
+    assert.equal(f.peers[0].closed, false)
+    assert.equal(f.track.stopped, 0)
+    f.source.onmessage!({ data: JSON.stringify(route) })
+    f.source.onmessage!({ data: JSON.stringify(result) })
+    t.mock.timers.tick(5000); await tick()
+    assert.equal(f.calls.filter(call => call.path.endsWith('/handoff')).length, 1)
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+test('transient status failures preserve an active call voice capabilities and a later success clears the error', async () => {
+  const f = fixture(); await f.start()
+  const fetchApi = f.runtime.fetch
+  try {
+    f.runtime.fetch = async () => { throw new Error('Synthetic status timeout') }
+    await f.client.refreshStatus()
+    assert.equal(f.client.getSnapshot().switchConfigured, true)
+    assert.equal(f.client.getSnapshot().configured, true)
+    assert.match(f.client.getSnapshot().error, /Synthetic status timeout/)
+    f.runtime.fetch = fetchApi
+    await f.client.refreshStatus()
+    assert.equal(f.client.getSnapshot().error, '')
+  } finally { f.runtime.fetch = fetchApi; await f.client.stop(); f.client.dispose() }
 })
 
 test('busy handoff restores old playback and preserves the prior mute state', async () => {
