@@ -86,6 +86,31 @@ async function fixture(t, { create, handoffTimeoutMs = 30000 } = {}) {
   return { app, api, start, prepare, activate, sockets, creates, runs, closedCases, stateDir };
 }
 
+test('automatic voice handoff preserves the completed business turn without running it again', async (t) => {
+  const f = await fixture(t);
+  const started = await f.start();
+  const oldId = started.body.session.id;
+  f.app.backend.classify = async () => ({ route: 'haas', language: 'ja' });
+  f.sockets.get(oldId).receive({ type: 'session.input_transcript.delta', event_id: 'automatic-input', delta: '担当者に確認をお願いします。' });
+  f.sockets.get(oldId).receive({ type: 'session.delegation.created', delegation: { id: 'automatic-work', target: 'client' } });
+  await until(() => f.runs.length === 1);
+  await pause(0);
+  assert.equal((await f.api(`/api/live/session/${oldId}/handoff`, { sdp: 'v=0\r\n', route: 'haas', automatic: 'true' })).status, 400);
+  const prepared = await f.api(`/api/live/session/${oldId}/handoff`, { sdp: 'v=0\r\n', route: 'haas', automatic: true });
+  assert.equal(prepared.status, 200);
+  assert.equal((await f.activate(prepared)).status, 200);
+  await pause(0);
+  assert.equal(f.runs.length, 1);
+  assert.equal(f.runs[0].route, 'haas');
+  assert.equal(f.sockets.get(oldId).readyState, 3);
+  const candidate = f.sockets.get(prepared.body.session.id);
+  assert.ok(candidate.sent.some(event => event.type === 'session.instructions.append' && /handoff is complete/.test(event.content)));
+  candidate.receive({ type: 'session.input_transcript.delta', event_id: 'next-input', delta: 'ありがとうございます。' });
+  candidate.receive({ type: 'session.delegation.created', delegation: { id: 'next-work', target: 'client' } });
+  await until(() => f.runs.length === 2);
+  assert.equal(f.runs[1].source, 'delegation');
+});
+
 test('provider connection failures return 502 and store only allowlisted diagnostic metadata', async (t) => {
   const f = await fixture(t, { create: () => { throw new OpenAI.APIConnectionError({
     cause: new TypeError('private input and credential must not be logged', {
