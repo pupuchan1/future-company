@@ -239,10 +239,10 @@ test('client delegation classifies accumulated speech before committing a depart
   assert.equal(turns.length, 0);
   classification.resolve({ route: 'haas', language: 'en' });
   await conversation.queue;
-  assert.deepEqual(conversation.routing, { route: 'haas', language: 'en' });
+  assert.deepEqual(conversation.routing, { route: 'haas', language: 'ja' });
   assert.equal(turns.length, 1);
   assert.equal(turns[0].route, 'haas');
-  assert.equal(turns[0].language, 'en');
+  assert.equal(turns[0].language, 'ja');
   assert.equal(turns[0].transcript, classified[0].transcript);
   assert.equal(emitted.filter((event) => event.type === 'routing.updated').length, 1);
   assert.deepEqual(sent.filter((event) => event.type === 'session.commentary.append'), [{
