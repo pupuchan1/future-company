@@ -11,6 +11,7 @@ import { LiveConversation, liveConfig } from './live-session.mjs';
 import { mcpCall } from './mcp-client.mjs';
 import { createCaseState, initialHistory, historyTurns, isVoiceRoute, voiceMap } from './case-state.mjs';
 import { requestedInterviewEnd } from './interview.mjs';
+import { workRequestDetails } from './fast-work.mjs';
 import { WorkerBridge } from './worker-bridge.mjs';
 import { loadServerEnvironment } from './environment.mjs';
 import { createSlackHumanTransport } from './human/slack.mjs';
@@ -91,7 +92,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         notification_status: 'unavailable', error: 'interview_end_not_requested' };
       return slack.completeInterview(input, { isActive });
     },
-    transportForCase: (caseId) => cases.get(caseId)?.routing.route === 'haas' || manualPhoneCases.has(caseId) ? 'phone' : 'slack',
+    transportForCase: (caseId) => manualPhoneCases.has(caseId) ? 'phone' : cases.get(caseId)?.fastWorkRequest ? 'slack' : cases.get(caseId)?.routing.route === 'haas' ? 'phone' : 'slack',
     caseActive: (caseId) => manualPhoneCases.has(caseId) || Boolean(cases.get(caseId) && !cases.get(caseId).closed),
     handleEventRpc: (rpc) => events.handleRpc(rpc),
     onEvent: (event) => {
@@ -102,6 +103,12 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       // Capture the request's original specialist before a voice switch changes it.
       if (event.name === 'human.requested' && !state.handoffRoutes.has(event.data.handoff_id)) {
         state.handoffRoutes.set(event.data.handoff_id, state.routing.route);
+      }
+      if (event.data.request_kind === 'work') {
+        // Delivery confirmation must not wait for Worker persistence or an Agent turn.
+        void receiveHuman(event);
+        if (workerBridge) void workerBridge.humanEvent(event, 'haas').catch(() => emit({ type: 'worker.error', case_id: state.id, message: 'Work request synchronization failed.' }));
+        return;
       }
       if (workerBridge) {
         const route = state.handoffRoutes.get(event.data.handoff_id) || state.routing.route;
@@ -158,6 +165,15 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     const session = new LiveConversation({ id, caseId: state.id, language: state.routing.language,
       apiKey: env.OPENAI_API_KEY, backend, emit, caseState: state, route, standby,
       socketFactory, closeTimeoutMs,
+      requestWork: text => {
+        if (state.fastWorkRequest) return state.fastWorkRequest;
+        state.routing.route = 'haas';
+        state.fastWorkRequest = { startedAt: Date.now() };
+        const request = gateway.service.requestHuman({ ...workRequestDetails(text), case_id: state.id,
+          reason: 'human_requested', language: state.routing.language, idempotency_key: `${state.id}:work` });
+        Object.assign(state.fastWorkRequest, request);
+        return state.fastWorkRequest;
+      },
       handoffs: () => currentHumanRequests().filter((record) => record.case_id === state.id),
       onClosing: (closingId, { preserveCase }) => {
         if (!preserveCase) {
@@ -359,8 +375,8 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         const response = { ...connectionInfo(candidate), old_session_id: ticket.oldId, active: true };
         candidate.activation = { token: ticket.token, response };
         const resumedHuman = drainHuman(state);
-        candidate.activateDepartment({ announce: !ticket.automatic && resumedHuman === 0, automatic: ticket.automatic,
-          announceVoice: ticket.automatic && resumedHuman === 0 });
+        candidate.activateDepartment({ announce: !ticket.automatic && resumedHuman === 0 && !continueWork, automatic: ticket.automatic,
+          announceVoice: resumedHuman === 0 });
         if (continueWork) void candidate.enqueue(null, 'handoff_continuation');
         emit({ type: 'live.handoff', ...response, session_id: candidate.id });
         void previous.close({ preserveCase: true });

@@ -10,6 +10,7 @@ export const requestHumanSchema = z.object({
   language: z.enum(['ja', 'en']).default('ja'),
   device_id: identifier.default('black-phone-1'),
   idempotency_key: identifier,
+  request_kind: z.enum(['work']).optional(),
   target_role: taskDetail.optional().describe('Role to consult, not a routing guarantee.'),
   task: taskDetail.optional().describe('The bounded question or task for the human.'),
   expected_result: taskDetail.optional().describe('What answer is needed to continue the conversation.'),
