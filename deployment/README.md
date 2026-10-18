@@ -59,6 +59,38 @@ relayの公開pathは `/relay/voice/*`（HMAC）、`/mcp`（Bearer）、`/bridge
 
 ## Workerの配置
 
+### 現在の本番へ配置する場合
+
+`deployment/wrangler.production.jsonc` は既存の `future-company-demo.r74.workers.dev`、R74アカウント、D1、CaseRoomを指定している。LimoさんはCF招待を承諾してから、そのアカウントでログインする。Access Service TokenとCFへの配置権限は別に必要。
+
+```sh
+npx wrangler login
+npx wrangler whoami
+npm ci
+npm run build:frontend
+npx wrangler deploy --dry-run --keep-vars --config deployment/wrangler.production.jsonc
+npx wrangler deploy --keep-vars --config deployment/wrangler.production.jsonc
+```
+
+この既存CaseRoomはcf CLIの宣言方式で作成されているため、configには `exports.CaseRoom` を使う。`migrations` と併記しない。`migrations` だけでは `provisioned_class_missing_from_config` で配置に失敗した。[公式のclass exports仕様](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)も参照。
+
+音声接続には、Nodeと同じ `NODE_RELAY_SECRET` と `STAFF_API_TOKEN` をWorkerのSecretsへ設定する。値を確認し直すときは、既存のNode設定を使い、コード・Slack返信・CLI引数へ貼らない。Wranglerの入力プロンプトまたは私有ファイルのstdinから渡す。
+
+```sh
+npx wrangler secret put NODE_RELAY_SECRET --config deployment/wrangler.production.jsonc
+npx wrangler secret put STAFF_API_TOKEN --config deployment/wrangler.production.jsonc
+```
+
+`--keep-vars` は既存変数を保持する。relayのトンネルを変更する場合は、configの `NODE_RELAY_ORIGIN` と実際のWorker変数を一致させる。共有AccessはNodeサーバーの `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` に設定し、`WORKER_API_URL=https://future-company-demo.r74.workers.dev` を明示する。現在の `integration/server.mjs` は `WORKER_API_URL` でWorkerBridgeの起動を判定するため、`WORKER_API_ORIGIN` だけでは起動しない。ブラウザのビルド変数へ秘密値を入れない。
+
+配置後はAccess認証付きの `haas` 案件作成201、同じvisitor cookieによる `bridge-token` 200、case別 `voice/status` 200を順に確認する。`voice_relay_unconfigured` はWorkerのrelay設定不足、status 200は接続口の確認まで。Live開始・保存済み人間回答の返却・音声出力は別に通し確認する。既存Accessポリシーとpreview無効を維持する。
+
+### 他の承認済み配置先へ移す場合
+
+本番Workerへのサーバー間接続は、`WORKER_API_URL`、`CF_ACCESS_CLIENT_ID`、`CF_ACCESS_CLIENT_SECRET` を私有の `.env.local` に保存する。NodeのWorkerBridgeはHTTPとWebSocketの両方にAccessの2ヘッダーを付ける。Access通過後も案件cookie・`bridge_token`・`STAFF_API_TOKEN` のアプリ認可は必要。Accessの値はWranglerの配置権限ではない。切替時には実際の `WORKER_API_URL` が意図した接続先かを確認する。
+
+公開gatewayも同じ2ヘッダーで固定本番Workerへ接続できる。`DEMO_GATEWAY_WORKER_ORIGIN=https://future-company-demo.r74.workers.dev` を指定し、同じ私有envを読み込む。許可した固定originだけへ送信し、ブラウザへAccess値を渡さない。本番の `haas` 案件、案件証明、voice/status、社員認証が揃ってから接続先を切り替える。稼働中のローカルWorkerを使うデモは、それまでは維持する。
+
 `deployment/worker-entry.ts` は既存appとCaseRoomを取り込み、case付きvoice pathだけproxyへ流し、画面はStatic Assetsから配信する。既存server/apiの直接変更は不要。フロントには上記base pathを適用してから配信する。
 
 ```sh

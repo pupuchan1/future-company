@@ -16,7 +16,7 @@
   "durable_objects": {
     "bindings": [{ "name": "CASES", "class_name": "CaseRoom" }]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CaseRoom"] }],
+  "exports": { "CaseRoom": { "type": "durable-object", "storage": "sqlite" } },
   "d1_databases": [{
     "binding": "DB",
     "database_name": "future-company-demo",
