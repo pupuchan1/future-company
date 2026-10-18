@@ -99,3 +99,14 @@ aiortcで同じケースの一般受付→採用→HaaSを試験した。入力�
 - 15:45に、共有されたCloudflare Access設定で既存本番Workerのcompany APIは認証あり200 JSON／なし302を確認。現行本番は`haas`案件400、既存`support`案件201、案件証明とvoice/statusは404、手元の社員トークンは401。統合版の配置と社員認証の一致をIssue #33とSlackでr74techへ依頼済み。
 - 15:47のSlack更新で、共有Accessトークンは2026-10-19 00:00 JSTまでと確認。ID・Secretは変更なし。値はサーバー専用ファイルに保存し、Gitやブラウザには含めない。
 - 2回目の実ブラウザー試験では受付`shida`のままHaaSへ業務委譲し、同一case/handoffのWorker保存回答revision 5と英語の最終音声を確認。135秒時点でWebRTC接続とRTP送信が継続し、一度のICE切断からも復帰した。一方、status取得失敗後に声切替の可否が復旧せず、手動切替が拒否される不具合を確認。`browser-1792306151301.json`を根拠に #35 で修正する。
+
+
+## 2026-10-18 15:58–16:06 JST: 同じ案件で受付から採用音声へ切替
+
+継続した合成無音クロックを送る実ブラウザー試験で、受付 `shida` から採用 `harema` への手動切替が7.919秒で成功した。同じcaseと採用Agents sessionを維持し、切替後70.171秒まで接続を継続。追加の非無音サンプル178、候補側RTP 3,606 packets / 125,576 bytesを確認した。新しいLiveは `close_requested` でfinalized、業務Agentは削除済み。旧Liveの終了要求は送信済みだがfinalization応答がなく、新Liveの終了成功と分けて扱う。
+
+以前の30秒expiryはこの試行では再現していない。入力クロック変更だけが原因だと確定した試験ではなく、自動ルーティングや三担当の連続切替、実機電話までを確認したものではない。証跡は私有の `moj/work/browser-live-harness/evidence/p1-browser-manual-correlated.json`。
+
+- 一時的なstatus取得失敗で既知の声切替機能が無効になる問題を修正。403では無効化し、タイムアウト/5xxでは直前の機能情報を維持する。関連29テスト成功。
+- 自動切替はDecisionsの確定ルート、業務応答、発話後の静かな区間を待つ。声だけの変更から業務Agentを再実行せず、409時の再試行は最大3回。関連70テストと型検査成功。自動切替自体の新たな実ブラウザー確認は未完了。
+- r74techが16:01に既存本番Workerへ `7439949` を配置。version `8213ab20-f524-4ca9-8662-7f3b2fc57bc2`。16:06の独立確認でcompany/案件取得200、voice/status 503 (`voice_relay_unconfigured`)、社員認証401。本番にNodeと同一の2つのサーバーsecretを設定し、Nodeの `WORKER_API_URL` を本番へ向ける作業に進む。15:45時点の400/404は現在の状態ではない。
