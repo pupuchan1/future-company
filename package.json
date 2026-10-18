@@ -2,7 +2,7 @@
   "name": "future-company",
   "private": true,
   "version": "0.0.0",
-  "workspaces": ["frontend"],
+  "workspaces": ["frontend", "integration"],
   "engines": {
     "node": ">=24.14.0 <25"
   },
@@ -11,6 +11,9 @@
     "build": "npm run build --workspace frontend",
     "lint": "npm run lint --workspace frontend",
     "typecheck": "npm run typecheck --workspace frontend",
-    "preview": "npm run preview --workspace frontend --"
+    "preview": "npm run preview --workspace frontend --",
+    "integration": "npm run start --workspace integration",
+    "integration:test": "npm run test --workspace integration",
+    "phone:sim": "npm run phone:sim --workspace integration --"
   }
 }

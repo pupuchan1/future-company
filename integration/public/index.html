@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Future Company — 採用受付の統合確認</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" type="module"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <a class="brand" href="/" aria-label="統合確認画面のホーム"><span class="brand-mark" aria-hidden="true">f.</span> FUTURE COMPANY</a>
+        <span class="workspace-tag">開発・統合確認</span>
+      </header>
+
+      <section class="intro" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">RECEPTION → RECRUITING → HUMAN</p>
+          <h1 id="page-title">採用の相談を、声から。</h1>
+          <p class="lede">総合受付から採用担当へ。質問と回答を整理し、必要なときに人間へ相談する流れを確認します。<br>採否は人が判断します。この画面は開発用の統合確認です。</p>
+        </div>
+        <div class="stream-indicator"><span id="stream-dot" class="dot"></span><span id="stream-label">イベント接続中</span></div>
+      </section>
+
+      <div class="route" aria-label="統合する経路">
+        <div><span class="route-number">01</span><strong>総合受付</strong><span id="live-config" class="tag muted">確認中</span></div>
+        <span class="route-arrow" aria-hidden="true">→</span>
+        <div><span class="route-number">02</span><strong>採用担当</strong><span id="backend-state" class="tag muted">待機中</span></div>
+        <span class="route-arrow" aria-hidden="true">→</span>
+        <div><span class="route-number">03</span><strong>人間に相談</strong><span id="mcp-config" class="tag muted">確認中</span></div>
+      </div>
+
+      <p id="page-notice" class="notice" role="status" hidden></p>
+
+      <div class="workspace">
+        <section class="card conversation-card" aria-labelledby="conversation-heading">
+          <div class="card-heading">
+            <div><p class="eyebrow">LIVE CONVERSATION</p><h2 id="conversation-heading">総合受付と話す</h2></div>
+            <span id="call-state" class="tag muted">待機中</span>
+          </div>
+          <p id="call-help" class="supporting">接続設定を確認しています。</p>
+          <div class="routing-state"><span>現在の担当</span><strong id="route-assignee">総合受付</strong><span id="route-language">日本語</span><span id="route-source">担当切替を待機</span></div>
+          <div class="call-options">
+            <label>会話の言語<select id="language"><option value="ja">日本語</option><option value="en">English</option></select></label>
+            <label class="case-field">確認用の案件ID<input id="case-id" maxlength="160" autocomplete="off" spellcheck="false" /></label>
+          </div>
+          <div class="call-actions">
+            <button id="start-call" class="button primary" type="button" disabled><span aria-hidden="true">◉</span> 会話を開始</button>
+            <button id="mute-call" class="button secondary" type="button" disabled aria-pressed="false">マイクをミュート</button>
+            <button id="end-call" class="button stop" type="button" disabled>終了</button>
+          </div>
+          <p class="fine-print">開始ボタンを押したときだけ、マイクの使用を確認します。終了するとマイクを停止します。</p>
+          <div id="audio-panel" class="audio-panel" hidden>
+            <label for="remote-audio">AIの音声</label>
+            <audio id="remote-audio" autoplay controls playsinline></audio>
+            <button id="play-audio" class="button secondary small" type="button" hidden>音声の再生を許可</button>
+            <p id="audio-notice" class="fine-print" hidden></p>
+          </div>
+          <div class="transcript-heading"><h3>会話の文字起こし</h3><span>音声イベントから表示</span></div>
+          <div id="transcript" class="transcript" role="log" aria-live="polite" aria-relevant="additions text">
+            <p id="transcript-empty" class="empty-state">会話を始めると、ここに発話が表示されます。</p>
+          </div>
+        </section>
+
+        <div class="side-column">
+          <section class="card" aria-labelledby="phone-heading">
+            <div class="card-heading"><div><p class="eyebrow">HUMAN GATEWAY</p><h2 id="phone-heading">人間への相談</h2></div><span class="phone-icon" aria-hidden="true">☎</span></div>
+            <div id="devices" class="devices"><p class="empty-state">デバイスを確認しています。</p></div>
+            <p class="boundary-note">受話器を取った状態は <code>accepted</code> です。人間との音声通話が接続された証拠にはなりません。</p>
+            <h3 class="section-label">呼び出し履歴</h3>
+            <div id="requests" class="requests" aria-live="polite"><p class="empty-state">呼び出しはまだありません。</p></div>
+          </section>
+
+          <details class="card wiring-card" aria-labelledby="wiring-heading">
+            <summary class="card-heading"><div><p class="eyebrow">MANUAL CHECK</p><h2 id="wiring-heading">MCPの配線確認</h2></div><span class="tag amber">手動テスト</span></summary>
+            <p class="supporting">MCPツール経由で黒電話を呼び出します。AIが会話から判断した経路とは別の確認です。</p>
+            <label>呼び出し理由<select id="handoff-reason"><option value="human_requested">人間への対応を希望</option><option value="agent_unable">AIでは対応できない</option></select></label>
+            <label>引き継ぐ内容<textarea id="handoff-summary" rows="3" maxlength="4000">採用相談の配線確認です。質問への回答と、人間による判断への引き継ぎを確認してください。</textarea></label>
+            <button id="test-handoff" class="button secondary full" type="button" disabled>配線確認で黒電話を呼び出す</button>
+            <p id="handoff-help" class="fine-print" role="status">MCPの設定を確認しています。</p>
+          </details>
+        </div>
+      </div>
+
+      <section class="card events-card" aria-labelledby="events-heading">
+        <div class="card-heading"><div><p class="eyebrow">OBSERVATION</p><h2 id="events-heading">接続・委譲イベント</h2></div><button id="clear-events" class="text-button" type="button">表示を消去</button></div>
+        <ol id="events" class="events" aria-live="off"><li class="empty-state">接続結果を待っています。</li></ol>
+      </section>
+      <footer>Future Company · Integration workspace <span>模擬デバイスと実機、配線確認とAI経路を区別して表示します。</span></footer>
+    </main>
+  </body>
+</html>

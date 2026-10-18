@@ -1,5 +1,9 @@
 # Future Company
 
+チーム・各エージェントは [作業共有の運用](CONTRIBUTING.md) と対象 Issue を確認してください。アイデアと進捗を Issue / Draft PR に出し、マージ時に判断します。
+
+採用優先の音声受付プロトタイプは [integration/README.md](integration/README.md)、DevDayの活用と検証項目は [チェックリスト](integration/DEVDAY-CHECKLIST.md) を参照してください。
+
 フロントエンドは `frontend/` に配置しています。React + TypeScript + Vite の構成です。
 
 ## 開発を始める
