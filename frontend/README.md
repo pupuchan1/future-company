@@ -45,3 +45,9 @@ node --test frontend/tests/demo.test.ts
 現在の入口は `src/pages/ReceptionPage.tsx` の1画面です。「AIに話しかける」で共通受付に接続し、会話から採用/HaaSを選ぶ処理はNodeのAI側に任せます。採用直通・デモ/実接続モード選択は一般画面に表示しません。旧4画面は `src/LegacyPrototype.tsx` とデモテストとして保持しています。
 
 通常の `frontend/vite.config.ts` がNode（4320）とWorker（8787）へ転送します。`vite.live.config.ts` は同じ設定への互換エイリアスです。全体の起動はルートから `npm run dev`。音声の設定がないときは主ボタンが無効になり、会話やツールの結果は作りません。
+
+### 表示言語
+
+共通受付は初期設定「自動」で、`navigator.languages` の優先順から最初に対応する日本語・英語を選びます（一覧がなければ `navigator.language`）。`ja-JP` / `en-US` などの地域別Localeにも対応し、対応言語がなければ英語を表示します。自動設定中はブラウザーの `languagechange` にも追従します。
+
+ヘッダーのJP / ENを選ぶと表示言語を固定し、同じブラウザーに保存します。「自動」で固定を解除できます。保存が無効な環境でも、そのタブでは手動切替を利用できます。表示言語に合わせてページタイトル・説明・HTMLの言語属性も更新します。会話開始時は表示言語を初期言語として渡し、その後の会話の言語判定が画面表示を上書きすることはありません。会話内容や担当者の回答は原文のままです。方針: [#31](https://github.com/pupuchan1/future-company/issues/31)。

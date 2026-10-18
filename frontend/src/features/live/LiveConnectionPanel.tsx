@@ -1,3 +1,4 @@
+import { VoiceOrb } from '../voice/VoiceOrb.tsx'
 import { useEffect } from 'react'
 import { useLiveConnection } from './useLiveConnection.ts'
 import type { LiveLanguage, LivePhase, LiveSnapshot } from './types.ts'
@@ -12,7 +13,7 @@ export interface LiveConnectionPanelProps {
 
 const phases: Record<LivePhase, [string, string]> = {
   idle: ['待機中', 'Ready'], connecting: ['接続中', 'Connecting'], connected: ['会話中', 'Connected'],
-  reconnecting: ['再接続待ち', 'Reconnecting'], stopping: ['音声を終了中', 'Stopping voice'], ended: ['音声終了', 'Voice ended'], error: ['接続エラー', 'Connection error'],
+  reconnecting: ['再接続待ち', 'Reconnecting'], switching: ['担当に引き継ぎ中', 'Switching department'], stopping: ['音声を終了中', 'Stopping voice'], ended: ['音声終了', 'Voice ended'], error: ['接続エラー', 'Connection error'],
 }
 const requestLabels: Record<string, [string, string]> = {
   requested: ['依頼作成', 'Requested'], ringing: ['リング応答あり', 'Ring acknowledged'],
@@ -26,12 +27,13 @@ export function LiveConnectionPanel({ caseId, language, onSnapshot }: LiveConnec
   const s = live.snapshot
   const en = language === 'en'
   const text = (ja: string, english: string) => en ? english : ja
-  const active = ['connecting', 'connected', 'reconnecting'].includes(s.phase)
+  const active = ['connecting', 'connected', 'reconnecting', 'switching'].includes(s.phase)
   const stopping = s.phase === 'stopping'
   useEffect(() => { onSnapshot?.(s) }, [s, onSnapshot])
   return <section className="panel" aria-label={text('AI音声接続', 'AI voice connection')}>
     <h2 className="panel-heading">{text('AI音声接続', 'AI voice connection')}</h2>
     <div className="task-body">
+      <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} />
       <div className="row spread"><strong>{phases[s.phase][en ? 1 : 0]}</strong><span className="tag">{text('サーバー接続モード', 'Server connection mode')}</span></div>
       <p className="small">{text('音声はAIに送信されます。開始するとマイクを使います。言語と担当は会話から自動判定します。', 'Audio is sent to the AI. Starting uses your microphone. Language and department are detected from the conversation.')}</p>
       <p role="status">{s.configured === null

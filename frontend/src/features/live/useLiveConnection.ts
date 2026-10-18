@@ -1,10 +1,12 @@
+import { VoiceActivityStore } from '../voice/activity.ts'
 import { useEffect, useRef, useState } from 'react'
 import { LiveClient } from './client.ts'
 import { initialSnapshot } from './types.ts'
-import type { LiveLanguage } from './types.ts'
+import type { LiveLanguage, LiveRoute } from './types.ts'
 
 export function useLiveConnection({ caseId, language }: { caseId: string; language: LiveLanguage }) {
   const [snapshot, setSnapshot] = useState(() => initialSnapshot(caseId, language))
+  const [voice, setVoice] = useState(() => new VoiceActivityStore())
   const client = useRef<LiveClient | null>(null)
   const languageRef = useRef(language)
   useEffect(() => { languageRef.current = language }, [language])
@@ -12,6 +14,7 @@ export function useLiveConnection({ caseId, language }: { caseId: string; langua
     const next = new LiveClient(caseId, languageRef.current)
     client.current = next
     setSnapshot(next.getSnapshot())
+    setVoice(next.voice)
     const unsubscribe = next.subscribe(setSnapshot)
     const pagehide = () => next.dispose()
     // A BFCache restore needs a fresh event stream and a user-started new call.
@@ -28,7 +31,9 @@ export function useLiveConnection({ caseId, language }: { caseId: string; langua
   }, [caseId])
   return {
     snapshot,
-    start: () => client.current?.start(languageRef.current),
+    voice,
+    start: (route?: LiveRoute, bridgeToken?: string) => client.current?.start(languageRef.current, route, bridgeToken),
+    switchDepartment: (route: LiveRoute) => client.current?.switchDepartment(route),
     stop: () => client.current?.stop(),
     toggleMuted: () => client.current?.setMuted(!client.current.getSnapshot().muted),
     playAudio: () => client.current?.playAudio(),

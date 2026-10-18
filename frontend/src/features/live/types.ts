@@ -1,6 +1,7 @@
 export type LiveLanguage = 'ja' | 'en'
 export type LiveRoute = 'reception' | 'recruiting' | 'haas'
-export type LivePhase = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopping' | 'ended' | 'error'
+export type LivePhase = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'switching' | 'stopping' | 'ended' | 'error'
+export type LiveSpeaking = 'user' | 'assistant' | 'both' | 'silent'
 export type JsonObject = Record<string, unknown>
 
 export interface LiveTranscript {
@@ -32,9 +33,18 @@ export interface LiveSnapshot {
   configured: boolean | null
   mcpConfigured: boolean | null
   route: LiveRoute
+  voiceRoute: LiveRoute
+  voice: string
+  switchConfigured: boolean
+  voiceMap: Partial<Record<LiveRoute, string>>
   language: LiveLanguage
   muted: boolean
   playbackBlocked: boolean
+  /** Measured RMS amplitude, 0..1; transcripts never change these values. */
+  inputLevel: number
+  outputLevel: number
+  speaking: LiveSpeaking
+  meteringAvailable: boolean
   transcripts: LiveTranscript[]
   requests: LiveHumanRequest[]
   backend: 'idle' | 'running' | 'result' | 'error'
@@ -49,8 +59,9 @@ export function object(value: unknown): JsonObject {
 
 export function initialSnapshot(caseId: string, language: LiveLanguage): LiveSnapshot {
   return {
-    caseId, language, route: 'reception', phase: 'idle', events: 'connecting',
+    caseId, language, route: 'reception', voiceRoute: 'reception', voice: '', switchConfigured: false, voiceMap: {}, phase: 'idle', events: 'connecting',
     configured: null, mcpConfigured: null, muted: false, playbackBlocked: false,
+    inputLevel: 0, outputLevel: 0, speaking: 'silent', meteringAvailable: false,
     transcripts: [], requests: [], backend: 'idle', backendResult: '', error: '', cleanupWarning: '',
   }
 }

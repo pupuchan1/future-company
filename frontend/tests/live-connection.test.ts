@@ -107,6 +107,19 @@ test('start uses PR #4 SDP contract, waits for session.started, then mutes and r
   assert.equal(f.source.closed, true)
 })
 
+test('Worker proof reaches only the Live creation body for the same case', async () => {
+  const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+  await client.refreshStatus()
+  try {
+    await client.start('en', 'reception', 'test-worker-proof')
+    const request = f.calls.find(call => call.path === '/api/live/session')!
+    assert.deepEqual(JSON.parse(String(request.options?.body)), {
+      sdp: 'v=0\r\no=mock', language: 'en', case_id: 'case-a', bridge_token: 'test-worker-proof',
+    })
+    assert.equal(JSON.stringify(client.getSnapshot()).includes('test-worker-proof'), false)
+  } finally { client.dispose() }
+})
+
 test('stop during session creation deletes the late server session and never reconnects', async () => {
   const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
   let resolveCreate!: (response: Response) => void
