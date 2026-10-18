@@ -9,6 +9,7 @@ import { McpEvents } from './events/mcp-events.mjs';
 import { BusinessBackend } from './backend.mjs';
 import { LiveConversation, liveConfig } from './live-session.mjs';
 import { mcpCall } from './mcp-client.mjs';
+import { createCaseState, initialHistory, isVoiceRoute, voiceMap } from './case-state.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 function json(res, status, data) {
@@ -37,11 +38,13 @@ export function isLocalRequest(req) {
   return true;
 }
 
-export function createIntegration({ env = process.env, client, stateDir = resolve(root, '../.integration-state') } = {}) {
+export function createIntegration({ env = process.env, client, stateDir = resolve(root, '../.integration-state'),
+  socketFactory, closeTimeoutMs, handoffTimeoutMs = 30000 } = {}) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const remember = (record) => appendFileSync(join(stateDir, 'resources.jsonl'), JSON.stringify({ at: new Date().toISOString(), ...record }) + '\n', { mode: 0o600 });
   const clients = new Set();
   const sessions = new Map();
+  const cases = new Map();
   const emit = (event) => {
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const res of clients) {
@@ -58,10 +61,68 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     onEvent: (event) => {
       emit({ ...event, type: event.name });
       void events.publish(event).catch(() => emit({ type: 'events.error', message: 'MCP event could not be queued.' }));
-      for (const session of sessions.values()) session.humanEvent(event);
+      const state = cases.get(event.data.case_id);
+      if (!state || state.closed) return;
+      // Capture the request's original specialist before a voice switch changes it.
+      if (event.name === 'human.requested' && !state.handoffRoutes.has(event.data.handoff_id)) {
+        state.handoffRoutes.set(event.data.handoff_id, state.routing.route);
+      }
+      const active = sessions.get(state.activeSessionId);
+      if (state.switching || !active) state.pendingHumanEvents.push(event);
+      else active.humanEvent(event);
     },
     onError: () => emit({ type: 'mcp.error', message: 'MCP transport error.' }),
   });
+  function drainHuman(state) {
+    const active = sessions.get(state.activeSessionId);
+    if (!active || state.closed || state.switching) return 0;
+    const pending = state.pendingHumanEvents.splice(0);
+    for (const event of pending) active.humanEvent(event);
+    return pending.filter((event) => ['human.completed', 'human.unavailable', 'human.cancelled'].includes(event.name)).length;
+  }
+  function abandonHandoff(state, ticket) {
+    if (state.switching !== ticket) return;
+    clearTimeout(ticket.timer);
+    state.switching = null;
+    const candidate = sessions.get(ticket.newId);
+    if (candidate) void candidate.close({ preserveCase: true });
+    drainHuman(state);
+    const previous = sessions.get(state.activeSessionId);
+    for (const id of state.deferredDelegations) {
+      if (!state.closed && previous?.canWork() && !state.seen.has(id)) {
+        state.seen.add(id);
+        previous.enqueue(id, 'delegation');
+      }
+    }
+    state.deferredDelegations.clear();
+  }
+  function observeSession(result, state, { route = state.routing.route, standby = false } = {}) {
+    const id = result.session.id;
+    remember({ type: 'live', id, case_id: state.id });
+    const session = new LiveConversation({ id, caseId: state.id, language: state.routing.language,
+      apiKey: env.OPENAI_API_KEY, backend, emit, caseState: state, route, standby,
+      socketFactory, closeTimeoutMs,
+      handoffs: () => gateway.service.listRequests().filter((record) => record.case_id === state.id),
+      onClosing: (closingId, { preserveCase }) => {
+        if (!preserveCase) {
+          state.closed = true;
+          const ticket = state.switching;
+          if (ticket) abandonHandoff(state, ticket);
+          state.pendingHumanEvents.length = 0;
+        } else if (state.switching?.newId === closingId) {
+          abandonHandoff(state, state.switching);
+        }
+      },
+      onClose: (closedId) => {
+        sessions.delete(closedId);
+        // Hold the case reservation until its old Agents cleanup has completed.
+        if (state.closed && state.activeSessionId === closedId && cases.get(state.id) === state) cases.delete(state.id);
+      }, remember });
+    sessions.set(id, session);
+    return session;
+  }
+  const connectionInfo = (session) => ({ session: { id: session.id }, case_id: session.caseId,
+    route: session.voiceRoute, voice: session.voice });
   let pendingCreates = 0;
   const pendingCaseIds = new Set();
   const server = createServer(async (req, res) => {
@@ -73,6 +134,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         live_configured: Boolean(provider), mcp_configured: Boolean(env.HUMAN_MCP_URL),
         devices: gateway.service.listDevices(), requests: gateway.service.listRequests(),
         decisions_enabled: env.LIVE_DECISIONS_ENABLED !== 'false',
+        handoff_configured: true, voice_map: voiceMap,
       });
       if (req.method === 'GET' && path === '/api/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
@@ -94,25 +156,96 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         if (!provider || !backend?.mcpUrl) return json(res, 503, { error: 'Server-side API key and HUMAN_MCP_URL are required.' });
         const input = await body(req);
         if (typeof input.sdp !== 'string' || !input.sdp.startsWith('v=0')) return json(res, 400, { error: 'A WebRTC SDP offer is required.' });
+        if (input.route !== undefined && !isVoiceRoute(input.route)) return json(res, 400, { error: 'Unknown voice department.', code: 'invalid_route' });
+        const route = input.route || 'reception';
         const language = input.language === 'en' ? 'en' : 'ja';
         const caseId = identifier(input.case_id) ? input.case_id : `case-${randomUUID()}`;
-        if (sessions.size + pendingCreates >= 3) return json(res, 429, { error: 'Close an existing session first.' });
-        if (pendingCaseIds.has(caseId) || [...sessions.values()].some((s) => s.caseId === caseId)) return json(res, 409, { error: 'This case already has a voice session.' });
+        if (cases.size + pendingCreates >= 3) return json(res, 429, { error: 'Close an existing session first.' });
+        if (pendingCaseIds.has(caseId) || cases.has(caseId)) return json(res, 409, { error: 'This case already has a voice session.' });
         pendingCaseIds.add(caseId);
         pendingCreates++;
         try {
           const result = await provider.live.create({ session: liveConfig({ model: env.LIVE_MODEL || 'gpt-live-1',
-            voice: env.LIVE_VOICE || 'shida', language, decisions: env.LIVE_DECISIONS_ENABLED !== 'false' }),
+            voice: voiceMap[route], route, language, decisions: env.LIVE_DECISIONS_ENABLED !== 'false' }),
             transport: { type: 'webrtc', sdp: input.sdp } });
-          remember({ type: 'live', id: result.session.id, case_id: caseId });
-          const session = new LiveConversation({ id: result.session.id, caseId, language, apiKey: env.OPENAI_API_KEY,
-            backend, emit, handoffs: () => gateway.service.listRequests().filter((r) => r.case_id === caseId),
-            onClose: (id) => sessions.delete(id), remember });
-          sessions.set(result.session.id, session);
+          const state = createCaseState(caseId, language, route);
+          state.activeSessionId = result.session.id;
+          cases.set(caseId, state);
+          const session = observeSession(result, state);
           try { await session.ready; } catch (error) { await session.close(); throw error; }
           if (res.destroyed) { await session.close(); return; }
-          return json(res, 200, { session: { id: result.session.id }, transport: result.transport, case_id: caseId });
+          return json(res, 200, { ...connectionInfo(session), transport: result.transport });
         } finally { pendingCreates--; pendingCaseIds.delete(caseId); }
+      }
+      const handoffMatch = path.match(/^\/api\/live\/session\/([^/]+)\/handoff$/);
+      if (req.method === 'POST' && handoffMatch) {
+        const current = sessions.get(decodeURIComponent(handoffMatch[1]));
+        if (!current) return json(res, 404, { error: 'Voice session not found.', code: 'session_not_found' });
+        const input = await body(req);
+        if (typeof input.sdp !== 'string' || !input.sdp.startsWith('v=0')) return json(res, 400, { error: 'A WebRTC SDP offer is required.' });
+        if (!isVoiceRoute(input.route)) return json(res, 400, { error: 'Unknown voice department.', code: 'invalid_route' });
+        const state = current.caseState;
+        if (state.closed || current.closed || current.closing || state.activeSessionId !== current.id) {
+          return json(res, 409, { error: 'This is no longer the active voice session.', code: 'inactive_session' });
+        }
+        if (state.switching || current.busy) return json(res, 409, {
+          error: 'Wait until the current work or handoff finishes.', code: state.switching ? 'handoff_in_progress' : 'busy' });
+        const ticket = { token: randomUUID(), oldId: current.id, newId: null, route: input.route, ready: false };
+        state.switching = ticket;
+        ticket.timer = setTimeout(() => abandonHandoff(state, ticket), handoffTimeoutMs);
+        ticket.timer.unref?.();
+        try {
+          const result = await provider.live.create({ session: liveConfig({ model: env.LIVE_MODEL || 'gpt-live-1',
+            voice: voiceMap[input.route], route: input.route, language: state.routing.language,
+            input: initialHistory(state.history), standby: true, decisions: env.LIVE_DECISIONS_ENABLED !== 'false' }),
+            transport: { type: 'webrtc', sdp: input.sdp } });
+          ticket.newId = result.session.id;
+          const candidate = observeSession(result, state, { route: input.route, standby: true });
+          try { await candidate.ready; } catch (error) { await candidate.close({ preserveCase: true }); throw error; }
+          if (state.closed || state.switching !== ticket || candidate.closed || candidate.closing || res.destroyed) {
+            await candidate.close({ preserveCase: true });
+            if (!res.destroyed) return json(res, 409, { error: 'The handoff expired or the original call closed.', code: 'handoff_expired' });
+            return;
+          }
+          ticket.ready = true;
+          return json(res, 200, { ...connectionInfo(candidate), transport: result.transport,
+            old_session_id: ticket.oldId, handoff_token: ticket.token });
+        } catch (error) {
+          abandonHandoff(state, ticket);
+          throw error;
+        }
+      }
+      const activateMatch = path.match(/^\/api\/live\/session\/([^/]+)\/activate$/);
+      if (req.method === 'POST' && activateMatch) {
+        const candidate = sessions.get(decodeURIComponent(activateMatch[1]));
+        if (!candidate) return json(res, 404, { error: 'Voice session not found.', code: 'session_not_found' });
+        const input = await body(req);
+        const state = candidate.caseState;
+        if (candidate.activation && candidate.activation.token === input.handoff_token && !state.closed && state.activeSessionId === candidate.id) {
+          return json(res, 200, candidate.activation.response);
+        }
+        const ticket = state.switching;
+        if (!ticket || ticket.newId !== candidate.id || ticket.token !== input.handoff_token) {
+          return json(res, 409, { error: 'No matching pending handoff.', code: 'invalid_handoff' });
+        }
+        const previous = sessions.get(ticket.oldId);
+        if (!ticket.ready || candidate.closed || candidate.closing || state.closed || !previous || previous.closed || previous.closing) {
+          abandonHandoff(state, ticket);
+          return json(res, 409, { error: 'The handoff is not ready or the original call closed.', code: 'handoff_expired' });
+        }
+        // No await between validation and commit: every human event has one owner.
+        clearTimeout(ticket.timer);
+        state.activeSessionId = candidate.id;
+        state.switching = null;
+        state.deferredDelegations.clear();
+        candidate.updateRouting({ route: ticket.route, language: state.routing.language }, 'voice_handoff');
+        const response = { ...connectionInfo(candidate), old_session_id: ticket.oldId, active: true };
+        candidate.activation = { token: ticket.token, response };
+        const resumedHuman = drainHuman(state);
+        candidate.activateDepartment({ announce: resumedHuman === 0 });
+        emit({ type: 'live.handoff', ...response, session_id: candidate.id });
+        void previous.close({ preserveCase: true });
+        return json(res, 200, response);
       }
       if (req.method === 'DELETE' && path.startsWith('/api/live/session/')) {
         const id = decodeURIComponent(path.slice('/api/live/session/'.length));
