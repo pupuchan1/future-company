@@ -2,7 +2,25 @@
 
 入口はhttps://future-company-demo.r74.workers.dev/。
 起動、接続先更新と復帰は[本番運用手順](../deployment/PRODUCTION.md)を参照する。
-下表は2026-10-18に確認した配備であり、最新のPR HEADを配備済みとみなさない。
+各表は2026-10-18に確認した配備であり、最新のPR HEADを配備済みとみなさない。
+
+## 16:36の更新
+
+| 項目 | 確認した値 |
+| --- | --- |
+| 製品ソース | `617612592fda658304fe87f68d2166ceeac5f9c7` |
+| Worker version | `66e5c8ad-22ff-491d-a735-d90f9b1aefbe`、100%配信 |
+| Nodeソース所在 | 配備ホストの`.local/deploy-6176125` |
+| relay origin | `https://ellen-grid-entrance-mails.trycloudflare.com` |
+| MCPと実機bridge | 上記originの`/mcp`と`/bridge` |
+| 戻り先 | 下記319ffc1。旧jamie originを固定せず、復帰時に生存するrelayで再配備 |
+
+runtimeの起動ソース、state.jsonとWrangler deployment一覧を開いて確認した。
+この更新で`sourceCommit`は6176125へ修正された。
+最新版の全受入成功とは扱わず、試験ごとの版と結果を[声交代と復帰の受入記録](../deployment/verification/2026-10-18-voice-acceptance.md)に残す。
+同受入記録は後続PR #109で追加する。
+
+## 16:06の配備と復帰元
 
 | 項目 | 確認した値 |
 | --- | --- |
@@ -18,7 +36,7 @@
 
 配信versionと割合は今回`wrangler deployments list --config deployment/wrangler.local.jsonc --json`でも確認した。
 Quick TunnelのURLは再起動で変わるため、利用前にホストの`.local/production-runtime/state.json`と実際のWorker設定を照合する。
-同ファイルの`sourceCommit`は`26020e5`のままだったため、配備版の判定には使わない。
+16:06配備時の同ファイルの`sourceCommit`は`26020e5`のままだったため、その時点の配備版の判定には使わなかった。
 gitのHEAD、Worker versionと配備ログで確認する。
 
 ## 本番で記録された結果と受入待ち
@@ -33,7 +51,7 @@ gitのHEAD、Worker versionと配備ログで確認する。
 この結果は実機のベル、実人間回答、実マイクによる聞こえ方の成功を含まない。
 今回確認した本番Node4350の`GET /api/status`は`devices=[]`だった。
 初回試験の`voice/status`530は原因未特定のままであり、恒久解消とは記録しない。
-この配備版には後続の自動声交代、全文字幕とMP3、新版会話画面を含めていない。
+16:06の配備版には後続の自動声交代、全文字幕とMP3、新版会話画面を含めていない。
 
 | Issue | 残る受入 |
 | --- | --- |

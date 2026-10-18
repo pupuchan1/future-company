@@ -44,18 +44,20 @@ launchctl bootstrap "gui/$(id -u)" "$MEMORY/tmp/production-runtime.plist"
 ```
 
 この起動定義は`$MEMORY/tmp/production-runtime.mjs`を実行する。
-Nodeのソースは`$REPO/.local/worktrees/production-access`、状態保存先は`$REPO/.local/production-runtime/state`。
+16:36更新後のNodeソースは`$REPO/.local/deploy-6176125`、復帰元は`$REPO/.local/worktrees/production-access`の319ffc1。状態保存先は`$REPO/.local/production-runtime/state`。
+更新が並行するため、実際の起動ソースはruntimeの`checkout`と配備記録を開いて確認する。
 OpenAI設定は元checkoutの`.env`、Nodeトークンは`/Users/r74/.codex/worktrees/issue19-voice-demo/future-company/.env.local`、Accessは`$REPO/.local/access/future-company-20261018/shared.env`を読む。
 これらの私有ファイルの存在を確認し、内容を出力しない。
 
 起動後にruntimeが生成する`state.json`と`deployment/wrangler.local.jsonc`のoriginを照合する。
-`sourceCommit`欄は古い値のままなので、配備版の判定には`git rev-parse HEAD`とWorker versionを使う。
+`sourceCommit`欄は16:36に6176125へ更新された。配備版はWorker versionとソースを照合し、Git checkoutであれば`git rev-parse HEAD`も使う。
 標準出力は`$MEMORY/tmp/production-runtime.log`、標準エラーは`$MEMORY/tmp/production-runtime-error.log`。
 トンネル起動でoriginが変わった後は、必ず次のWorker更新まで行う。
 
 ## リポジトリからの再現起動
 
 Node24と依存、配備記録にある固定commitを用意する。
+起動する`node --version`が24系であることを確認する。配備ホストではnode@24というパスが実際にはv25.8.1を返したため、ディレクトリ名だけで版を判定しない。
 `deployment/env.example`を項目一覧として、既存の秘密値を安全な受渡しで私有envファイルに設定する。
 そのファイルには上の表のポート、絶対stateDir、Worker URL、OpenAIとMCP、relayと社員のトークン、Accessの2値を含める。
 既存のstateDirを空の新規ディレクトリへ置き換えない。
