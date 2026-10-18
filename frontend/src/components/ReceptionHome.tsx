@@ -7,7 +7,6 @@ type Props = { language: LiveLanguage };
 const copy = {
   ja: {
     eyebrow: "ミライの会社",
-    headline: ["AIの先に、", "人がいる。"],
     introduction: "AIが一次対応し、必要なときに人を呼ぶ。",
     photoAlt: "明るいオフィスで、仲間と試作品について話し合うチームのイメージ",
     photoCaption: "AIと人が連携する、ミライの会社。",
@@ -38,7 +37,6 @@ const copy = {
   },
   en: {
     eyebrow: "THE COMPANY OF TOMORROW",
-    headline: ["Beyond AI,", "there are people."],
     introduction: "The AI welcomes you. A person helps when you need one.",
     photoAlt: "An illustrative team discussing a prototype in a bright office",
     photoCaption: "A future where AI and people work together.",
@@ -74,7 +72,7 @@ export function ReceptionIntro({ language }: Props) {
   return (
     <div className="reception-intro haas-intro">
       <p className="eyebrow">{c.eyebrow}</p>
-      <h1>{c.headline[0]}<br /><span>{c.headline[1]}</span></h1>
+      <h1 lang="en"><span className="haas-headline-brand">HaaS</span><span className="haas-headline-concept">Human as<br />a Service.</span></h1>
       <p className="hero-description">{c.introduction}</p>
     </div>
   );
