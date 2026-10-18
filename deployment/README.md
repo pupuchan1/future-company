@@ -3,7 +3,8 @@
 既存の本人限定本番の配備版と接続先は[配備記録](../docs/demo-deployment.md)、起動、再起動と復帰は[本番運用手順](PRODUCTION.md)を参照する。
 起動スクリプトの既定値はNode4340/relay4330。本番はNode4350/relay4351を明示して使う。
 
-最新の一般公開入口は **Codex Sites**。pupuのビルド済み画面を `sites/export-site.mjs` で登録済みSitesのVinext checkoutへ反映する。`sites/proxy.mjs` はvisitor APIだけを既存Workerへ中継する。Sites側に `CF_ACCESS_CLIENT_ID` と `CF_ACCESS_CLIENT_SECRET` をsecretで設定し、全員が音声会話できるpublic audienceで公開する。これは既存Worker・Node・Slack認証の設定を置き換えない。r74techは下記の既存backend配置を担当する。
+公開本番の入口は`https://future-company-voice-node.r74.workers.dev`。同じCloudflare Workerがpupuの画面とContainersのNodeへ接続する。起動・配備・復帰は[本番運用手順](PRODUCTION.md)を参照する。
+Codex Sitesは予備入口。pupuのビルド済み画面を `sites/export-site.mjs` で既存Sitesへ反映し、`sites/proxy.mjs`がvisitor APIだけを既存Workerへ中継する。Sites側のAccess secret、既存Worker・Node・Slack認証を保持する。
 
 既存の Worker に React・DO・D1 を残し、Node 24 の音声・人間MCPを常駐プロセスで動かす。`server.mjs` の localhost guard はそのまま使う。Worker 側の既存 Access 本人限定設定と社員認証も変更しない。
 
