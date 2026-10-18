@@ -17,8 +17,15 @@
 
 runtimeの起動ソース、state.jsonとWrangler deployment一覧を開いて確認した。
 この更新で`sourceCommit`は6176125へ修正された。
-最新版の全受入成功とは扱わず、試験ごとの版と結果を[声交代と復帰の受入記録](../deployment/verification/2026-10-18-voice-acceptance.md)に残す。
-同受入記録は後続PR #109で追加する。
+最新版の全受入成功とは扱わず、試験ごとの版と結果を[後続PR #109の声交代と復帰の受入記録](https://github.com/pupuchan1/future-company/pull/109)に残す。
+
+## PR #28の画面を反映した配備
+
+16:44時点の配信は`1a928084-a992-416c-9c7b-3761dd3df3d1`で100%。
+ソースは[PR #110](https://github.com/pupuchan1/future-company/pull/110)の`73eb9ba4c8713e862068388845be432f67c63f62`。
+FEは#28の3e036ab、NodeとBEは6176125を組み合わせた版。
+Nodeとrelayのoriginは上表と同じ。
+本番Live開始403の診断と修正は[PR #113](https://github.com/pupuchan1/future-company/pull/113)で進める。
 
 ## 16:06の配備と復帰元
 
