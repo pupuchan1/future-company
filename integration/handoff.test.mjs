@@ -35,7 +35,7 @@ class FakeSocket extends EventEmitter {
   send(raw) {
     const event = JSON.parse(raw);
     this.sent.push(event);
-    if (event.type === 'session.close') queueMicrotask(() => this.receive({ type: 'session.closed' }));
+    if (event.type === 'session.close') queueMicrotask(() => this.receive({ type: 'session.closed', reason: 'close_requested' }));
   }
   close() {
     if (this.readyState === 3) return;
@@ -277,7 +277,7 @@ test('retired-session close events identify their transport and never delete a s
   await session.close();
   assert.equal(closed, 0);
   assert.deepEqual(emitted.find((event) => event.type === 'live.closed'), {
-    type: 'live.closed', case_id: 'shared-case', session_id: 'old-live',
+    type: 'live.closed', case_id: 'shared-case', session_id: 'old-live', reason: 'close_requested',
   });
 });
 

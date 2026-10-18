@@ -58,7 +58,11 @@ export class LiveConversation {
       this.remember({ type: 'provider_error', operation: 'live.sideband', id: this.id, ...connectionDiagnostic(error) });
       this.emit({ type: 'backend.error', case_id: this.caseId, session_id: this.id, message: 'Live sideband disconnected.' });
     });
-    this.ws.on('close', () => { if (!this.closed) void this.close(); });
+    this.ws.on('close', (code) => {
+      this.remember?.({ type: 'live_transport_closed', id: this.id, code,
+        expected: this.closed, finalized: this.finalized });
+      if (!this.closed) void this.close();
+    });
     this.expiry = setTimeout(() => void this.close(), 15 * 60 * 1000);
     this.expiry.unref?.();
   }
@@ -104,7 +108,10 @@ export class LiveConversation {
     if (event.type === 'session.closed') {
       this.finalized = true;
       this.resolveClose(true);
-      this.emit({ type: 'live.closed', case_id: this.caseId, session_id: this.id });
+      const reason = ['close_requested', 'expired', 'content', 'remote_hangup', 'connection_lost'].includes(event.reason)
+        ? event.reason : 'unknown';
+      this.remember?.({ type: 'live_finalized', id: this.id, reason, expected: this.closed });
+      this.emit({ type: 'live.closed', case_id: this.caseId, session_id: this.id, reason });
       if (!this.closed) void this.close();
       return;
     }
