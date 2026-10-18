@@ -125,7 +125,7 @@ export function createSlackHumanTransport({ botToken = '', userToken = '', chann
             `回答してほしい内容\n${record.expected_result || '質問への回答をお願いします。未確認であれば、その旨をお知らせください。'}`];
           const footer = 'このスレッドに「回答: 内容」で返信してください。AIが相談者へお伝えし、会話を続けます。英語は「answer: text」でも返信できます。';
           const blocks = [{ type: 'header', text: { type: 'plain_text', text: '採用担当への確認', emoji: false } },
-            { type: 'context', elements: [{ type: 'mrkdwn', text: '<!here> 採用担当の方、ご確認と返信をお願いします。' }] },
+            { type: 'context', elements: [{ type: 'plain_text', text: '採用担当の方、ご確認と返信をお願いします。', emoji: false }] },
             ...sections.map(text => ({ type: 'section', text: { type: 'plain_text', text: text.slice(0, 2900), emoji: false } })),
             { type: 'context', elements: [{ type: 'plain_text', text: `${footer}\n案件: ${record.case_id} / 相談: ${record.handoff_id}`, emoji: false }] }];
           const text = ['採用担当への確認', ...sections, footer].map(escapeText).join('\n').slice(0, 9000);
