@@ -30,7 +30,8 @@ test('HaaS uses an explicit stable origin and saved result without exchange stoc
   state = applyCommand(state, staff, { type: 'delivery', handoffId: 'handoff-1', status: 'live_submitted' }, now)
   expect(state.requests[0].delivery?.status).toBe('live_submitted')
   expect(state.ai.status).toBe('resume_pending')
-  expect(() => applyCommand(state, staff, { type: 'delivery', handoffId: 'handoff-1', status: 'queued' }, now)).toThrow('backwards')
+  expect(() => applyCommand(state, staff, { type: 'delivery', handoffId: 'handoff-1', status: 'queued' }, now)).toThrow('consumer')
+  expect(() => applyCommand(state, staff, { type: 'delivery', handoffId: 'handoff-1', status: 'failed' }, now)).toThrow('overwritten')
 })
 
 test('visitor cannot register a server handoff; cancelled requests cannot be claimed or delivered', () => {
