@@ -143,6 +143,44 @@ Access認証済みブラウザから案件作成201、面談送信200、社員�
 
 統合ブランチではPR #4の `integration/` と本PRのWorkerを同じcheckoutへ取り込んでいます。ルートの `npm run dev` はNode 4320・Worker 8787・React 5173を起動し、Reactのproxyが音声/status/SSEと案件APIの経路を分けます。ローカルD1は `npm run db:migrate:local` で初期化します。
 
-画面の入口は共通音声受付の一つのみです。FE側では用件を推測せず、Node側のDecisions/委譲結果から担当・処理・人間への依頼を表示します。Node case/handoffとWorker case/requestのID対応および認証付きの結果返却adapterは、このコード取り込みだけでは完成していません。
+画面の入口は共通音声受付の一つのみです。FE側では用件を推測せず、Node側のDecisions/委譲結果から担当・処理・人間への依頼を表示します。以下の追加統合で、Node case/handoffとWorker case/requestのID対応および認証付きの結果返却adapterを接続しました。
 
 起動確認ではReact origin経由の `/api/status`、`/api/v1/company`、案件作成201とowner cookieによる再取得200を確認しました。異なるOriginの音声APIは403を維持します。キー未設定の音声開始は無効で、模擬発話を表示しません。
+
+
+### BEレビュー追加統合（2026-10-18、Issue #52 / #53）
+
+PR #44のWorker bridge・Node ingress・保存済み回答キャッシュ（上流35c79afまで）、PR #4のネットワーク再試行・切断診断（e9d8f7aまで）、PR #39のHaaS skill選択・無関係な回答除外・配送前再試行・取消確認・回答なし完了通知を取り込みました。案件proofとowner cookieを検証し、回答revision・言語・simulatedを保持して元Agentsへ渡し、Liveへ返す経路を接続しています。
+
+統合時の予約応答紛失の回復不具合は32ea05bで修正しました。同じWorkerBridgeはcase/handoff単位で予約IDを保持し、別Nodeは別UUIDを使います。DO保存後にHTTP応答を失う試験でも、同じIDで再同期して1回だけ配信できます。Agent呼出し後の曖昧な失敗は自動再配信しません。
+
+relay（605aad4）とdemo gateway（b53f62f）の成果物もdeploymentへ取り込みました。配信コードの準備であり、この統合作業では公開デプロイ・トンネル起動・Access変更を行っていません。設定と手順はdocs/worker-result-bridge.md、deployment/README.mdを参照してください。
+
+統合検証時点のNode integration 74件、Worker 77件（Node 46 + Bun 31）、relay/gateway 20件、計171件が成功。実Worker・DO・D1のbridge試験は9件で、2つのNodeの配信排他と予約保存後の応答紛失を含みます。型検査、Worker/Reactビルド、deploymentの型検査・bundleも成功しました。外部AI/MCPは試験用の代替接続です。
+
+ローカル再起動後はlive_configured / mcp_configured / worker_bridge_configuredがすべてfalseです。設定なしでは接続準備中として表示します。実音声・実人間回答・電話・公開環境の一連動作は未確認です。GPT Live 1.1の正式model IDも未確定のため推測で変更していません。過去の試験環境・別担当による実機記録は、その確認範囲のまま扱います。
+
+
+### 最新差分の吸い上げ（Issue #60、2026-10-18）
+
+#39はbda188d、#44は2c31b84、#4はe9d8f7aまで比較しました。#44の新規mergeは既に取り込み済みの共通FEとの競合解消で、画面やオーブを巻き戻す更新はありません。環境読込のd013d0cは既存a1769faの包含範囲のため、引用符付きキー対応を維持します。
+
+新規の36f6171 / f196215 / 09f6225を取り込み、デモのフォーム認証・8時間のHttpOnly/Secure/SameSite=Strict cookie・cookieによるWebSocket認証・同一originのフォーム送信を接続しました。固定の試験Workerへ接続する場合だけ、サーバー設定のAccess認証を付加し、ブラウザ由来の認証ヘッダーやAccess cookieを引き継ぎません。gatewayはコード・試験を適用したもので、この環境で新しい公開入口を起動したものではありません。
+
+WorkerBridgeも#39の最新キャッシュ・Access境界へ合わせ、正規の保存済み回答が古い端末通知で上書きされないようにしました。Access認証は設定したHTTPSのWorkerだけへ送信し、HTTP/WSのredirectは拒否します。Node側の既存APIとの互換メソッドを保ち、#53の修正と同じくhandoffごとの予約IDを再利用します。応答紛失後の実Worker再試行の回帰試験も保持しています。開発用5173では `/api/worker/results` を既存Nodeの同一origin guardへproxyします。
+
+#39の2f9db2eには、別担当による合成音声・実Live/Agents・模擬人間回答のブラウザ往復成功記録と、その後の採用切替でのcontext_injection_incompleteが報告されています。これは別環境の記録で、こちらのローカル実測ではありません。正式な本番Workerにはhaas/bridge-token/voiceが未反映との報告もあり、公開配置は#33で継続確認が必要です。現在のローカルstatusのlive_configured / mcp_configured / worker_bridge_configuredはfalseです。秘密設定は読み出し・変更せず、公開デプロイやAccess設定変更は行っていません。
+
+
+追加でcfc694d / 1433bb3の遅延ACK・取消/終了済み案件のSSE抑制・閉じたSSEの安全な終了・CF_ACCESS認証変数の互換名を反映しました。既存の日本語/English切替と、回答なし完了通知の処理は保っています。今回の変更に対応する検証は計75件成功（gateway 16、proxy 13、bridge 14、Node ingress 9、orchestration 14、実Worker/DO/D1 bridge 9）。FE/Worker型検査とFEビルドも成功。ローカル再起動後のstatus 200、同一originの結果再同期503（未設定）、別originの再同期403を確認しています。設定なしを接続成功とは扱いません。
+
+
+### 最新統合（Issue #92 / #96、2026-10-18）
+
+#72の案件限定voice APIとSSE/WebSocket transport、#39の自動声交代・自然な案内・全文字幕/ローカルMP3記録、#81相当の新発話まで重複業務を抑止する処理を取り込みました。#76の会話開始時の画面遷移は、現在の同一hookを保つ#conversation表示へ統合しています。既存の日本語/English設定と、人間回答の正規キャッシュ・配信予約の回復は維持します。
+
+Orbはユーザー指示で#87/d2f208bの描画・内部変形・応答待ち状態を優先しました。描画ファイル群の元PR一致を確認後、配色と会話画面callbackの最終調整はOrb担当が別途進めています。ページ側の左Orb/右ボタン配置と現在のブランド・コピーは巻き戻していません。#62の元ブランド資産とhardware用ディレクトリーも取り込み済みです。
+
+今回の関連検証はFE89、Node integration86、relay/gateway29、実Worker/DO/D1 bridge/proof13の計217件成功。FE/Worker/配置用TypeScriptとFEビルドが成功し、AudioWorklet/MP3 Workerも生成されます。模擬回答のsimulatedを保ったまま自然な文章へ変わった上流変更に合わせ、旧文言を要求していたsimulator試験を更新しています。
+
+ローカルWorkerの起動が配信用ビルド設定へ誘導される問題を、wrangler.local.jsoncの明示指定で修正しました。保存先は既存の.wrangler/stateを維持します。relayの秘密設定がないときもUI/Worker/Nodeは起動しますが、認可を省略した音声接続は行いません。再起動後、5173のstatusとWorker company APIは200。live_configured/mcp_configured/worker_bridge_configuredはfalseのため、この環境の実AI音声・実機確認とは扱いません。秘密設定・公開先・Access権限には変更を加えていません。
