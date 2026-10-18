@@ -34,10 +34,21 @@ export function Preview() {
       const context = new AudioContext()
       const input = context.createGain(); const output = context.createGain()
       const inputStream = context.createMediaStreamDestination(); const outputStream = context.createMediaStreamDestination()
-      input.connect(inputStream); output.connect(outputStream)
+      const inputEnvelope = context.createGain(); const outputEnvelope = context.createGain()
+      input.connect(inputEnvelope); inputEnvelope.connect(inputStream)
+      output.connect(outputEnvelope); outputEnvelope.connect(outputStream)
+      // Real PCM with syllable-like level changes, rather than a constant-volume demo.
+      const modulation = [context.createOscillator(), context.createOscillator()]
+      modulation[0].frequency.value = 2; modulation[1].frequency.value = 1.4
+      for (let i = 0; i < modulation.length; i++) {
+        const depth = context.createGain(); depth.gain.value = .4
+        const envelope = i === 0 ? inputEnvelope : outputEnvelope
+        envelope.gain.value = .6
+        modulation[i].connect(depth); depth.connect(envelope.gain)
+      }
       const sources = [context.createOscillator(), context.createOscillator()]
       sources[0].frequency.value = 220; sources[1].frequency.value = 330
-      sources[0].connect(input); sources[1].connect(output); sources.forEach(source => source.start())
+      sources[0].connect(input); sources[1].connect(output); sources.push(...modulation); sources.forEach(source => source.start())
       const monitor = createAudioMeter(() => {}, () => context, activity => {
         store.publish({ ...activity, output: graph.current?.audible ? activity.output : SILENT_SIGNAL })
       })!

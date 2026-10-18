@@ -1,0 +1,5 @@
+wrangler.local.jsonc
+.env.local
+.dev.vars
+.work/
+server-only.env

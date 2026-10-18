@@ -1,4 +1,6 @@
 export type LiveLanguage = 'ja' | 'en'
+export type LiveLanguagePreference = 'auto' | LiveLanguage
+export const LANGUAGE_CHANGE_ERROR = '会話の言語を変更できませんでした。 / Could not change the conversation language.'
 export type LiveRoute = 'reception' | 'recruiting' | 'haas'
 export type LivePhase = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'switching' | 'stopping' | 'ended' | 'error'
 export type LiveSpeaking = 'user' | 'assistant' | 'both' | 'silent'

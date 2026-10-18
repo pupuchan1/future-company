@@ -1,8 +1,8 @@
 import { measureSignal, SILENT_SIGNAL, VoiceActivityStore } from '../voice/activity.ts'
 import type { AudioSignal, VoiceActivity } from '../voice/activity.ts'
 import { LiveEventReducer, putRequest, readHumanRequest } from './events.ts'
-import { initialSnapshot, object } from './types.ts'
-import type { JsonObject, LiveLanguage, LiveRoute, LiveSnapshot, LiveSpeaking } from './types.ts'
+import { initialSnapshot, LANGUAGE_CHANGE_ERROR, object } from './types.ts'
+import type { JsonObject, LiveLanguage, LiveLanguagePreference, LiveRoute, LiveSnapshot, LiveSpeaking } from './types.ts'
 
 export interface LiveAudioLevels { inputLevel: number; outputLevel: number }
 export interface LiveAudioMeter {
@@ -195,6 +195,11 @@ export class LiveClient {
   private observing = false
   private disposed = false
   private closing: Promise<void> | null = null
+  private desiredLanguage: { language: LiveLanguage; preference: LiveLanguagePreference } | null = null
+  private appliedLanguage = ''
+  private languageUpdate: Promise<void> | null = null
+  private languageConnection: Connection | null = null
+  private languageGeneration = 0
 
   constructor(caseId: string, language: LiveLanguage, runtime = browserRuntime()) {
     this.state = initialSnapshot(caseId, language)
@@ -414,7 +419,7 @@ export class LiveClient {
     return sdp
   }
 
-  async start(language = this.state.language, route: LiveRoute = 'reception', bridgeToken?: string) {
+  async start(language = this.state.language, route: LiveRoute = 'reception', bridgeToken?: string, preference: LiveLanguagePreference = 'auto') {
     if (this.disposed || this.connection || this.closing) return
     if (!this.state.configured || !this.state.mcpConfigured) {
       this.patch({ error: '音声サーバーの設定・接続を確認してください。 / Check voice server configuration.' })
@@ -440,7 +445,8 @@ export class LiveClient {
       const sdp = await this.offer(connection)
       if (!sdp || this.connection !== connection) return
       // Do not abort this request on Stop: a late response still needs DELETE.
-      const created = await this.api('/api/live/session', { method: 'POST', body: JSON.stringify({ sdp, language, case_id: this.state.caseId, ...(bridgeToken ? { bridge_token: bridgeToken } : {}), ...(route === 'reception' ? {} : { route }) }) })
+      this.appliedLanguage = `${language}:${preference}`
+      const created = await this.api('/api/live/session', { method: 'POST', body: JSON.stringify({ sdp, language, case_id: this.state.caseId, ...(preference === 'auto' ? {} : { language_preference: preference }), ...(bridgeToken ? { bridge_token: bridgeToken } : {}), ...(route === 'reception' ? {} : { route }) }) })
       const id = object(created.session).id ?? created.session_id
       if (typeof id === 'string') connection.sessionId = id
       if (this.connection !== connection) { await this.finalize(connection); return }
@@ -576,6 +582,32 @@ export class LiveClient {
       if (previous.audio) previous.audio.autoplay = true
       await this.playAudio()
     }
+  }
+
+  setLanguage(language: LiveLanguage, preference: LiveLanguagePreference = 'auto'): Promise<void> {
+    this.desiredLanguage = { language, preference }
+    const connection = this.connection
+    if (this.languageUpdate && this.languageConnection === connection) return this.languageUpdate
+    if (!connection?.sessionId || this.state.phase !== 'connected' || this.voiceSwitch || this.disposed) return Promise.resolve()
+    this.languageConnection = connection
+    const generation = ++this.languageGeneration
+    this.languageUpdate = (async () => {
+      while (this.connection === connection && !this.disposed && this.state.phase === 'connected' && !this.voiceSwitch) {
+        const desired = this.desiredLanguage!
+        const key = `${desired.language}:${desired.preference}`
+        if (key === this.appliedLanguage) break
+        const result = await this.api(`/api/live/session/${encodeURIComponent(connection.sessionId!)}/language`, {
+          method: 'POST', body: JSON.stringify({ case_id: this.state.caseId, language: desired.language, language_preference: desired.preference }),
+        })
+        if (this.connection !== connection || this.disposed) return
+        if (result.case_id !== this.state.caseId || result.language !== desired.language || result.language_preference !== desired.preference) throw new Error('Invalid language response')
+        this.appliedLanguage = key
+        this.patch({ language: desired.language, ...(this.state.error === LANGUAGE_CHANGE_ERROR ? { error: '' } : {}) })
+      }
+    })().catch(() => {
+      if (this.connection === connection && !this.disposed) this.patch({ error: LANGUAGE_CHANGE_ERROR })
+    }).finally(() => { if (generation === this.languageGeneration) this.languageUpdate = null })
+    return this.languageUpdate
   }
 
   private waitForIce(connection: Connection) {

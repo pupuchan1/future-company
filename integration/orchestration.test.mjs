@@ -70,6 +70,30 @@ function liveFixture(backend = {}) {
   return { conversation, emitted, sent };
 }
 
+test('explicit language survives automatic routing; Auto restores speech detection without clearing history', async () => {
+  const { conversation, emitted, sent } = liveFixture();
+  const originalHistory = conversation.history;
+  conversation.setLanguage('en', 'en');
+  conversation.updateRouting({ route: 'haas', language: 'ja' }, 'decisions');
+  assert.deepEqual(conversation.routing, { route: 'haas', language: 'en' });
+  assert.match(sent[0].content, /explicitly selected English/);
+  assert.equal(emitted.at(-1).language, 'en');
+  conversation.setLanguage('ja', 'auto');
+  conversation.updateRouting({ route: 'recruiting', language: 'en' }, 'decisions');
+  assert.deepEqual(conversation.routing, { route: 'recruiting', language: 'en' });
+  assert.equal(conversation.history, originalHistory);
+});
+
+test('selected English is used for backend work and the no-transcript fallback', async () => {
+  let received;
+  const { conversation, sent } = liveFixture({ async run(input) { received = input; return 'English response'; } });
+  conversation.setLanguage('en', 'en');
+  await conversation.enqueue(null, 'human_event', '\nOriginal Japanese answer: 確認できました');
+  assert.equal(received.language, 'en');
+  await conversation.enqueue(null, 'delegation');
+  assert.match(sent.at(-1).content, /I have not received your transcript/);
+});
+
 test('closeCase captures a delayed created Agents session, cancels it, and deletes it', async () => {
   const pending = deferred();
   const calls = [];

@@ -57,7 +57,13 @@ test('HTTP MCP tools and Events discovery use the SDK; auth covers both', async 
   assert.deepEqual(discover.body.result.capabilities.events, {});
   assert.ok(discover.body.result.supportedVersions.includes('2026-07-28'));
   const tools = await rpc(base, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, 'test-token');
-  assert.deepEqual(tools.body.result.tools.map((tool) => tool.name).sort(), ['cancel_human_request', 'get_human_request', 'get_interview_template', 'lookup_demo_order', 'request_human']);
+  assert.deepEqual(tools.body.result.tools.map((tool) => tool.name).sort(), ['cancel_human_request', 'find_human_experts', 'get_human_request', 'get_interview_template', 'lookup_demo_order', 'request_human']);
+  const experts = await rpc(base, { jsonrpc: '2.0', id: 8, method: 'tools/call', params: {
+    name: 'find_human_experts', arguments: { required_skills: ['hardware'] },
+  } }, 'test-token');
+  assert.equal(experts.body.result.structuredContent.candidates[0].name, 'GOROman');
+  assert.equal(experts.body.result.structuredContent.candidates[0].availability, 'unknown');
+  assert.equal(experts.body.result.structuredContent.dispatch.online, false);
   const handoff = await rpc(base, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'request_human', arguments: request } }, 'test-token');
   assert.equal(handoff.body.result.structuredContent.status, 'unavailable');
   assert.equal(handoff.body.result.structuredContent.unavailable_reason, 'device_offline');
