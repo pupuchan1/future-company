@@ -1,0 +1,9 @@
+HaaS office illustration
+
+Source: generated with the built-in image_gen tool for this project, 2026-10-18.
+The depicted office and people are illustrative. They are not represented as actual HaaS employees or premises.
+Distributed assets: /images/haas-office-960.jpg and /images/haas-office-1440.jpg.
+Both sizes represent the same single photograph.
+
+Generation prompt:
+Use case: photorealistic-natural. Create ONE realistic editorial photograph for the homepage of a small fictional Japanese technology company, HaaS, which builds collaboration between AI and people. Landscape 3:2 photograph, no UI, no writing, no logos, no text. A candid moment in a modest beautiful daylight office: three Japanese adult coworkers, mixed genders, in casual smart clothing, collaborating around one laptop and a small physical electronic prototype on a light oak table. Natural relaxed body language, one person listening, another explaining while looking at the work, not posing at camera, hands anatomically realistic. A small black classic rotary phone is an unobtrusive detail at the edge of the desk. Glass windows, a few plants, neutral off-white walls, soft natural morning light. Documentary photography, tactile detail, natural skin, gently muted color, balanced contrast. Premium but believable small working studio, not a luxury corporate tower, not a staged stock handshake. Frame broadly to include the room and the working environment. Subjects centered safely for a wider crop, substantial workspace visible. No collage, no duplicate photos, no blue sci-fi robots, no branding or graphic overlays.
