@@ -284,3 +284,24 @@ test('candidate readiness timeout restores the old call and removes the candidat
     assert.equal(f.calls.filter(call => call.path.endsWith('/activate')).length, 0)
   } finally { await f.client.stop(); f.client.dispose() }
 })
+
+test('a transient status failure during an active call preserves negotiated switching capability', async () => {
+  const f = fixture(); await f.start()
+  const fetchApi = f.runtime.fetch
+  try {
+    f.runtime.fetch = async () => { throw new DOMException('signal timed out', 'TimeoutError') }
+    await f.client.refreshStatus()
+    assert.equal(f.client.getSnapshot().switchConfigured, true)
+    assert.equal(f.client.getSnapshot().configured, true)
+    assert.match(f.client.getSnapshot().error, /timed out/)
+    f.runtime.fetch = fetchApi
+    const switching = f.client.switchDepartment('haas')
+    await f.readyCandidate(); await switching
+    assert.equal(f.client.getSnapshot().voice, 'marin')
+    await f.client.refreshStatus()
+    assert.equal(f.client.getSnapshot().error, '')
+    f.runtime.fetch = async () => Response.json({ detail: 'Case access denied' }, { status: 403 })
+    await f.client.refreshStatus()
+    assert.equal(f.client.getSnapshot().switchConfigured, false)
+  } finally { f.runtime.fetch = fetchApi; await f.client.stop(); f.client.dispose() }
+})
