@@ -61,6 +61,21 @@ relayの公開pathは `/relay/voice/*`（HMAC）、`/mcp`（Bearer）、`/bridge
 
 ## Workerの配置
 
+### 音声NodeのCloudflare Containers配置
+
+`deployment/cloud/wrangler.jsonc`は同じR74アカウントの`future-company-voice-node`へNode24を配置する。`production`という固定コンテナへ全案件を送り、既存relayのHMAC署名とMCP/bridgeのBearer認証を維持する。Node内部APIはloopbackのみ、認証付きrelayだけをコンテナの4351番ポートへ公開する。Dockerイメージへ秘密設定をコピーしない。
+
+```sh
+npx wrangler deploy --config deployment/cloud/wrangler.jsonc
+npx wrangler secret bulk /private/path/cloud-node-secrets.json --config deployment/cloud/wrangler.jsonc
+```
+
+secretファイルには既存の`OPENAI_API_KEY`、`STAFF_API_TOKEN`、`NODE_RELAY_SECRET`、`HUMAN_MCP_TOKEN`、`CF_ACCESS_CLIENT_ID`、`CF_ACCESS_CLIENT_SECRET`、`SLACK_BOT_TOKEN`をサーバー専用で渡す。返信取得用の`SLACK_USER_TOKEN`がある場合だけ追加する。ファイルはGit管理外の0700ディレクトリへ0600で置く。
+
+クラウドの`/health`と署名付きstatus、所有者のvoice/statusで`prewarm_configured`・Slack設定を確認した後、既存Workerの`NODE_RELAY_ORIGIN`を`https://future-company-voice-node.r74.workers.dev`へ変更する。Mac版は切替確認後に停止する。既存D1・CaseRoom・Access・サーバーsecretは維持する。
+
+30分の無通信でコンテナは停止し、次の要求で起動する。再起動時は進行中の通話・Slack thread対応・ローカルMCP Eventsの状態を復元しない。案件の正本は既存D1に保存する。稼働中の通話を保ったままコンテナの版を切り替えない。
+
 ### 採用のSlack通知・人間回答
 
 r74techがNodeの私有環境に `SLACK_CHANNEL_ID=C0CA6A7F4E5` と `SLACK_BOT_TOKEN` を設定する。内部用Appに `chat:write`・`channels:history` を許可し、#aiに参加させる。取得した値をWorkerの公開変数やブラウザーへ渡さない。[設定と返信形式](../integration/human/SLACK.md)を参照。採用の人間確認はこのSlack経路を使う。
