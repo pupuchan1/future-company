@@ -1,26 +1,11 @@
 .voice-orb-stage{display:grid;justify-items:center;gap:8px;padding:16px 0 20px;min-width:0;color:#111}
 .voice-orb-art{position:relative;width:clamp(170px,19vw,220px);aspect-ratio:1;isolation:isolate}
-.voice-orb-art svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;fill:none;pointer-events:none}
-.voice-orb-core{position:absolute;inset:23%;border-radius:50%!important;clip-path:circle(50%);overflow:hidden;background:radial-gradient(circle at 28% 25%,#fff 0%,#eaf0ff 16%,#1447e6 70%);box-shadow:0 0 28px #1447e61a;animation:voice-orb-breathe 5s ease-in-out infinite;transform:scale(calc(1 + var(--orb-output,0)*.09))}
-.voice-orb-core i,.voice-orb-core b,.voice-orb-core>span{position:absolute;inset:12%;border-radius:40% 60% 55% 45%;background:#fff;filter:blur(10px);opacity:.8;animation:voice-orb-flow 7s ease-in-out infinite alternate}
-.voice-orb-core b{inset:30% 5% 3% 30%;background:#1447e6;animation-direction:alternate-reverse;animation-duration:9s}
-.voice-orb-core>span{inset:4% 35% 42% 5%;animation-duration:5s}
-.voice-orb-orbit{stroke:#1447e6;stroke-opacity:.1;stroke-width:1}
-.voice-orb-user-wave{stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round;opacity:0;transition:opacity .12s ease;filter:drop-shadow(0 0 4px #1447e64d)}
-.voice-orb-art[data-input=true] .voice-orb-user-wave{opacity:1}
-.voice-orb-user-static{display:none;stroke:#1447e6;stroke-width:3;opacity:0}
-.voice-orb-output-rings{opacity:0;transition:opacity .12s ease}
-.voice-orb-output-rings circle{transform-origin:128px 128px;stroke:#1447e6;stroke-width:1.8;stroke-dasharray:3 5;animation:voice-orb-ripple 1.8s linear infinite;animation-play-state:paused}
-.voice-orb-art[data-output=true] .voice-orb-output-rings{opacity:1}
-.voice-orb-art[data-output=true] .voice-orb-output-rings circle{animation-play-state:running}
-.voice-orb-art[data-output=true] .voice-orb-core{box-shadow:0 0 calc(22px + var(--orb-output)*24px) #1447e64d}
+.voice-orb-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.voice-orb-fallback{position:absolute;inset:23%;border-radius:50%!important;clip-path:circle(50%);background:radial-gradient(circle at 32% 26%,#fff 0%,#d9e7ff 35%,#3865e8 75%,#1447e6 100%)}
+.voice-orb-art:has(.voice-orb-canvas[data-ready=true]) .voice-orb-fallback{visibility:hidden}
 .voice-orb-status{font-size:.875rem;font-weight:600;line-height:1.6;margin:0;text-align:center;min-height:1.6em}
-.voice-orb-dock{position:fixed;z-index:40;right:24px;bottom:max(20px,env(safe-area-inset-bottom));display:grid;place-items:center;width:84px;height:84px;border:0;border-radius:50%!important;background:#fff;color:#111;padding:0;box-shadow:0 4px 20px #1447e61a;cursor:pointer}
+.voice-orb-dock{position:fixed;z-index:40;right:24px;bottom:max(20px,env(safe-area-inset-bottom));display:grid;place-items:center;width:84px;height:84px;border:0;border-radius:50%!important;background:#fff;color:#111;padding:0;box-shadow:0 4px 20px #11111112;cursor:pointer}
 .voice-orb-dock[hidden]{display:none}
 .voice-orb-dock:focus-visible{outline:2px solid #1447e6;outline-offset:4px}
 .voice-orb-dock .voice-orb-art{width:84px}
-@keyframes voice-orb-breathe{0%,100%{scale:.98}50%{scale:1.03}}
-@keyframes voice-orb-flow{from{transform:translate(-7%,5%) rotate(0)}to{transform:translate(8%,-5%) rotate(100deg);border-radius:62% 38% 35% 65%}}
-@keyframes voice-orb-ripple{from{transform:scale(.9);opacity:calc(.4 + var(--orb-output,0)*.55)}to{transform:scale(1.28);opacity:0}}
 @media(max-width:600px){.voice-orb-art{width:188px}.voice-orb-dock{right:16px;width:72px;height:72px}.voice-orb-dock .voice-orb-art{width:72px}}
-@media(prefers-reduced-motion:reduce){.voice-orb-core,.voice-orb-core i,.voice-orb-core b,.voice-orb-core>span,.voice-orb-output-rings circle{animation:none!important}.voice-orb-user-wave{display:none}.voice-orb-user-static{display:block}.voice-orb-art[data-input=true] .voice-orb-user-static{opacity:1}.voice-orb-output-rings circle{transform:scale(1.1);opacity:.8}.voice-orb-output-rings circle:not(:first-child){display:none}.voice-orb-user-wave,.voice-orb-output-rings{transition:none}}

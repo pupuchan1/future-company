@@ -1,7 +1,7 @@
-import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
-import type { CSSProperties } from 'react'
-import { radialWavePath, SILENT_SIGNAL, VoiceActivityStore } from './activity.ts'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { SILENT_SIGNAL, VoiceActivityStore } from './activity.ts'
 import type { AudioSignal, VoiceActivitySource } from './activity.ts'
+import { animateOrb } from './orb-renderer.ts'
 import './voice-orb.css'
 
 const idleSource = new VoiceActivityStore()
@@ -15,17 +15,15 @@ export interface VoiceOrbProps {
 }
 
 function OrbArt({ input, output }: { input: AudioSignal; output: AudioSignal }) {
-  const id = useId().replaceAll(':', '')
-  const style = { '--orb-output': output.level, '--orb-input': input.level } as CSSProperties
-  return <div className="voice-orb-art" style={style} data-input={input.active} data-output={output.active} aria-hidden="true">
-    <div className="voice-orb-core"><i /><b /><span /></div>
-    <svg viewBox="0 0 256 256" focusable="false">
-      <defs><linearGradient id={`voice-wave-${id}`} x1="0" y1="0" x2="1" y2="1"><stop stopColor="#1447e6" /><stop offset="1" stopColor="#1447e6" stopOpacity=".4" /></linearGradient></defs>
-      <circle className="voice-orb-orbit" cx="128" cy="128" r="88" />
-      <path className="voice-orb-user-wave" d={radialWavePath(input.waveform, input.level)} stroke={`url(#voice-wave-${id})`} />
-      <circle className="voice-orb-user-static" cx="128" cy="128" r="91" />
-      <g className="voice-orb-output-rings">{[0, 1, 2].map(index => <circle key={index} cx="128" cy="128" r="96" style={{ animationDelay: `${index * -0.6}s` }} />)}</g>
-    </svg>
+  const canvas = useRef<HTMLCanvasElement>(null)
+  const signals = useRef({ input, output })
+  useEffect(() => { signals.current = { input, output } }, [input, output])
+  useEffect(() => {
+    if (canvas.current) return animateOrb(canvas.current, () => signals.current)
+  }, [])
+  return <div className="voice-orb-art" data-input={input.active} data-output={output.active} aria-hidden="true">
+    <div className="voice-orb-fallback" />
+    <canvas ref={canvas} className="voice-orb-canvas" />
   </div>
 }
 

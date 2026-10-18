@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { measureSignal, radialWavePath, SILENT_ACTIVITY, SILENT_SIGNAL, VoiceActivityStore } from '../src/features/voice/activity.ts'
+import { measureSignal, SILENT_ACTIVITY, SILENT_SIGNAL, VoiceActivityStore } from '../src/features/voice/activity.ts'
 import { createAudioMeter } from '../src/features/live/client.ts'
 
 const samples = (amplitude: number) => Float32Array.from({ length: 1024 }, (_, index) => amplitude * Math.sin(index * Math.PI / 16))
@@ -11,8 +11,6 @@ test('silence and noise stay quiet; actual PCM controls level and waveform geome
   const quiet = measureSignal(samples(0.03)); const loud = measureSignal(samples(0.2))
   assert.ok(quiet.active && loud.active && loud.level > quiet.level)
   assert.ok(loud.waveform.some(value => value > 0) && loud.waveform.some(value => value < 0))
-  assert.notEqual(radialWavePath(quiet.waveform, quiet.level), radialWavePath(loud.waveform, loud.level))
-  assert.equal(radialWavePath([NaN, Infinity], NaN).includes('NaN'), false)
   let release = loud
   for (let i = 0; i < 12; i++) release = measureSignal(samples(0), release)
   assert.equal(release, SILENT_SIGNAL)

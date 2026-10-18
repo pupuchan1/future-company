@@ -3,6 +3,8 @@ import type { AudioSignal, VoiceActivity } from '../voice/activity.ts'
 import { LiveEventReducer, putRequest, readHumanRequest } from './events.ts'
 import { initialSnapshot, object } from './types.ts'
 import type { JsonObject, LiveLanguage, LiveRoute, LiveSnapshot, LiveSpeaking } from './types.ts'
+import { createEventTransport } from './event-transport.ts'
+import type { LiveEventTransport } from './event-transport.ts'
 
 export interface LiveAudioLevels { inputLevel: number; outputLevel: number }
 export interface LiveAudioMeter {
@@ -125,7 +127,7 @@ export interface LiveRuntime {
   fetch: typeof fetch
   microphone: () => Promise<MediaStream>
   peer: () => RTCPeerConnection
-  events: (url?: string) => EventSource
+  events: (url?: string) => LiveEventTransport
   audio: () => HTMLAudioElement
   supported: () => boolean
   /** Optional so existing transports and non-Web-Audio runtimes still work. */
@@ -185,7 +187,7 @@ const browserRuntime = (): LiveRuntime => ({
   fetch: (...args) => fetch(...args),
   microphone: () => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false }),
   peer: () => new RTCPeerConnection(),
-  events: (url = '/api/events') => new EventSource(url),
+  events: (url = '/api/events') => createEventTransport(url),
   audio: () => { const audio = new Audio(); audio.autoplay = true; return audio },
   supported: () => window.isSecureContext && typeof navigator.mediaDevices?.getUserMedia === 'function' && typeof window.RTCPeerConnection === 'function',
   metering: (onLevels, onActivity) => createAudioMeter(onLevels, browserAudioContext, onActivity),
@@ -200,7 +202,7 @@ export class LiveClient {
   private reducer = new LiveEventReducer()
   private connection: Connection | null = null
   private voiceSwitch: VoiceSwitch | null = null
-  private source: EventSource | null = null
+  private source: LiveEventTransport | null = null
   private poll?: ReturnType<typeof setInterval>
   private reconnectTimer?: ReturnType<typeof setTimeout>
   private statusBusy = false

@@ -7,12 +7,17 @@ import type { LiveAudioMeter } from '../live/client.ts'
 import { SILENT_SIGNAL } from './activity.ts'
 import '../../styles/global.css'
 
-type Mode = 'input' | 'output' | 'both' | 'silence' | 'muted' | 'blocked' | 'stopped'
+type Mode = 'microphone' | 'input' | 'output' | 'both' | 'silence' | 'muted' | 'blocked' | 'stopped'
 export function Preview() {
   const [store] = useState(() => new VoiceActivityStore())
+  const [volume, setVolume] = useState(.14)
+  const [error, setError] = useState('')
+  const request = useRef(0)
   const [mode, setMode] = useState<Mode>('stopped')
-  const graph = useRef<{ monitor: LiveAudioMeter; input: GainNode; output: GainNode; sources: OscillatorNode[]; tracks: MediaStreamTrack[]; microphone: MediaStreamTrack; audible: boolean } | null>(null)
+  const graph = useRef<{ monitor: LiveAudioMeter; input: GainNode; output: GainNode; sources: OscillatorNode[]; tracks: MediaStreamTrack[]; microphone: MediaStreamTrack; testInput: MediaStream; capture?: MediaStream; audible: boolean } | null>(null)
   const stop = useCallback(() => {
+    request.current++
+    graph.current?.capture?.getTracks().forEach(track => track.stop())
     graph.current?.monitor.dispose()
     store.reset()
     graph.current?.sources.forEach(source => source.stop())
@@ -20,7 +25,9 @@ export function Preview() {
     graph.current = null
   }, [store])
   useEffect(() => { window.addEventListener('pagehide', stop); return () => { window.removeEventListener('pagehide', stop); stop() } }, [stop])
-  function change(next: Mode) {
+  async function change(next: Mode) {
+    const operation = ++request.current
+    setError('')
     setMode(next)
     if (next === 'stopped') { stop(); return }
     if (!graph.current) {
@@ -34,23 +41,45 @@ export function Preview() {
       const monitor = createAudioMeter(() => {}, () => context, activity => {
         store.publish({ ...activity, output: graph.current?.audible ? activity.output : SILENT_SIGNAL })
       })!
-      const current = { monitor, input, output, sources, tracks: [...inputStream.stream.getTracks(), ...outputStream.stream.getTracks()], microphone: inputStream.stream.getAudioTracks()[0], audible: false }
+      const current = { monitor, input, output, sources, tracks: [...inputStream.stream.getTracks(), ...outputStream.stream.getTracks()], microphone: inputStream.stream.getAudioTracks()[0], testInput: inputStream.stream, audible: false }
       graph.current = current
       monitor.setInput(inputStream.stream)
       monitor.setOutput(outputStream.stream)
       // Neither source connects to speakers: this development fixture is silent.
     }
     const current = graph.current
-    current.input.gain.value = ['input', 'both', 'muted', 'blocked'].includes(next) ? 0.14 : 0
-    current.output.gain.value = ['output', 'both', 'muted', 'blocked'].includes(next) ? 0.14 : 0
+    current.capture?.getTracks().forEach(track => track.stop())
+    current.capture = undefined
+    current.monitor.setInput(current.testInput)
+    current.input.gain.value = ['input', 'both', 'muted', 'blocked'].includes(next) ? volume : 0
+    current.output.gain.value = ['output', 'both', 'muted', 'blocked'].includes(next) ? volume : 0
     current.audible = next !== 'blocked'
     current.microphone.enabled = next !== 'muted'
+    if (next === 'microphone') {
+      try {
+        const capture = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false })
+        if (request.current !== operation || graph.current !== current) { capture.getTracks().forEach(track => track.stop()); return }
+        current.capture = capture
+        current.monitor.setInput(capture)
+      } catch {
+        if (request.current === operation) { setError('マイクを利用できませんでした。ブラウザのマイク許可を確認してください。'); setMode('silence') }
+      }
+    }
   }
-  const names: [Mode, string][] = [['input', 'ユーザー入力'], ['output', 'AI出力'], ['both', '同時発話'], ['silence', '無音'], ['muted', 'マイクOFF・AI出力'], ['blocked', 'AI再生ブロック'], ['stopped', '終了']]
+  const names: [Mode, string][] = [['microphone', '自分のマイクで試す'], ['input', 'ユーザー入力'], ['output', 'AI出力'], ['both', '同時発話'], ['silence', '無音'], ['muted', 'マイクOFF・AI出力'], ['blocked', 'AI再生ブロック'], ['stopped', '終了']]
   return <main className="page-width" style={{ paddingTop: 36, paddingBottom: 80 }}>
     <p className="eyebrow">VOICE EFFECTS / DEVELOPMENT TEST</p><h1 style={{ fontSize: '2rem' }}>音声の入力と出力を、見分ける。</h1>
-    <p>合成した音声信号を実際の解析処理へ渡す表示テストです。マイク・AI APIは使用せず、スピーカーからも音を出しません。AIの再生可否はこの画面で模擬します。</p>
-    <div className="row" style={{ flexWrap: 'wrap', marginTop: 24 }}>{names.map(([value, label]) => <button className={`button ${mode === value ? 'primary' : 'secondary'}`} key={value} aria-pressed={mode === value} onClick={() => change(value)}>{label}</button>)}</div>
+    <p>マイクまたは合成音声の実音量でオーブが変化します。音声は端末内で解析し、AIへの送信・録音の保存・スピーカー再生は行いません。</p>
+    <div className="row" style={{ flexWrap: 'wrap', marginTop: 24 }}>{names.map(([value, label]) => <button className={`button ${mode === value ? 'primary' : 'secondary'}`} key={value} aria-pressed={mode === value} onClick={() => void change(value)}>{label}</button>)}</div>
+    {mode !== 'microphone' && <label style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 24, maxWidth: 360 }}>テスト音量<input aria-label="テスト音量" type="range" min="0" max=".25" step=".005" value={volume} onChange={event => {
+      const value = Number(event.target.value)
+      setVolume(value)
+      if (graph.current) {
+        graph.current.input.gain.value = ['input', 'both', 'muted', 'blocked'].includes(mode) ? value : 0
+        graph.current.output.gain.value = ['output', 'both', 'muted', 'blocked'].includes(mode) ? value : 0
+      }
+    }} /></label>}
+    {error && <p role="alert">{error}</p>}
     <VoiceOrb activity={store} phase={mode === 'stopped' ? 'ended' : 'connected'} muted={mode === 'muted'} playbackBlocked={mode === 'blocked'} />
     <section style={{ minHeight: 700, paddingTop: 80 }}><h2>スクロールして常駐表示を確認</h2><p>大きなオーブが画面外になると、右下に同じ入出力の状態が残ります。右下の受付を押すと元の位置へ戻ります。</p></section>
   </main>

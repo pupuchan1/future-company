@@ -56,18 +56,3 @@ export function measureSignal(samples: Float32Array, previous: AudioSignal = SIL
   })
   return { level, active: true, waveform }
 }
-
-export function radialWavePath(waveform: readonly number[], level: number, radius = 91): string {
-  const strength = Math.max(0, Math.min(1, Number.isFinite(level) ? level : 0))
-  const points = Array.from({ length: 128 }, (_, index) => {
-    const phase = index / 128
-    const position = phase * waveform.length
-    const a = waveform[Math.floor(position) % waveform.length] ?? 0
-    const b = waveform[(Math.floor(position) + 1) % waveform.length] ?? 0
-    const sample = Number.isFinite(a) && Number.isFinite(b) ? a + (b - a) * (position % 1) : 0
-    const r = radius + sample * (7 + strength * 20)
-    const angle = phase * Math.PI * 2 - Math.PI / 2
-    return `${(128 + Math.cos(angle) * r).toFixed(2)},${(128 + Math.sin(angle) * r).toFixed(2)}`
-  })
-  return `M${points.join(' L')} Z`
-}
