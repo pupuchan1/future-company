@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { LiveClient } from '../src/features/live/client.ts'
+import { LiveClient, caseVoicePrefix } from '../src/features/live/client.ts'
 import type { LiveRuntime } from '../src/features/live/client.ts'
 import { LiveEventReducer } from '../src/features/live/events.ts'
 import { initialSnapshot } from '../src/features/live/types.ts'
@@ -404,4 +404,40 @@ test('case status failures are actionable, recover on retry, and never open the 
     assert.equal(retry.getSnapshot().configured, null)
     assert.match(retry.getSnapshot().error, /Check access/)
   } finally { retry.dispose() }
+})
+
+test('case relay retains proof, selected language and the same authenticated endpoints through stop', async () => {
+  const f = fixture()
+  const prefix = caseVoicePrefix('case-a')
+  const paths: string[] = [], eventPaths: (string | undefined)[] = []
+  const fetchApi = f.runtime.fetch
+  f.runtime.fetch = async (input, options) => {
+    const path = String(input)
+    paths.push(path)
+    return fetchApi(path === `${prefix}/status` ? '/api/status' : path.replace(`${prefix}/session`, '/api/live/session'), options)
+  }
+  f.runtime.events = url => { eventPaths.push(url); return f.source as unknown as EventSource }
+  const client = new LiveClient('case-a', 'ja', f.runtime, { apiPrefix: prefix, bridgeToken: async () => 'case-only-proof' })
+  try {
+    client.observe()
+    await new Promise(resolve => setImmediate(resolve))
+    await client.start('en', 'reception', undefined, 'en')
+    const creation = f.calls.find(call => call.path === '/api/live/session')!
+    assert.deepEqual(JSON.parse(String(creation.options?.body)), { sdp: 'v=0\r\no=mock', language: 'en', case_id: 'case-a', bridge_token: 'case-only-proof', language_preference: 'en' })
+    assert.equal(creation.options?.credentials, 'same-origin')
+    assert.equal(creation.options?.redirect, 'manual')
+    f.channel.onmessage!({ data: JSON.stringify({ type: 'session.started', session: { id: 'live_1' } }) })
+    f.setCreate(async () => Response.json({ case_id: 'case-a', language: 'ja', language_preference: 'ja' }))
+    await client.setLanguage('ja', 'ja')
+    await client.stop()
+    assert.equal(client.getSnapshot().language, 'ja')
+    assert.equal(client.getSnapshot().phase, 'ended')
+    assert.equal(JSON.stringify(client.getSnapshot()).includes('case-only-proof'), false)
+    assert.deepEqual(eventPaths, [`${prefix}/events`])
+    assert.ok(paths.includes(`${prefix}/session/live_1/language`))
+    assert.ok(paths.includes(`${prefix}/session/live_1`))
+    assert.ok(paths.every(path => path.startsWith(`${prefix}/`)))
+    for (const invalid of ['https://other.test/api', '/api/v1/cases/case-b/voice']) assert.throws(() => new LiveClient('case-a', 'ja', f.runtime, { apiPrefix: invalid }), /this Worker case/)
+    for (const invalid of ['', 'a/b', '日本語', 'a'.repeat(201)]) assert.throws(() => caseVoicePrefix(invalid), /Invalid Worker case/)
+  } finally { client.dispose() }
 })

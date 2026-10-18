@@ -34,6 +34,7 @@ async function fixture(t, options = {}) {
     assert.equal(req.headers['x-future-signature'], undefined);
     if (req.url === '/api/status') return reply(res, 200, {
       live_configured: true, mcp_configured: true, decisions_enabled: true, handoff_configured: true,
+      recruiting_human_transport: 'slack', slack_configured: true, slack_replies_configured: true,
       voice_map: { reception: 'shida', recruiting: 'harema' }, internal_secret: 'must-not-escape',
       requests: [{ case_id: 'case-a', device_id: 'phone-a', summary: 'ours' }, { case_id: 'case-b', device_id: 'phone-b', summary: 'private' }],
       devices: [{ device_id: 'phone-a', online: true, simulated: true, internal: 'private' }, { device_id: 'phone-b', online: true }],
@@ -149,6 +150,9 @@ test('status and fragmented SSE expose only the authorized case', async (t) => {
   const f = await fixture(t);
   const status = await (await f.browser('case-a', '/status')).json();
   assert.equal(status.internal_secret, undefined);
+  assert.equal(status.recruiting_human_transport, 'slack');
+  assert.equal(status.slack_configured, true);
+  assert.equal(status.slack_replies_configured, true);
   assert.deepEqual(status.requests.map((item) => item.case_id), ['case-a']);
   assert.deepEqual(status.devices, [{ device_id: 'phone-a', online: true, simulated: true }]);
   const response = await f.browser('case-a', '/events');

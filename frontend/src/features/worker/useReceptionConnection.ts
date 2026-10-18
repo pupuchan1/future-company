@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLiveConnection } from '../live/useLiveConnection'
-import type { LiveLanguage, LiveLanguagePreference } from '../live/types'
 import { caseVoicePrefix } from '../live/client'
+import type { LiveLanguage, LiveLanguagePreference } from '../live/types'
 import { WorkerCaseClient } from './cases'
 
 /** Issue #18: create/verify the Worker case before any Live session POST. */

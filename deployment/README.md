@@ -1,5 +1,7 @@
 # Worker と Node 音声の配置
 
+最新の一般公開入口は **Codex Sites**。pupuのビルド済み画面を `sites/export-site.mjs` で登録済みSitesのVinext checkoutへ反映する。`sites/proxy.mjs` はvisitor APIだけを既存Workerへ中継する。Sites側に `CF_ACCESS_CLIENT_ID` と `CF_ACCESS_CLIENT_SECRET` をsecretで設定し、全員が音声会話できるpublic audienceで公開する。これは既存Worker・Node・Slack認証の設定を置き換えない。r74techは下記の既存backend配置を担当する。
+
 既存の Worker に React・DO・D1 を残し、Node 24 の音声・人間MCPを常駐プロセスで動かす。`server.mjs` の localhost guard はそのまま使う。Worker 側の既存 Access 本人限定設定と社員認証も変更しない。
 
 ```text
@@ -58,6 +60,12 @@ INTEGRATION_PORT=4350 NODE_RELAY_PORT=4351 node --env-file=.env.local deployment
 relayの公開pathは `/relay/voice/*`（HMAC）、`/mcp`（Bearer）、`/bridge`（Bearer WebSocket）、`/health`（プロセス生存のみ）。`/`、旧 `/api/*`、任意upstream URLは公開しない。`/health` はprovider接続成功や実機接続の証拠ではない。
 
 ## Workerの配置
+
+### 採用のSlack通知・人間回答
+
+r74techがNodeの私有環境に `SLACK_CHANNEL_ID=C0CA6A7F4E5` と `SLACK_BOT_TOKEN` を設定する。内部用Appに `chat:write`・`channels:history` を許可し、#aiに参加させる。取得した値をWorkerの公開変数やブラウザーへ渡さない。[設定と返信形式](../integration/human/SLACK.md)を参照。採用の人間確認はこのSlack経路を使う。
+
+Node・relay・Workerを同じ確定commitにそろえ、通話終了後に既存構成で再起動する。case別 `voice/status` の `recruiting_human_transport=slack`、`slack_configured=true`、`slack_replies_configured=true` は設定項目の存在を示す。実認証の成功は、採用通知とそのthreadへの `回答: …` が元の音声会話へ戻ったことで確認する。
 
 ### 現在の本番へ配置する場合
 

@@ -51,6 +51,8 @@ export function filterStatus(value, caseId) {
   }
   return { case_id: caseId, live_configured: value?.live_configured === true,
     mcp_configured: value?.mcp_configured === true, decisions_enabled: value?.decisions_enabled === true,
+    recruiting_human_transport: value?.recruiting_human_transport === 'slack' ? 'slack' : null,
+    slack_configured: value?.slack_configured === true, slack_replies_configured: value?.slack_replies_configured === true,
     handoff_configured: value?.handoff_configured === true, voice_map: voiceMap, requests, devices };
 }
 

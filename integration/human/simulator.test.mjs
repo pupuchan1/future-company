@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createHumanGateway } from './gateway.mjs';
 
-test('auto simulator returns an explicitly fictional consultation answer through MCP', { timeout: 10_000 }, async (t) => {
+test('auto simulator returns a natural consultation answer with explicit simulated provenance through MCP', { timeout: 10_000 }, async (t) => {
   let resolveCompleted;
   const completion = new Promise((resolve) => { resolveCompleted = resolve; });
   const gateway = createHumanGateway({ token: 'local-simulator-test', onEvent: (event) => {
@@ -53,12 +53,16 @@ test('auto simulator returns an explicitly fictional consultation answer through
   assert.equal(started.target_role, request.target_role);
   const event = await completion;
   assert.equal(event.data.simulated, true);
+  assert.equal(event.data.audio_connected, false);
+  assert.equal(event.data.device_id, 'test-simulator');
   assert.equal(event.data.result.language, 'ja');
-  assert.match(event.data.result.text, /架空/);
   assert.match(event.data.result.text, /TypeScript.*React/);
-  assert.match(event.data.result.text, /実在する企業の情報ではありません/);
+  assert.match(event.data.result.text, /コードレビュー.*CI.*自動テスト/);
+  assert.doesNotMatch(event.data.result.text, /架空|デモ|シミュレーター/);
   const completed = await call('get_human_request', { handoff_id: started.handoff_id });
   assert.equal(completed.status, 'completed');
   assert.deepEqual(completed.result, event.data.result);
   assert.equal(completed.simulated, true);
+  assert.equal(completed.audio_connected, false);
+  assert.equal(completed.device_id, event.data.device_id);
 });

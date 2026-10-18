@@ -111,7 +111,7 @@ test('a linked phone completion without answer text still reaches its original L
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await app.close(); await rm(stateDir, { recursive: true, force: true }); });
   const created = await httpJson(app.server.address().port, '/api/live/session', { method: 'POST', body: {
-    case_id: caseId, sdp: 'v=0\r\n', route: 'recruiting', bridge_token: await issueBridgeProof(caseId, staffToken),
+    case_id: caseId, sdp: 'v=0\r\n', route: 'haas', bridge_token: await issueBridgeProof(caseId, staffToken),
   } });
   assert.equal(created.status, 200);
   const commands = [];
@@ -126,7 +126,7 @@ test('a linked phone completion without answer text still reaches its original L
   assert.match((await submitted.promise).content, /回答本文は届いていません/);
   assert.equal(runs.length, 1);
   assert.equal(runs[0].caseId, caseId);
-  assert.equal(runs[0].route, 'recruiting');
+  assert.equal(runs[0].route, 'haas');
   assert.equal(runs[0].source, 'human_event');
   assert.match(runs[0].transcript, /no answer was received/);
   assert.equal(saved.requests[0].status, 'pending');

@@ -9,6 +9,7 @@ import OpenAI from 'openai';
 import { createIntegration } from './server.mjs';
 import { createCaseState, initialHistory, voiceMap } from './case-state.mjs';
 import { LiveConversation } from './live-session.mjs';
+import { mcpCall } from './mcp-client.mjs';
 
 function deferred() {
   let resolve, reject;
@@ -45,14 +46,14 @@ class FakeSocket extends EventEmitter {
   terminate() { this.close(); }
 }
 
-async function fixture(t, { create, handoffTimeoutMs = 30000 } = {}) {
+async function fixture(t, { create, handoffTimeoutMs = 30000, slackFetch, extraEnv = {} } = {}) {
   const sockets = new Map();
   const creates = [];
   const runs = [];
   const closedCases = [];
   const stateDir = await mkdtemp(join(tmpdir(), 'future-company-handoff-'));
-  const app = createIntegration({ stateDir, handoffTimeoutMs, closeTimeoutMs: 20,
-    env: { HUMAN_MCP_TOKEN: 'local-handoff-test-token', HUMAN_MCP_URL: 'https://mcp.example.invalid/mcp' },
+  const app = createIntegration({ stateDir, handoffTimeoutMs, closeTimeoutMs: 20, slackFetch,
+    env: { HUMAN_MCP_TOKEN: 'local-handoff-test-token', HUMAN_MCP_URL: 'https://mcp.example.invalid/mcp', ...extraEnv },
     client: { live: { async create(input) {
       creates.push(input);
       return create ? create(input, creates.length) : { session: { id: `live-${creates.length}` }, transport: { type: 'webrtc', sdp: 'v=0\r\nanswer' } };
@@ -124,23 +125,23 @@ test('startup advertises fixed department voices and supports direct interview e
 
 test('voice handoff preserves history, Agents state and original human-result route exactly once', async (t) => {
   const f = await fixture(t);
-  const started = await f.start('recruiting');
+  const started = await f.start('haas');
   const oldId = started.body.session.id;
   const oldSocket = f.sockets.get(oldId);
   oldSocket.receive({ type: 'session.input_transcript.delta', event_id: 'heard-1', delta: '開発環境を人間に確認してください。' });
   oldSocket.receive({ type: 'session.output_transcript.delta', event_id: 'said-1', delta: '担当者に確認します。' });
-  const agentsState = { id: 'agents-recruiting', active: false };
-  f.app.backend.sessions.set('case-switch:recruiting', agentsState);
+  const agentsState = { id: 'agents-haas', active: false };
+  f.app.backend.sessions.set('case-switch:haas', agentsState);
   const commands = [];
   const device = f.app.gateway.service.connectDevice({ type: 'hello', device_id: 'black-phone-1', simulated: true,
     capabilities: ['ring.start', 'ring.stop'] }, (command) => { commands.push(command); return true; });
   const request = f.app.gateway.service.requestHuman({ case_id: 'case-switch', reason: 'human_requested',
     summary: '架空の開発環境の確認', language: 'ja', idempotency_key: 'question-1' });
   const command = commands.find((entry) => entry.type === 'ring.start');
-  const prepared = await f.prepare(oldId, 'haas');
+  const prepared = await f.prepare(oldId, 'recruiting');
   assert.equal(prepared.status, 200);
   assert.equal(prepared.body.old_session_id, oldId);
-  assert.equal(prepared.body.voice, 'marin');
+  assert.equal(prepared.body.voice, 'harema');
   assert.deepEqual(f.creates[1].session.input.map((item) => item.role), ['user', 'assistant']);
   assert.deepEqual(f.creates[1].session.input.map((item) => item.content[0].type), ['input_text', 'output_text']);
   assert.match(f.creates[1].session.input[0].content[0].text, /開発環境/);
@@ -157,10 +158,10 @@ test('voice handoff preserves history, Agents state and original human-result ro
   assert.equal(activated.body.active, true);
   await until(() => f.runs.length === 1 && oldSocket.readyState === 3);
   assert.equal(f.runs[0].source, 'human_event');
-  assert.equal(f.runs[0].route, 'recruiting');
+  assert.equal(f.runs[0].route, 'haas');
   assert.match(f.runs[0].transcript, /架空回答: TypeScript/);
   assert.match(f.runs[0].transcript, /開発環境を人間に確認/);
-  assert.equal(f.app.backend.sessions.get('case-switch:recruiting'), agentsState);
+  assert.equal(f.app.backend.sessions.get('case-switch:haas'), agentsState);
   assert.deepEqual(f.closedCases, []);
   const retry = await f.activate(prepared);
   assert.deepEqual(retry, activated);
@@ -373,4 +374,32 @@ test('language selection keeps the case, wins over classification and persists t
   assert.equal(automatic.body.language_preference, 'auto');
   assert.equal(automatic.body.case_id, 'case-language');
   assert.match(f.sockets.get(newId).sent.at(-1).content, /automatic language/);
+});
+
+test('recruiting MCP arrival and consultation share a Slack thread; explicit reply resumes the original Agent once', async t => {
+  const posts = [];
+  const f = await fixture(t, { extraEnv: { SLACK_BOT_TOKEN: 'fixture-bot', SLACK_CHANNEL_ID: 'C123' },
+    slackFetch: async (url, options) => {
+      if (new URL(url).pathname.endsWith('chat.postMessage')) {
+        posts.push(JSON.parse(options.body));
+        return Response.json({ ok: true, channel: 'C123', ts: posts.length === 1 ? '100.000001' : '100.000003' });
+      }
+      return Response.json({ ok: true, messages: [{ user: 'U123', ts: '100.000002', thread_ts: '100.000001', text: '回答: これは質問より前の古い回答です。' }, { user: 'U123', ts: '100.000004', thread_ts: '100.000001', text: '回答: 開発にはTypeScriptを使用しています。' }] });
+    } });
+  await f.start('recruiting');
+  const url = `http://127.0.0.1:${f.app.server.address().port}/mcp`;
+  const arrived = await mcpCall(url, 'local-handoff-test-token', 'notify_recruiter', { case_id: 'case-switch', applicant_summary: '本人はReactの経験があると話しました。' });
+  assert.equal(arrived.notification_status, 'sent'); assert.equal(arrived.kind, 'recruiting_arrival');
+  assert.equal(f.app.gateway.service.listRequests().length, 0);
+  const request = await mcpCall(url, 'local-handoff-test-token', 'request_human', { case_id: 'case-switch', reason: 'agent_unable', summary: '開発環境への質問', task: '利用言語は何ですか', expected_result: '利用言語', idempotency_key: 'slack-question' });
+  assert.equal(request.transport, 'slack'); assert.equal(request.device_id, 'slack-ai');
+  await until(() => posts.length === 2 && f.app.gateway.service.getHumanRequest(request.handoff_id).notification_status === 'sent');
+  assert.equal(posts[1].thread_ts, '100.000001');
+  await f.app.slack.pollOnce();
+  await until(() => f.runs.length === 1);
+  assert.equal(f.runs[0].route, 'recruiting'); assert.equal(f.runs[0].source, 'human_event');
+  assert.match(f.runs[0].transcript, /untrusted answer data/); assert.match(f.runs[0].transcript, /TypeScript/);
+  const saved = f.app.gateway.service.getHumanRequest(request.handoff_id);
+  assert.equal(saved.status, 'completed'); assert.equal(saved.simulated, false); assert.equal(saved.result_source, 'slack_thread');
+  await f.app.slack.pollOnce(); assert.equal(f.runs.length, 1);
 });

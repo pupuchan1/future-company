@@ -12,6 +12,7 @@ import { mcpCall } from './mcp-client.mjs';
 import { createCaseState, initialHistory, isVoiceRoute, voiceMap } from './case-state.mjs';
 import { WorkerBridge } from './worker-bridge.mjs';
 import { loadServerEnvironment } from './environment.mjs';
+import { createSlackHumanTransport } from './human/slack.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 function json(res, status, data) {
@@ -41,12 +42,13 @@ export function isLocalRequest(req) {
 }
 
 export function createIntegration({ env = process.env, client, stateDir = resolve(root, '../.integration-state'),
-  socketFactory, workerFetch, workerSocketFactory, closeTimeoutMs, handoffTimeoutMs = 30000 } = {}) {
+  socketFactory, workerFetch, workerSocketFactory, slackFetch, closeTimeoutMs, handoffTimeoutMs = 30000 } = {}) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const remember = (record) => appendFileSync(join(stateDir, 'resources.jsonl'), JSON.stringify({ at: new Date().toISOString(), ...record }) + '\n', { mode: 0o600 });
   const clients = new Set();
   const sessions = new Map();
   const cases = new Map();
+  const manualPhoneCases = new Set();
   const emit = (event) => {
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const res of clients) {
@@ -74,11 +76,18 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     accessClientId: env.CF_ACCESS_CLIENT_ID || env.WORKER_ACCESS_CLIENT_ID,
     accessClientSecret: env.CF_ACCESS_CLIENT_SECRET || env.WORKER_ACCESS_CLIENT_SECRET,
     fetcher: workerFetch, socketFactory: workerSocketFactory, deliver: receiveHuman, emit }) : null;
-  const gateway = createHumanGateway({ token: env.HUMAN_MCP_TOKEN || '',
+  const slack = createSlackHumanTransport({ botToken: env.SLACK_BOT_TOKEN, userToken: env.SLACK_USER_TOKEN,
+    channelId: env.SLACK_CHANNEL_ID, fetcher: slackFetch });
+  const gateway = createHumanGateway({ token: env.HUMAN_MCP_TOKEN || '', slack,
+    notifyRecruiter: input => slack.notifyRecruiter(input, { isActive: () => Boolean(cases.get(input.case_id)
+      && !cases.get(input.case_id).closed && cases.get(input.case_id).routing.route === 'recruiting') }),
+    transportForCase: (caseId) => cases.get(caseId)?.routing.route === 'haas' || manualPhoneCases.has(caseId) ? 'phone' : 'slack',
+    caseActive: (caseId) => manualPhoneCases.has(caseId) || Boolean(cases.get(caseId) && !cases.get(caseId).closed),
     handleEventRpc: (rpc) => events.handleRpc(rpc),
     onEvent: (event) => {
       void events.publish(event).catch(() => emit({ type: 'events.error', message: 'MCP event could not be queued.' }));
       const state = cases.get(event.data.case_id);
+      if (['human.completed', 'human.cancelled', 'human.unavailable'].includes(event.name)) manualPhoneCases.delete(event.data.case_id);
       if (!state || state.closed) { emit({ ...event, type: event.name }); return; }
       // Capture the request's original specialist before a voice switch changes it.
       if (event.name === 'human.requested' && !state.handoffRoutes.has(event.data.handoff_id)) {
@@ -142,6 +151,8 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       onClosing: (closingId, { preserveCase }) => {
         if (!preserveCase) {
           state.closed = true;
+          slack.closeCase(state.id);
+          gateway.service.closeCase(state.id);
           workerBridge?.closeCase(state.id);
           const ticket = state.switching;
           if (ticket) abandonHandoff(state, ticket);
@@ -169,6 +180,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       const path = new URL(req.url, 'http://localhost').pathname;
       if (req.method === 'GET' && path === '/api/status') return json(res, 200, {
         live_configured: Boolean(provider), mcp_configured: Boolean(env.HUMAN_MCP_URL),
+        recruiting_human_transport: 'slack', slack_configured: slack.configured, slack_replies_configured: slack.repliesConfigured,
         devices: gateway.service.listDevices(), requests: currentHumanRequests(),
         decisions_enabled: env.LIVE_DECISIONS_ENABLED !== 'false',
         handoff_configured: true, voice_map: voiceMap,
@@ -183,6 +195,11 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       if (req.method === 'POST' && path === '/api/demo/handoff') {
         const input = await body(req);
         const caseId = identifier(input.case_id) ? input.case_id : `demo-${randomUUID()}`;
+        if (cases.has(caseId) && cases.get(caseId).routing.route !== 'haas') return json(res, 409, { error: 'Recruiting consultations use Slack.' });
+        if (!cases.has(caseId)) {
+          if (manualPhoneCases.size >= 100) return json(res, 429, { error: 'Manual phone request capacity reached.' });
+          manualPhoneCases.add(caseId);
+        }
         const record = await mcpCall(`http://127.0.0.1:${server.address().port}/mcp`, env.HUMAN_MCP_TOKEN,
           'request_human', { case_id: caseId, reason: input.reason || 'human_requested',
             summary: input.summary || '接続確認用の人間呼出し', language: input.language || 'ja',
@@ -347,7 +364,8 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     }
   });
   server.on('upgrade', (req, socket, head) => { if (!gateway.handleUpgrade(req, socket, head)) socket.destroy(); });
-  return { server, gateway, backend, events, async close() {
+  return { server, gateway, backend, events, slack, async close() {
+    slack.close();
     workerBridge?.close();
     for (const res of clients) res.end();
     clients.clear();

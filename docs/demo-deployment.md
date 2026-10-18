@@ -1,5 +1,7 @@
 # React画面を含む試験デプロイ
 
+> 以下は初期の静的画面配信の記録です。現在の配置手順は [deployment/README.md](../deployment/README.md)、担当・受入範囲は [Issue #94](https://github.com/pupuchan1/future-company/issues/94) を使用してください。現在の本番デプロイ担当はr74techで、PR #39の統合版を既存Worker・Nodeへ反映します。
+
 試験URLはhttps://future-company-demo.r74.workers.dev/。R74のAccessで所有者のメールだけを許可し、プレビューURLは無効にしている。
 
 Honoのbackendと、PR #15のReactビルドを同じWorkerに配信する。`/api/*`と`/mcp`はWorkerを優先し、画面はStatic Assetsから配信する。会話・operatorの直打ちと再読込にはSPA fallbackを使う。FEの元ファイルは別担当のまま保持し、独立したビルドを使う。
