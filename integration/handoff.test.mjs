@@ -756,6 +756,7 @@ test('fast work intake updates late skills in the same Slack message and does no
   socket.receive({ type: 'session.input_transcript.delta', event_id: 'first-work-part', delta: '仕事を依頼したいんですけど、' });
   await until(() => calls.length === 1);
   await pause(20);
+  socket.receive({ type: 'session.output_transcript.delta', event_id: 'interleaved-work-ack', delta: 'Slackに共有しました。' });
   socket.receive({ type: 'session.input_transcript.delta', event_id: 'later-work-part', delta: 'ハンダ付けやデバイスが得意な人はいませんか？' });
   await until(() => calls.some(call => call.method.endsWith('chat.update')));
   assert.equal(calls.filter(call => call.method.endsWith('chat.postMessage')).length, 1);
@@ -763,14 +764,19 @@ test('fast work intake updates late skills in the same Slack message and does no
   const handoff = f.app.gateway.service.listRequests()[0];
   assert.match(handoff.summary, /デバイス/);
   socket.receive({ type: 'session.output_transcript.delta', event_id: 'work-ack', delta: '共有しました。' });
+  socket.receive({ type: 'session.input_transcript.delta', event_id: 'do-not-cancel-work', delta: '仕事の依頼はキャンセルしないでください' });
+  socket.receive({ type: 'session.delegation.created', delegation: { id: 'do-not-cancel-delegation', target: 'client' } });
+  await pause(20);
+  assert.equal(f.app.gateway.service.getHumanRequest(handoff.handoff_id).status, 'requested');
+  socket.receive({ type: 'session.output_transcript.delta', event_id: 'keep-work-ack', delta: '継続します。' });
   socket.receive({ type: 'session.input_transcript.delta', event_id: 'cancel-work', delta: 'その依頼をキャンセルしてください' });
   socket.receive({ type: 'session.delegation.created', delegation: { id: 'cancel-delegation', target: 'client' } });
   await until(() => f.app.gateway.service.getHumanRequest(handoff.handoff_id).status === 'cancelled');
   socket.receive({ type: 'session.output_transcript.delta', event_id: 'cancel-ack', delta: '取り消しました。' });
   socket.receive({ type: 'session.input_transcript.delta', event_id: 'different-question', delta: '受付時間を教えてください' });
   socket.receive({ type: 'session.delegation.created', delegation: { id: 'different-delegation', target: 'client' } });
-  await until(() => f.runs.length === 1);
-  assert.match(f.runs[0].transcript, /受付時間/);
+  await until(() => f.runs.some(run => /受付時間/.test(run.transcript)));
+  assert.match(f.runs.at(-1).transcript, /受付時間/);
 });
 
 test('a repeated work reply returns its delivery receipt without speaking twice', () => {

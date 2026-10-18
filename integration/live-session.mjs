@@ -233,9 +233,13 @@ export class LiveConversation {
     const text = historyTurns(this.history).filter(turn => turn.role === 'user').at(-1)?.text || '';
     const existing = this.caseState?.fastWorkRequest;
     if (existing) {
-      if (/キャンセル|取り消|取消|撤回|やめて|cancel/i.test(text)) { this.cancelWork?.(); return true; }
+      if (/キャンセル|取り消|取消|撤回|やめて|cancel/i.test(text) && !/キャンセルしない|キャンセルしません|取り消さない|取り消しません|取消さない|撤回しない|やめない|do not cancel|don't cancel/i.test(text)) { this.cancelWork?.(); return true; }
       if (existing.summary && text.startsWith(existing.summary)) {
         if (text !== existing.summary) this.requestWork(text);
+        return true;
+      }
+      if (existing.status === 'requested' && requestsWork(text)) {
+        this.requestWork(`${existing.summary}\n${text}`);
         return true;
       }
       return false;
@@ -328,6 +332,7 @@ export class LiveConversation {
   humanEvent(event) {
     if (this.closed || event.data.case_id !== this.caseId || event.isValid?.() === false) return { status: 'cancelled' };
     if (event.data.request_kind === 'work' || this.caseState?.fastWorkRequest?.handoff_id === event.data.handoff_id) {
+      if (this.caseState?.fastWorkRequest && event.data.status) this.caseState.fastWorkRequest.status = event.data.status;
       const key = `work:${event.data.handoff_id}:${event.name}:${event.name === 'human.requested' ? event.data.notification_status || '' : ''}`;
       if (this.seen.has(key)) return { status: 'live_submitted' };
       let content;
