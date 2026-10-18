@@ -221,7 +221,7 @@ export class LiveConversation {
 
   scheduleWorkRequest() {
     clearTimeout(this.workRequestTimer);
-    if (!this.requestWork || this.voiceRoute === 'recruiting' || this.caseState?.fastWorkRequest) return;
+    if (!this.requestWork || this.voiceRoute === 'recruiting') return;
     const text = historyTurns(this.history).filter(turn => turn.role === 'user').at(-1)?.text || '';
     if (!requestsWork(text)) return;
     this.workRequestTimer = setTimeout(() => this.startWorkRequest(), 350);
@@ -234,7 +234,11 @@ export class LiveConversation {
     const existing = this.caseState?.fastWorkRequest;
     if (existing) {
       if (/キャンセル|取り消|取消|撤回|やめて|cancel/i.test(text)) { this.cancelWork?.(); return true; }
-      return Boolean(existing.summary && text.startsWith(existing.summary));
+      if (existing.summary && text.startsWith(existing.summary)) {
+        if (text !== existing.summary) this.requestWork(text);
+        return true;
+      }
+      return false;
     }
     if (!requestsWork(text)) return false;
     clearTimeout(this.workRequestTimer);
@@ -276,8 +280,9 @@ export class LiveConversation {
         for (let attempt = 0; attempt < 3; attempt++) {
           const sourceId = this.lastInputId;
           transcript = this.transcript();
+          const previousWork = this.caseState?.fastWorkRequest;
           const next = await this.backend.classify(transcript, this.routing);
-          if (this.closed || (this.caseState?.fastWorkRequest && this.voiceRoute !== 'recruiting')) return;
+          if (this.closed || (!previousWork && this.caseState?.fastWorkRequest && this.voiceRoute !== 'recruiting')) return;
           if (sourceId !== this.lastInputId) continue;
           if ((this.caseState?.languagePreference || this.languagePreference || 'auto') === 'auto') {
             next.language = stableSpokenLanguage(this.caseState || this, next.language,
@@ -322,9 +327,9 @@ export class LiveConversation {
 
   humanEvent(event) {
     if (this.closed || event.data.case_id !== this.caseId || event.isValid?.() === false) return { status: 'cancelled' };
-    if (event.data.request_kind === 'work') {
-      const key = `work:${event.data.handoff_id}:${event.name}:${event.data.notification_status || ''}`;
-      if (this.seen.has(key)) return;
+    if (event.data.request_kind === 'work' || this.caseState?.fastWorkRequest?.handoff_id === event.data.handoff_id) {
+      const key = `work:${event.data.handoff_id}:${event.name}:${event.name === 'human.requested' ? event.data.notification_status || '' : ''}`;
+      if (this.seen.has(key)) return { status: 'live_submitted' };
       let content;
       if (event.name === 'human.requested' && event.data.notification_status === 'sent') {
         content = this.routing.language === 'en' ? 'I have sent your work request to the team on Slack.' : '担当につなぎます。ご依頼をSlackに共有しました。';

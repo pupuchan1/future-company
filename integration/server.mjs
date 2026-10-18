@@ -107,7 +107,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       if (event.data.request_kind === 'work') {
         // Delivery confirmation must not wait for Worker persistence or an Agent turn.
         void receiveHuman(event);
-        if (workerBridge) void workerBridge.humanEvent(event, 'haas').catch(() => emit({ type: 'worker.error', case_id: state.id, message: 'Work request synchronization failed.' }));
+        if (workerBridge && (event.name !== 'human.requested' || event.data.revision === 1)) void workerBridge.humanEvent(event, 'haas').catch(() => emit({ type: 'worker.error', case_id: state.id, message: 'Work request synchronization failed.' }));
         return;
       }
       if (workerBridge) {
@@ -169,7 +169,11 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         if (state.fastWorkRequest?.handoff_id) gateway.service.cancelHumanRequest({ handoff_id: state.fastWorkRequest.handoff_id });
       },
       requestWork: text => {
-        if (state.fastWorkRequest) return state.fastWorkRequest;
+        if (state.fastWorkRequest?.handoff_id) {
+          const updated = gateway.service.updateWorkRequest({ handoff_id: state.fastWorkRequest.handoff_id, ...workRequestDetails(text) });
+          Object.assign(state.fastWorkRequest, updated);
+          return state.fastWorkRequest;
+        }
         state.routing.route = 'haas';
         state.fastWorkRequest = { startedAt: Date.now() };
         const request = gateway.service.requestHuman({ ...workRequestDetails(text), case_id: state.id,

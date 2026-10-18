@@ -208,6 +208,19 @@ export function createHumanService({
     return entry;
   }
 
+  function updateWorkRequest(input) {
+    const entry = find(input.handoff_id);
+    if (entry.record.request_kind !== 'work' || terminal.has(entry.record.status)) return copy(entry.record);
+    const changes = requestHumanSchema.pick({ summary: true, task: true, target_role: true }).parse({ summary: input.summary, task: input.task, target_role: input.target_role });
+    if (Object.entries(changes).every(([key, value]) => entry.record[key] === value)) return copy(entry.record);
+    Object.assign(entry.record, changes);
+    entry.record.revision++;
+    entry.record.updated_at = new Date().toISOString();
+    void slack.updateWork(copy(entry.record));
+    emit(entry);
+    return copy(entry.record);
+  }
+
   function getHumanRequest(input) { return copy(find(input).record); }
 
   function cancelHumanRequest(input) {
@@ -275,7 +288,7 @@ export function createHumanService({
   }
 
   return {
-    requestHuman, getHumanRequest, cancelHumanRequest, connectDevice,
+    requestHuman, getHumanRequest, cancelHumanRequest, updateWorkRequest, connectDevice,
     listDevices: () => [...devices.values()].map(({ send: _, connectionId: __, ...device }) => copy({ ...device, online: true })),
     listRequests: () => [...requests.values()].map(({ record }) => copy(record)),
     closeCase(caseId) { for (const entry of requests.values()) if (entry.record.case_id === caseId && !terminal.has(entry.record.status)) cancelHumanRequest(entry.record.handoff_id); },

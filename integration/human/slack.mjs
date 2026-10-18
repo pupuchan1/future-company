@@ -2,6 +2,19 @@ const knownErrors = new Set(['missing_scope', 'invalid_auth', 'not_authed', 'not
 const safeError = value => knownErrors.has(value) ? `slack_${value}` : 'slack_api_error';
 const escapeText = value => String(value || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
+
+function workPayload(record) {
+  const sections = [`依頼内容（お客様のお話）\n${record.summary || record.task}`,
+    `必要な担当・スキル\n${record.target_role || 'ご依頼の内容に対応できる方'}`,
+    `お願い\n${record.expected_result}`];
+  const footer = '対応可能な方は、このスレッドに「対応します」などと返信してください。AIがお客様へお伝えします。';
+  return { text: ['仕事の依頼が届きました', ...sections, footer].map(escapeText).join('\n'),
+    blocks: [{ type: 'header', text: { type: 'plain_text', text: '仕事の依頼が届きました', emoji: false } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: '<!here> 作業担当の方、ご確認と返信をお願いします。' }] },
+      ...sections.map(text => ({ type: 'section', text: { type: 'plain_text', text: text.slice(0, 2900), emoji: false } })),
+      { type: 'context', elements: [{ type: 'plain_text', text: `${footer}\n案件: ${record.case_id} / 相談: ${record.handoff_id}`, emoji: false }] }] };
+}
+
 /** Fixed-channel, server-only transport. A notification is never human acceptance. */
 export function createSlackHumanTransport({ botToken = '', userToken = '', channelId = '', fetcher = fetch,
   pollIntervalMs = 5000, timeoutMs = 10000 } = {}) {
@@ -53,6 +66,22 @@ export function createSlackHumanTransport({ botToken = '', userToken = '', chann
     caseQueues.set(caseId, task);
     return task;
   }
+  async function updateWork(record) {
+    const entry = pending.get(record.handoff_id);
+    if (!entry || !alive(entry) || entry.record.request_kind !== 'work') return;
+    entry.record = record;
+    if (!entry.ts || entry.updating) return;
+    entry.updating = true;
+    try {
+      do {
+        const current = entry.record;
+        await api('chat.update', { channel: channelId, ts: entry.sinceTs, ...workPayload(current),
+          mrkdwn: false, parse: 'none' }, botToken || userToken, entry.controller.signal);
+        if (!alive(entry) || current === entry.record) break;
+      } while (alive(entry));
+    } catch (error) { if (alive(entry)) entry.hooks.update({ detail_update_error: error.safeCode }); }
+    finally { entry.updating = false; }
+  }
   async function pollOnce() {
     if (closed || polling || Date.now() < nextPoll || !replyToken) return;
     const entry = [...pending.values()].find(item => item.ts && alive(item));
@@ -88,7 +117,7 @@ export function createSlackHumanTransport({ botToken = '', userToken = '', chann
   const timer = setInterval(() => { void pollOnce(); }, Math.max(5000, pollIntervalMs));
   timer.unref?.();
   return {
-    configured, repliesConfigured: configured && Boolean(replyToken), pollOnce,
+    configured, repliesConfigured: configured && Boolean(replyToken), pollOnce, updateWork,
     completeInterview(input, { isActive = () => true } = {}) {
       if (interviewReports.has(input.case_id)) return interviewReports.get(input.case_id);
       if (interviewReports.size >= 1000) return Promise.resolve({ notification_status: 'unavailable', error: 'capacity_reached' });
@@ -164,12 +193,13 @@ export function createSlackHumanTransport({ botToken = '', userToken = '', chann
             ...sections.map(text => ({ type: 'section', text: { type: 'plain_text', text: text.slice(0, 2900), emoji: false } })),
             { type: 'context', elements: [{ type: 'plain_text', text: `${footer}\n案件: ${record.case_id} / 相談: ${record.handoff_id}`, emoji: false }] }];
           const text = [title, ...sections, footer].map(escapeText).join('\n').slice(0, 9000);
-          const { posted, root } = await postCase(record.case_id, { text, blocks, client_msg_id: record.handoff_id }, entry.controller.signal, work);
+          const { posted, root } = await postCase(record.case_id, { ...(work ? workPayload(record) : { text, blocks }), client_msg_id: record.handoff_id }, entry.controller.signal, work);
           if (!alive(entry)) return;
           if (posted.channel !== channelId || !/^\d+\.\d+$/.test(posted.ts || '')) throw Object.assign(new Error(), { safeCode: 'slack_delivery_unknown' });
           entry.ts = root;
           entry.sinceTs = posted.ts;
           threads.set(record.case_id, entry.ts);
+          if (entry.record !== record) void updateWork(entry.record);
           hooks.update({ notification_status: 'sent', slack_thread_ts: entry.ts,
             reply_status: replyToken ? 'polling' : 'unconfigured' });
         } catch (error) {

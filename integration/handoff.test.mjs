@@ -745,3 +745,41 @@ test('stopping or retracting a pending work request prevents notification', asyn
   await f.api(`/api/live/session/${created.body.session.id}`, undefined, 'DELETE');
   await pause(400); assert.equal(posts.length, 0);
 });
+
+
+test('fast work intake updates late skills in the same Slack message and does not swallow cancellation or new questions', async t => {
+  const calls = [];
+  const f = await fixture(t, { extraEnv: { SLACK_BOT_TOKEN: 'test-only', SLACK_CHANNEL_ID: 'C123' },
+    slackFetch: async (url, options) => { calls.push({ method: new URL(url).pathname, body: JSON.parse(options.body) });
+      return Response.json({ ok: true, channel: 'C123', ts: '124.000001' }); } });
+  const created = await f.start(); const socket = f.sockets.get(created.body.session.id);
+  socket.receive({ type: 'session.input_transcript.delta', event_id: 'first-work-part', delta: '仕事を依頼したいんですけど、' });
+  await until(() => calls.length === 1);
+  await pause(20);
+  socket.receive({ type: 'session.input_transcript.delta', event_id: 'later-work-part', delta: 'ハンダ付けやデバイスが得意な人はいませんか？' });
+  await until(() => calls.some(call => call.method.endsWith('chat.update')));
+  assert.equal(calls.filter(call => call.method.endsWith('chat.postMessage')).length, 1);
+  assert.ok(calls.at(-1).body.blocks.some(block => block.text?.text?.includes('ハンダ付け、デバイス・ハードウェア')));
+  const handoff = f.app.gateway.service.listRequests()[0];
+  assert.match(handoff.summary, /デバイス/);
+  socket.receive({ type: 'session.output_transcript.delta', event_id: 'work-ack', delta: '共有しました。' });
+  socket.receive({ type: 'session.input_transcript.delta', event_id: 'cancel-work', delta: 'その依頼をキャンセルしてください' });
+  socket.receive({ type: 'session.delegation.created', delegation: { id: 'cancel-delegation', target: 'client' } });
+  await until(() => f.app.gateway.service.getHumanRequest(handoff.handoff_id).status === 'cancelled');
+  socket.receive({ type: 'session.output_transcript.delta', event_id: 'cancel-ack', delta: '取り消しました。' });
+  socket.receive({ type: 'session.input_transcript.delta', event_id: 'different-question', delta: '受付時間を教えてください' });
+  socket.receive({ type: 'session.delegation.created', delegation: { id: 'different-delegation', target: 'client' } });
+  await until(() => f.runs.length === 1);
+  assert.match(f.runs[0].transcript, /受付時間/);
+});
+
+test('a repeated work reply returns its delivery receipt without speaking twice', () => {
+  const sent = [];
+  const context = { closed: false, caseId: 'case-reply', caseState: { fastWorkRequest: { handoff_id: 'work-1' } }, seen: new Set(), routing: { language: 'ja' },
+    emit() {}, send(type, payload) { sent.push({ type, payload }); return true; } };
+  const event = { name: 'human.completed', data: { case_id: 'case-reply', handoff_id: 'work-1', request_kind: 'work', notification_status: 'sent', result: { text: 'ハンダ付け対応します', language: 'ja' } } };
+  assert.deepEqual(LiveConversation.prototype.humanEvent.call(context, event), { status: 'live_submitted' });
+  assert.deepEqual(LiveConversation.prototype.humanEvent.call(context, event), { status: 'live_submitted' });
+  assert.deepEqual(LiveConversation.prototype.humanEvent.call(context, { ...event, data: { ...event.data, request_kind: undefined, notification_status: undefined } }), { status: 'live_submitted' });
+  assert.equal(sent.length, 1);
+});
