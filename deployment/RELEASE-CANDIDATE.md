@@ -43,15 +43,22 @@ Orbは同じ`backend.result`を再受信すると、音声応答終了後に`lis
 
 ## 本番への受渡し
 
-16:36 JSTの再確認でも#39は`6176125`、#76は`f0572a5`、#87は`d2f208b`。
+16:38 JSTのGitHub再確認で#39は`6176125`。16:36 JSTに確認した#76は`f0572a5`、#87は`d2f208b`。
 [#87のレビュー指摘](https://github.com/pupuchan1/future-company/pull/87#discussion_r4306171872)は未解決で、修正後の最終配備commitはまだ確定していない。
-候補と受入範囲は[PR #103](https://github.com/pupuchan1/future-company/pull/103)、Node・Workerの配備記録と切替は[PR #104](https://github.com/pupuchan1/future-company/pull/104)で扱う。
+候補と受入範囲は[PR #103](https://github.com/pupuchan1/future-company/pull/103)、Node・Workerの配備記録は[PR #104](https://github.com/pupuchan1/future-company/pull/104)で扱う。別チャット「PR #39を本番デプロイ」で実際の切替と追加統合が進行しているため、この文書の値を固定した現在状態として扱わない。
 
-配備担当はr74tech。Worker・Node・relayの版を一組として記録し、稼働中の通話を終了してからNodeを更新する。
-既存Node4350・relay4351、`jamie-journey-redhead-smart.trycloudflare.com`、stateDir・D1・CaseRoom・Access・secretを維持する。
+### 16:38 JSTに確認した配備状態
+
+- ローカルの`.local/production-runtime/state.json`は`sourceCommit=617612592fda658304fe87f68d2166ceeac5f9c7`、`relayOrigin=https://ellen-grid-entrance-mails.trycloudflare.com`、Node4350・relay4351を記録している。
+- Node4350の待受はPID9055。旧`319ffc1`のNodeを維持したままとは扱わない。
+- 配備担当チャットからはCloudflare APIでWorker version `66e5c8ad-22ff-491d-a735-d90f9b1aefbe`の100%配信を確認したとの報告がある。この文書の担当ではCloudflare APIを再取得していないため、#33の配備記録と照合する。
+- `6176125`の配備と、#76最新差分・#87修正・#101を揃えた最終版の確定、実マイク・本番の受入成功は別に記録する。
+
+配備担当はr74tech。Worker・Node・relayの版を一組として記録し、次のNode更新は稼働中の通話を終了してから行う。
+stateDir・D1・CaseRoom・Access・secretを保持し、再配置前に実際のrelay originとWorker設定を照合する。以前のjamie URLへ記録だけを根拠に戻さない。
 秘密値をPR・Issue・ビルド成果物へ転記しない。
 
-前回の配備元は`319ffc17ddecea0d3b9ff3a0a98efa65af42f818`、Worker versionは`c27057a9-c69b-4d7e-9ba6-dcb69cc383b9`。
+以前の配備元は`319ffc17ddecea0d3b9ff3a0a98efa65af42f818`、Worker versionは`c27057a9-c69b-4d7e-9ba6-dcb69cc383b9`。
 これは[#33の本番実測報告](https://github.com/pupuchan1/future-company/issues/33#issuecomment-6247048799)に記録された値であり、現在の配信版を再取得した値ではない。
 同報告では実Live・Agents・MCPと合成マイク・模擬電話のHaaS往復が成功している。実機・実マイクと、今回の最新候補の本番成功は未確認。
 
