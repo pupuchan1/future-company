@@ -1,4 +1,56 @@
 import { randomUUID } from 'node:crypto';
+import { getDefaultAutoSelectFamilyAttemptTimeout, setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
+import OpenAI from 'openai';
+
+const networkCodes = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT',
+  'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_SOCKET']);
+const errorNames = new Set(['APIConnectionError', 'APIConnectionTimeoutError', 'SyntaxError', 'TypeError', 'Error', 'AggregateError']);
+
+export function configureConnectionNetworking() {
+  // Node's 250 ms default prematurely abandoned both IPv4 addresses on this
+  // network while IPv6 was unreachable. Keep dual-stack fallback, allowing the
+  // TCP handshake to finish. This setting is local to this server process.
+  const timeout = Math.max(2000, getDefaultAutoSelectFamilyAttemptTimeout());
+  setDefaultAutoSelectFamilyAttemptTimeout(timeout);
+  return timeout;
+}
+
+export function connectionDiagnostic(error) {
+  const pending = [error], seen = new Set(), codes = new Set(), leaves = [];
+  while (pending.length && seen.size < 16) {
+    const item = pending.shift();
+    if (!item || typeof item !== 'object' || seen.has(item)) continue;
+    seen.add(item);
+    if (networkCodes.has(item.code)) codes.add(item.code);
+    const children = [item.cause, ...(Array.isArray(item.errors) ? item.errors : [])].filter((value) => value && typeof value === 'object');
+    if (children.length) pending.push(...children);
+    else leaves.push(item);
+  }
+  const candidateName = error?.constructor?.name !== 'Error' ? error?.constructor?.name : error?.name;
+  const name = errorNames.has(candidateName) ? candidateName : 'UnknownError';
+  const connectionError = error instanceof OpenAI.APIConnectionError || name === 'APIConnectionError'
+    || name === 'APIConnectionTimeoutError' || codes.size > 0;
+  const preconnect = leaves.length > 0 && leaves.every((item) => ['ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT'].includes(item.code)
+    || (item.syscall === 'connect' && ['ECONNREFUSED', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH'].includes(item.code)));
+  return { name, cause_code: [...codes][0] || null, cause_codes: [...codes], connection_error: connectionError,
+    preconnect_failure: preconnect };
+}
+
+export async function retryConnection(operation, { shouldStop = () => false, onRetry = () => {},
+  wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    if (shouldStop()) throw new Error('Conversation closed before the next connection attempt.');
+    try { return await operation(); }
+    catch (error) {
+      const diagnostic = connectionDiagnostic(error);
+      // Retry only failures known to precede a TCP connection. Replaying an
+      // arbitrary POST after a socket reset could duplicate a session or task.
+      if (attempt >= 2 || !diagnostic.preconnect_failure || shouldStop()) throw error;
+      onRetry({ ...diagnostic, attempt: attempt + 1 });
+      await wait(250 * (attempt + 1));
+    }
+  }
+}
 
 export const routingQuestions = [
   { name: 'route', type: 'choice', instructions: 'Classify the latest complete user intent using conversation context. recruiting means job application, interview, employment questions, or continuing that interview including questions for a human recruiter or engineer. haas means non-recruiting work, consultation or a task requiring human judgment/action. reception is only greetings or an unclear purpose. Never assess a person or suitability for employment.', choices: [{ value: 'recruiting' }, { value: 'haas' }, { value: 'reception' }] },
@@ -28,14 +80,25 @@ Output only a short speakable response (at most 160 Japanese characters or 80 En
 
 export class BusinessBackend {
   constructor({ client, mcpUrl, token, model = 'gpt-6.1-sol', emit = () => {}, remember = () => {} }) {
+    configureConnectionNetworking();
     Object.assign(this, { client, mcpUrl, token, model, emit, remember });
     this.sessions = new Map();
     this.closed = false;
   }
 
   async classify(input, previous) {
-    const decision = await this.client.decisions.create({ model: 'gpt-6-luna', questions: routingQuestions, input });
+    const decision = await this.request('decisions.create', () => this.client.decisions.create({ model: 'gpt-6-luna', questions: routingQuestions, input }));
     return readRouting(decision.answers, previous);
+  }
+
+  async request(operation, callback, shouldStop = () => this.closed) {
+    try {
+      return await retryConnection(callback, { shouldStop,
+        onRetry: (diagnostic) => this.remember({ type: 'provider_retry', operation, ...diagnostic }) });
+    } catch (error) {
+      this.remember({ type: 'provider_error', operation, ...connectionDiagnostic(error) });
+      throw error;
+    }
   }
 
   async run({ caseId, route, language, transcript, handoffs = [], source = 'delegation' }) {
@@ -54,8 +117,8 @@ export class BusinessBackend {
     let deadline;
     try {
       stream = state.id
-        ? this.client.beta.agents.sessions.stream(state.id, { input, idempotencyKey: randomUUID() })
-        : await this.client.beta.agents.sessions.create({
+        ? this.client.beta.agents.sessions.stream(state.id, { input, idempotencyKey: randomUUID() }, { maxRetries: 2 })
+        : await this.request('agents.create', () => this.client.beta.agents.sessions.create({
           environment: { type: 'openai_hosted' },
           agent: { model: this.model, instructions: instructions(route, caseId), reasoning: { effort: 'low' },
             tools: [{ type: 'mcp', server_label: 'human_bridge', connection_origin: 'service', required: true,
@@ -63,7 +126,7 @@ export class BusinessBackend {
               allowed_tools: ['get_interview_template', 'request_human', 'get_human_request', 'cancel_human_request'] }] },
           input, metadata: { app: 'future-company', case_id: caseId, role: route },
           stream: true,
-        });
+        }), () => this.closed || state.closing);
       state.stream = stream;
       stream.withResultCollection();
       deadline = setTimeout(() => {
@@ -88,13 +151,16 @@ export class BusinessBackend {
       // A completed turn can lack text. Read saved messages before declaring failure.
       let content = result.output_text;
       if (!content) {
-        const items = await this.client.beta.agents.sessions.items.list(state.id, { limit: 50 });
+        const items = await this.request('agents.items.list', () => this.client.beta.agents.sessions.items.list(state.id, { limit: 50 }));
         content = items.data.filter((item) => item.turn_id === state.turnId && item.type === 'message' && item.role === 'assistant')
           .flatMap((item) => item.content || []).filter((part) => part.type === 'output_text').map((part) => part.text).join('');
       }
       if (!content) throw new Error('Agent turn completed without a speakable result.');
       this.emit({ type: 'backend.result', case_id: caseId, route, language, source, content, session_id: state.id, turn_id: state.turnId });
       return content;
+    } catch (error) {
+      this.remember({ type: 'provider_error', operation: 'agents.turn', case_id: caseId, role: route, ...connectionDiagnostic(error) });
+      throw error;
     } finally {
       clearTimeout(deadline);
       state.active = false;
@@ -104,9 +170,9 @@ export class BusinessBackend {
   }
 
   async cancel(state) {
-    if (state.id && state.active) await this.client.beta.agents.sessions.events.create(state.id, {
+    if (state.id && state.active) await this.request('agents.cancel', () => this.client.beta.agents.sessions.events.create(state.id, {
       events: [{ type: 'agent.session.input.cancel' }],
-    }).catch(() => {});
+    }), () => false).catch(() => {});
   }
 
   async closeCase(caseId) {
@@ -122,7 +188,7 @@ export class BusinessBackend {
       if (state.id) {
         let removed = false;
         for (let attempt = 0; attempt < 3; attempt++) {
-          try { await this.client.beta.agents.sessions.delete(state.id); removed = true; break; }
+          try { await this.request('agents.delete', () => this.client.beta.agents.sessions.delete(state.id), () => false); removed = true; break; }
           catch (error) {
             if (error.status === 404) { removed = true; break; }
             if (error.status !== 409) break;
@@ -130,7 +196,7 @@ export class BusinessBackend {
           }
         }
         this.remember({ type: 'agent', id: state.id, cleanup: removed ? 'deleted' : 'pending' });
-        if (!removed) failures.push(state.id);
+        if (!removed) { failures.push(state.id); continue; }
       }
       this.sessions.delete(key);
     }

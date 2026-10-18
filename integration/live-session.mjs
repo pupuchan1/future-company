@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
-import { readRouting, routingQuestions } from './backend.mjs';
+import { configureConnectionNetworking, connectionDiagnostic, readRouting, routingQuestions } from './backend.mjs';
 import { historyTurns, voiceMap } from './case-state.mjs';
 
 export function liveConfig({ model = 'gpt-live-1', voice = 'shida', language = 'ja', decisions = true,
@@ -43,17 +43,21 @@ export class LiveConversation {
     this.lastInputId = null;
     this.ws = socketFactory(`wss://api.openai.com/v1/live/sessions/${encodeURIComponent(id)}/attach`, {
       headers: { Authorization: `Bearer ${apiKey}` }, handshakeTimeout: 15000,
+      autoSelectFamilyAttemptTimeout: configureConnectionNetworking(),
     });
     this.ready = new Promise((resolve, reject) => {
       this.ws.once('open', resolve);
-      this.ws.once('error', () => reject(new Error('Live sideband connection failed.')));
+      this.ws.once('error', (cause) => reject(new Error('Live sideband connection failed.', { cause })));
       this.ws.once('close', () => reject(new Error('Live sideband closed before becoming ready.')));
     });
     this.ws.on('message', (bytes) => {
       try { this.handle(JSON.parse(bytes.toString())); }
       catch { this.emit({ type: 'backend.error', case_id: this.caseId, message: 'Live event processing failed.' }); }
     });
-    this.ws.on('error', () => this.emit({ type: 'backend.error', case_id: this.caseId, message: 'Live sideband disconnected.' }));
+    this.ws.on('error', (error) => {
+      this.remember({ type: 'provider_error', operation: 'live.sideband', id: this.id, ...connectionDiagnostic(error) });
+      this.emit({ type: 'backend.error', case_id: this.caseId, session_id: this.id, message: 'Live sideband disconnected.' });
+    });
     this.ws.on('close', () => { if (!this.closed) void this.close(); });
     this.expiry = setTimeout(() => void this.close(), 15 * 60 * 1000);
     this.expiry.unref?.();
@@ -172,7 +176,11 @@ export class LiveConversation {
       this.send('session.commentary.append', { delegation_id: delegationId, content: content.slice(0, 700) });
     }).catch((error) => {
       if (this.closed) return;
-      this.emit({ type: 'backend.error', case_id: this.caseId, message: error.status ? `Provider HTTP ${error.status}` : error.message.slice(0, 180) });
+      const diagnostic = connectionDiagnostic(error);
+      this.remember?.({ type: 'provider_error', operation: 'live.delegation', id: this.id, ...diagnostic });
+      this.emit({ type: 'backend.error', case_id: this.caseId, session_id: this.id,
+        message: error.status ? `Provider HTTP ${error.status}` : diagnostic.connection_error
+          ? 'Provider connection failed after bounded retry.' : error.message.slice(0, 180) });
       this.send('session.commentary.append', { delegation_id: delegationId, content: this.routing.language === 'en'
         ? 'The backend could not complete this request. No successful human connection has been confirmed.'
         : '担当の処理を完了できませんでした。人間への接続が成功したとは確認できていません。' });

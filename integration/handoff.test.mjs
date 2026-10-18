@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
+import OpenAI from 'openai';
 import { createIntegration } from './server.mjs';
 import { createCaseState, initialHistory, voiceMap } from './case-state.mjs';
 import { LiveConversation } from './live-session.mjs';
@@ -86,8 +87,11 @@ async function fixture(t, { create, handoffTimeoutMs = 30000 } = {}) {
 }
 
 test('provider connection failures return 502 and store only allowlisted diagnostic metadata', async (t) => {
-  const f = await fixture(t, { create: () => { throw Object.assign(new Error('private input and credential must not be logged'),
-    { name: 'APIConnectionError', cause: { code: 'ENOTFOUND', message: 'private host details' } }); } });
+  const f = await fixture(t, { create: () => { throw new OpenAI.APIConnectionError({
+    cause: new TypeError('private input and credential must not be logged', {
+      cause: new AggregateError([Object.assign(new Error('private host details'), { code: 'ENOTFOUND' })]),
+    }),
+  }); } });
   const response = await f.start();
   assert.equal(response.status, 502);
   assert.match(response.body.error, /Provider connection failed/);
@@ -95,6 +99,7 @@ test('provider connection failures return 502 and store only allowlisted diagnos
   const entry = JSON.parse(lines.trim());
   assert.equal(entry.name, 'APIConnectionError');
   assert.equal(entry.cause_code, 'ENOTFOUND');
+  assert.equal(f.creates.length, 3);
   assert.doesNotMatch(lines, /private|credential/);
   assert.equal((await f.api('/api/status')).status, 200);
 });
