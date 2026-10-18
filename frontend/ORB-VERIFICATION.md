@@ -21,14 +21,16 @@ deltas, not speech-start/stop or output-playback-completed events. Therefore:
 
 ## Verification (2026-10-18)
 
-- Frontend tests on the initial integration snapshot: 76 passed, including accepted-input → waiting → actual output,
+- Frontend tests on the final branch: 74 passed, including accepted-input → waiting → actual output,
   short gaps, simultaneous speech/interruption, mute, blocked playback, duplicate
   transcript, stale session and late callback after stop.
 - TypeScript and production frontend build: passed (existing large Orb chunk
   warning remains).
 - Built-in browser at `/voice-effects.html`: synthetic PCM input changes the
   sphere with the input label; synthetic PCM output shows the assistant label;
-  waiting shows a distinct pending label and dotted pulse. Screenshots captured.
+  waiting shows a distinct pending label and dotted pulse. Screenshots captured
+  before the final interior-gain adjustment; that adjustment has unit coverage
+  and a passing production build, but its visual readback is pending.
 - Official `elevenlabs/Orb.tsx`: no changes in this branch.
 
 ## Outstanding acceptance
