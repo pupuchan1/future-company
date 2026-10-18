@@ -143,6 +143,19 @@ Access認証済みブラウザから案件作成201、面談送信200、社員�
 
 統合ブランチではPR #4の `integration/` と本PRのWorkerを同じcheckoutへ取り込んでいます。ルートの `npm run dev` はNode 4320・Worker 8787・React 5173を起動し、Reactのproxyが音声/status/SSEと案件APIの経路を分けます。ローカルD1は `npm run db:migrate:local` で初期化します。
 
-画面の入口は共通音声受付の一つのみです。FE側では用件を推測せず、Node側のDecisions/委譲結果から担当・処理・人間への依頼を表示します。Node case/handoffとWorker case/requestのID対応および認証付きの結果返却adapterは、このコード取り込みだけでは完成していません。
+画面の入口は共通音声受付の一つのみです。FE側では用件を推測せず、Node側のDecisions/委譲結果から担当・処理・人間への依頼を表示します。以下の追加統合で、Node case/handoffとWorker case/requestのID対応および認証付きの結果返却adapterを接続しました。
 
 起動確認ではReact origin経由の `/api/status`、`/api/v1/company`、案件作成201とowner cookieによる再取得200を確認しました。異なるOriginの音声APIは403を維持します。キー未設定の音声開始は無効で、模擬発話を表示しません。
+
+
+### BEレビュー追加統合（2026-10-18、Issue #52 / #53）
+
+PR #44のWorker bridge・Node ingress・保存済み回答キャッシュ（上流35c79afまで）、PR #4のネットワーク再試行・切断診断（e9d8f7aまで）、PR #39のHaaS skill選択・無関係な回答除外・配送前再試行・取消確認・回答なし完了通知を取り込みました。案件proofとowner cookieを検証し、回答revision・言語・simulatedを保持して元Agentsへ渡し、Liveへ返す経路を接続しています。
+
+統合時の予約応答紛失の回復不具合は32ea05bで修正しました。同じWorkerBridgeはcase/handoff単位で予約IDを保持し、別Nodeは別UUIDを使います。DO保存後にHTTP応答を失う試験でも、同じIDで再同期して1回だけ配信できます。Agent呼出し後の曖昧な失敗は自動再配信しません。
+
+relay（605aad4）とdemo gateway（b53f62f）の成果物もdeploymentへ取り込みました。配信コードの準備であり、この統合作業では公開デプロイ・トンネル起動・Access変更を行っていません。設定と手順はdocs/worker-result-bridge.md、deployment/README.mdを参照してください。
+
+統合検証時点のNode integration 74件、Worker 77件（Node 46 + Bun 31）、relay/gateway 20件、計171件が成功。実Worker・DO・D1のbridge試験は9件で、2つのNodeの配信排他と予約保存後の応答紛失を含みます。型検査、Worker/Reactビルド、deploymentの型検査・bundleも成功しました。外部AI/MCPは試験用の代替接続です。
+
+ローカル再起動後はlive_configured / mcp_configured / worker_bridge_configuredがすべてfalseです。設定なしでは接続準備中として表示します。実音声・実人間回答・電話・公開環境の一連動作は未確認です。GPT Live 1.1の正式model IDも未確定のため推測で変更していません。過去の試験環境・別担当による実機記録は、その確認範囲のまま扱います。
