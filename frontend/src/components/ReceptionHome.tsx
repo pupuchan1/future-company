@@ -72,7 +72,7 @@ export function ReceptionIntro({ language }: Props) {
   return (
     <div className="reception-intro haas-intro">
       <p className="eyebrow">{c.eyebrow}</p>
-      <h1 lang="en" className="haas-headline-concept"><span>H</span>uman <span>a</span>s<br /><span>a</span> <span>S</span>ervice.</h1>
+      <h1 lang="en" className="haas-headline-concept"><span>H</span>uman <span>a</span>s <span>a</span> <span>S</span>ervice.</h1>
       <p className="hero-description">{c.introduction}</p>
     </div>
   );
