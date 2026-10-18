@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createProductionVoiceProxy } from './worker-proxy.mjs';
-import { createProductionRelay } from './relay.mjs';
+import { createProductionRelay, filterStatus } from './relay.mjs';
 import { MAX_BODY_BYTES, signRelayRequest } from './protocol.mjs';
 import { createHumanGateway } from '../integration/human/gateway.mjs';
 import { mcpCall } from '../integration/mcp-client.mjs';
@@ -20,6 +20,12 @@ async function listen(server) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 async function fixture(t, options = {}) {
   const calls = [];
   const upstream = createServer(async (req, res) => {
@@ -33,7 +39,7 @@ async function fixture(t, options = {}) {
     assert.equal(req.headers['x-forwarded-for'], undefined);
     assert.equal(req.headers['x-future-signature'], undefined);
     if (req.url === '/api/status') return reply(res, 200, {
-      live_configured: true, mcp_configured: true, decisions_enabled: true, handoff_configured: true,
+      live_configured: true, mcp_configured: true, decisions_enabled: true, handoff_configured: true, prewarm_configured: true,
       recruiting_human_transport: 'slack', slack_configured: true, slack_replies_configured: true,
       voice_map: { reception: 'shida', recruiting: 'harema' }, internal_secret: 'must-not-escape',
       requests: [{ case_id: 'case-a', device_id: 'phone-a', summary: 'ours' }, { case_id: 'case-b', device_id: 'phone-b', summary: 'private' }],
@@ -56,7 +62,16 @@ async function fixture(t, options = {}) {
     if (req.url === '/api/live/session') return reply(res, 200, { case_id: data.case_id, session: { id: `live-${data.case_id}` }, transport: { sdp: 'v=0\nanswer' } });
     if (req.url === '/api/worker/results') return reply(res, 202, { accepted: true });
     if (req.url.endsWith('/handoff')) return reply(res, 200, { case_id: data.case_id, session: { id: `next-${data.case_id}` }, old_session_id: `live-${data.case_id}`, handoff_token: 'fake-ticket', transport: { sdp: 'v=0\nanswer' } });
-    if (req.url.endsWith('/activate')) return reply(res, 200, { case_id: data.case_id, session: { id: `next-${data.case_id}` }, active: true });
+    if (req.url.endsWith('/activate')) {
+      await options.beforeActivate?.();
+      return reply(res, options.activationStatus ?? 200, { case_id: data.case_id, session: { id: `next-${data.case_id}` },
+        old_session_id: `live-${data.case_id}`, active: true, ...options.activationValues });
+    }
+    if (req.url.endsWith('/language')) {
+      await options.beforeLanguage?.();
+      return reply(res, 200, { case_id: data.case_id, session: { id: req.url.split('/')[4] },
+        language: data.language, language_preference: data.language_preference });
+    }
     if (req.method === 'DELETE') return reply(res, 200, { closed: true });
     if (req.url === '/mcp') return reply(res, 200, { jsonrpc: '2.0', id: 1, result: { ok: true } });
     return reply(res, 404, { error: 'missing' });
@@ -153,6 +168,9 @@ test('status and fragmented SSE expose only the authorized case', async (t) => {
   assert.equal(status.recruiting_human_transport, 'slack');
   assert.equal(status.slack_configured, true);
   assert.equal(status.slack_replies_configured, true);
+  assert.equal(status.prewarm_configured, true);
+  assert.equal(filterStatus({ handoff_configured: true }, 'case-a').prewarm_configured, false);
+  assert.equal(filterStatus({ prewarm_configured: 'true' }, 'case-a').prewarm_configured, false);
   assert.deepEqual(status.requests.map((item) => item.case_id), ['case-a']);
   assert.deepEqual(status.devices, [{ device_id: 'phone-a', online: true, simulated: true }]);
   const response = await f.browser('case-a', '/events');
@@ -169,8 +187,10 @@ test('voice ownership survives a handoff and rejects foreign IDs and IDs after r
   const f = await fixture(t);
   await (await f.browser('case-a', '/session', { method: 'POST', data: { sdp: 'v=0' } })).json();
   assert.equal((await f.browser('case-b', '/session/live-case-a', { method: 'DELETE' })).status, 404);
-  const handoff = await f.browser('case-a', '/session/live-case-a/handoff', { method: 'POST', data: { sdp: 'v=0', case_proof: 'still-preserved', route: 'haas' } });
+  const handoff = await f.browser('case-a', '/session/live-case-a/handoff', { method: 'POST', data: { sdp: 'v=0', case_proof: 'still-preserved', route: 'haas', automatic: true, prewarm: true } });
   assert.equal((await handoff.json()).session.id, 'next-case-a');
+  assert.equal(f.calls.at(-1).data.prewarm, true);
+  assert.equal(f.calls.at(-1).data.automatic, true);
   assert.equal((await f.browser('case-a', '/session/next-case-a/activate', { method: 'POST', data: { handoff_token: 'fake-ticket' } })).status, 200);
   assert.equal((await f.browser('case-a', '/session/next-case-a', { method: 'DELETE' })).status, 200);
   assert.equal((await f.browser('case-a', '/session/next-case-a', { method: 'DELETE' })).status, 404);
@@ -182,6 +202,93 @@ test('voice ownership survives a handoff and rejects foreign IDs and IDs after r
   const before = f.calls.length;
   assert.equal((await fetch(`${origin}${path}`, { method: 'DELETE', headers })).status, 404);
   assert.equal(f.calls.length, before);
+});
+
+test('confirmed activation retires only the old binding and remains safe to retry', async (t) => {
+  const f = await fixture(t);
+  for (const caseId of ['case-a', 'case-b']) {
+    assert.equal((await f.browser(caseId, '/session', { method: 'POST', data: { sdp: 'v=0' } })).status, 200);
+  }
+  assert.equal((await f.browser('case-a', '/session/live-case-a/handoff', { method: 'POST', data: { sdp: 'v=0', route: 'haas' } })).status, 200);
+  for (let retry = 0; retry < 2; retry++) {
+    assert.equal((await f.browser('case-a', '/session/next-case-a/activate', { method: 'POST', data: { handoff_token: 'fake-ticket' } })).status, 200);
+  }
+  const before = f.calls.length;
+  assert.equal((await f.browser('case-a', '/session/live-case-a', { method: 'DELETE' })).status, 404);
+  assert.equal((await f.browser('case-b', '/session/next-case-a', { method: 'DELETE' })).status, 404);
+  assert.equal(f.calls.length, before, 'Retired/foreign bindings cannot reach Node');
+  assert.equal((await f.browser('case-b', '/session/live-case-b', { method: 'DELETE' })).status, 200);
+  assert.equal((await f.browser('case-a', '/session/next-case-a', { method: 'DELETE' })).status, 200);
+});
+
+test('failed or incomplete activation evidence preserves old, candidate and foreign bindings', async (t) => {
+  const options = {};
+  const f = await fixture(t, options);
+  for (const caseId of ['case-a', 'case-b']) await f.browser(caseId, '/session', { method: 'POST', data: { sdp: 'v=0' } });
+  await f.browser('case-a', '/session/live-case-a/handoff', { method: 'POST', data: { sdp: 'v=0', route: 'haas' } });
+  for (const [status, values] of [
+    [409, {}], [200, { active: false }], [200, { old_session_id: undefined }],
+    [200, { old_session_id: 'next-case-a' }], [200, { old_session_id: 'live-case-b' }],
+  ]) {
+    options.activationStatus = status; options.activationValues = values;
+    assert.equal((await f.browser('case-a', '/session/next-case-a/activate', { method: 'POST', data: { handoff_token: 'fake-ticket' } })).status, status);
+    for (const [caseId, id] of [['case-a', 'live-case-a'], ['case-a', 'next-case-a'], ['case-b', 'live-case-b']]) {
+      assert.equal((await f.browser(caseId, `/session/${id}/language`, { method: 'POST', data: { language: 'ja', language_preference: 'ja' } })).status, 200);
+    }
+  }
+});
+
+test('completed handoffs release capacity after 128 calls instead of rejecting the next caller', async (t) => {
+  const f = await fixture(t);
+  for (let index = 0; index < 128; index++) {
+    const caseId = `case-finished-${index}`;
+    assert.equal((await f.browser(caseId, '/session', { method: 'POST', data: { sdp: 'v=0' } })).status, 200);
+    assert.equal((await f.browser(caseId, `/session/live-${caseId}/handoff`, { method: 'POST', data: { sdp: 'v=0', route: 'haas' } })).status, 200);
+    assert.equal((await f.browser(caseId, `/session/next-${caseId}/activate`, { method: 'POST', data: { handoff_token: 'fake-ticket' } })).status, 200);
+    assert.equal((await f.browser(caseId, `/session/next-${caseId}`, { method: 'DELETE' })).status, 200);
+  }
+  assert.equal((await f.browser('case-new', '/session', { method: 'POST', data: { sdp: 'v=0' } })).status, 200);
+});
+
+test('128 currently registered sessions still enforce the relay limit until one closes', async (t) => {
+  const f = await fixture(t);
+  for (let index = 0; index < 128; index++) {
+    assert.equal((await f.browser(`case-active-${index}`, '/session', { method: 'POST', data: { sdp: 'v=0' } })).status, 200);
+  }
+  const full = await f.browser('case-overflow', '/session', { method: 'POST', data: { sdp: 'v=0' } });
+  assert.equal(full.status, 503);
+  assert.equal((await full.json()).error, 'relay_session_limit');
+  assert.equal((await f.browser('case-active-0', '/session/live-case-active-0', { method: 'DELETE' })).status, 200);
+  assert.equal((await f.browser('case-overflow', '/session', { method: 'POST', data: { sdp: 'v=0' } })).status, 200);
+});
+
+test('a delayed language reply cannot recreate a retired old binding after activation', async (t) => {
+  const arrived = deferred(), release = deferred();
+  const f = await fixture(t, { beforeLanguage: async () => { arrived.resolve(); await release.promise; } });
+  await f.browser('case-a', '/session', { method: 'POST', data: { sdp: 'v=0' } });
+  await f.browser('case-a', '/session/live-case-a/handoff', { method: 'POST', data: { sdp: 'v=0', route: 'haas' } });
+  const pending = f.browser('case-a', '/session/live-case-a/language', { method: 'POST', data: { language: 'ja', language_preference: 'ja' } });
+  try {
+    await arrived.promise;
+    assert.equal((await f.browser('case-a', '/session/next-case-a/activate', { method: 'POST', data: { handoff_token: 'fake-ticket' } })).status, 200);
+  } finally { release.resolve(); }
+  assert.equal((await pending).status, 200);
+  assert.equal((await f.browser('case-a', '/session/live-case-a', { method: 'DELETE' })).status, 404);
+  assert.equal((await f.browser('case-a', '/session/next-case-a', { method: 'DELETE' })).status, 200);
+});
+
+test('a delayed activation reply cannot recreate a candidate already closed by Stop', async (t) => {
+  const arrived = deferred(), release = deferred();
+  const f = await fixture(t, { beforeActivate: async () => { arrived.resolve(); await release.promise; } });
+  await f.browser('case-a', '/session', { method: 'POST', data: { sdp: 'v=0' } });
+  await f.browser('case-a', '/session/live-case-a/handoff', { method: 'POST', data: { sdp: 'v=0', route: 'haas' } });
+  const pending = f.browser('case-a', '/session/next-case-a/activate', { method: 'POST', data: { handoff_token: 'fake-ticket' } });
+  try {
+    await arrived.promise;
+    assert.equal((await f.browser('case-a', '/session/next-case-a', { method: 'DELETE' })).status, 200);
+  } finally { release.resolve(); }
+  assert.equal((await pending).status, 200);
+  assert.equal((await f.browser('case-a', '/session/next-case-a', { method: 'DELETE' })).status, 404);
 });
 
 test('HMAC rejects replay, expiration, path and body tampering; a new nonce permits safe retry', async (t) => {
