@@ -105,13 +105,15 @@ bun run build
 
 試験中の社員トークンはメモリ内で生成し、保存やログ出力をしない。外部providerへのfetchはテストで遮断する。模擬の社員回答は接続試験データであり、実在する社員の回答・実AI再開・実機通話の証拠ではない。応募者の`locale: en`と人間の回答言語`ja`は別に保存し、回答を英語へ翻訳した事実は主張しない。
 
-2026-10-18の最終確認で、test全58件・typecheck・buildが成功。Nodeのworkerd試験30件、Bun試験28件。ローカルmigrationも適用済み。実Worker入口で、英語の応募者が開発環境を質問し、日本語の明示模擬回答を同じcase/requestへ保存し、D1一覧に本文・言語`ja`・`simulated: true`が残ることを確認した。`ai.resume_pending`までで、元AIの英語説明は未確認。
+2026-10-18、最終ソース`d93780a`は親チャットの実行記録でtest全59件・build成功、追加修正担当の記録でtypecheck成功を確認。Nodeのworkerd試験31件、Bun試験28件。ローカルmigrationも適用済み。実Worker入口で、英語の応募者が開発環境を質問し、日本語の明示模擬回答を同じcase/requestへ保存し、D1一覧に本文・言語`ja`・`simulated: true`が残ることを確認した。`ai.resume_pending`までで、元AIの英語説明は未確認。
 
 Viteも実起動してcompany取得、採用送信と再送、D1のrevision=1・依頼1件・本人申告区分を確認した。ローカルDBに`connection-test-task3`の模擬面談が残る。devサーバーは終了済み。API試験で一度ECONNRESETを観測したが、単体と最終全体試験は成功し、原因は未確定。実OpenAI、React画面からの操作、ChatGPT Workイベント、黒電話は未検証。試験デプロイの状況は次節に記載する。
 
 ## Access付き試験環境
 
-2026-10-18、ユーザー承認のもと親チャットがR74 accountへ`cf deploy --prebuilt`で[試験デプロイ](https://future-company-demo.r74.workers.dev)を実施。既存Viteビルドを`.local/cf-demo`のBuild Outputへ変換して使用した。配信中ソースは`250bab2`、Worker versionは`6392eed1-c66e-4b6a-8a05-10471640069b`。後続コミット`d93780a`の修正はこのversionに含まれない。
+2026-10-18、ユーザー承認のもと親チャットがR74 accountへ`cf deploy --prebuilt`で[試験デプロイ](https://future-company-demo.r74.workers.dev)を実施。既存Viteビルドを`.local/cf-demo`のBuild Outputへ変換して使用した。初回ソースは`250bab2`、Worker versionは`6392eed1-c66e-4b6a-8a05-10471640069b`。
+
+最終ソースは`d93780a`、Worker versionは`355f3741-8bf9-492d-9b9d-649bdd2f708c`、deploymentは`81272ce7-db68-4ad4-9562-d9f18a698815`。親チャットが`cf workers deployments list`でsource=`cf_cli`・100%配信・annotation=`d93780a`を確認済み。URLとAccess制限は初回と同じ。
 
 - D1は`future-company-demo`、IDは`5c48aef5-7f4a-4400-8822-a2ef79bf9eaa`。`0001_company.sql`と`0002_mcp_events.sql`の適用をremoteの`d1_migrations`で確認した。
 - Access appは`16f3252e-f749-41f8-91d4-323c91bb7e0a`。対象ホスト全体の`self_hosted`で、本人メール1件だけをallowする。未認証`GET /api/v1/company`がHTTP302で`r74.cloudflareaccess.com`へ転送されることを確認した。
