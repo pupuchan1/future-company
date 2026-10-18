@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { SILENT_SIGNAL, VoiceActivityStore } from './activity.ts'
 import type { AudioSignal, VoiceActivitySource } from './activity.ts'
+import { OfficialOrbView } from './OfficialOrbView.tsx'
 import { animateOrb } from './orb-renderer.ts'
 import './voice-orb.css'
 
@@ -22,7 +23,7 @@ function OrbArt({ input, output }: { input: AudioSignal; output: AudioSignal }) 
     if (canvas.current) return animateOrb(canvas.current, () => signals.current)
   }, [])
   return <div className="voice-orb-art" data-input={input.active} data-output={output.active} aria-hidden="true">
-    <div className="voice-orb-fallback" />
+    <OfficialOrbView input={input} output={output} />
     <canvas ref={canvas} className="voice-orb-canvas" />
   </div>
 }
