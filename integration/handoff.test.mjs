@@ -570,3 +570,29 @@ test('recruiting MCP arrival and consultation share a Slack thread; explicit rep
   assert.equal(saved.status, 'completed'); assert.equal(saved.simulated, false); assert.equal(saved.result_source, 'slack_thread');
   await f.app.slack.pollOnce(); assert.equal(f.runs.length, 1);
 });
+
+test('interview report requires latest caller end request and sends only once through MCP', async t => {
+  const posts = [];
+  const f = await fixture(t, { extraEnv: { SLACK_BOT_TOKEN: 'fixture-bot', SLACK_CHANNEL_ID: 'C123' },
+    slackFetch: async (_url, options) => {
+      posts.push(JSON.parse(options.body));
+      return Response.json({ ok: true, channel: 'C123', ts: '100.000001' });
+    } });
+  const started = await f.start('recruiting');
+  const socket = f.sockets.get(started.body.session.id);
+  const url = `http://127.0.0.1:${f.app.server.address().port}/mcp`;
+  const input = { case_id: 'case-switch', applicant_summary: 'React経験', interview_summary: '予約画面の開発について話しました。', next_actions: ['採用担当が内容を確認する'] };
+  const report = () => mcpCall(url, 'local-handoff-test-token', 'complete_interview', input);
+  socket.receive({ type: 'session.output_transcript.delta', event_id: 'ai-end', delta: '面接終了してください。' });
+  assert.equal((await report()).error, 'interview_end_not_requested');
+  socket.receive({ type: 'session.input_transcript.delta', event_id: 'user-end', delta: '面接終了してください。' });
+  assert.equal((await report()).notification_status, 'sent');
+  assert.equal((await report()).notification_status, 'sent');
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].thread_ts, undefined);
+  assert.equal(f.app.gateway.service.listRequests().length, 0);
+  socket.receive({ type: 'session.output_transcript.delta', event_id: 'ai-thanks', delta: 'ありがとうございます。' });
+  socket.receive({ type: 'session.input_transcript.delta', event_id: 'new-topic', delta: 'まだ面接を続けたいです。' });
+  assert.equal((await report()).error, 'interview_end_not_requested');
+  assert.equal(posts.length, 1);
+});

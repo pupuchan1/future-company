@@ -10,6 +10,7 @@ export function createSlackHumanTransport({ botToken = '', userToken = '', chann
   const threads = new Map();
   const caseQueues = new Map();
   const notifications = new Map();
+  const interviewReports = new Map();
   const introControllers = new Map();
   const replyToken = userToken || botToken;
   let closed = false;
@@ -37,16 +38,16 @@ export function createSlackHumanTransport({ botToken = '', userToken = '', chann
   }
   function alive(entry) { return !closed && !entry.controller.signal.aborted && entry.hooks.isActive(); }
   function remove(entry) { pending.delete(entry.record.handoff_id); entry.controller.abort(); }
-  async function postCase(caseId, payload, signal) {
+  async function postCase(caseId, payload, signal, independent = false) {
     const task = (caseQueues.get(caseId) || Promise.resolve()).catch(() => {}).then(async () => {
       if (closed || signal.aborted) throw Object.assign(new Error(), { safeCode: 'slack_cancelled' });
-      const prior = threads.get(caseId);
+      const prior = independent ? null : threads.get(caseId);
       const posted = await api('chat.postMessage', { channel: channelId, ...payload,
         ...(prior ? { thread_ts: prior } : {}), mrkdwn: false, parse: 'none', unfurl_links: false, unfurl_media: false }, botToken || userToken, signal);
       if (closed || signal.aborted) throw Object.assign(new Error(), { safeCode: 'slack_cancelled' });
       if (posted.channel !== channelId || !/^\d+\.\d+$/.test(posted.ts || '')) throw Object.assign(new Error(), { safeCode: 'slack_delivery_unknown' });
       const root = prior || posted.ts;
-      threads.set(caseId, root);
+      if (!independent) threads.set(caseId, root);
       return { posted, root };
     });
     caseQueues.set(caseId, task);
@@ -87,6 +88,34 @@ export function createSlackHumanTransport({ botToken = '', userToken = '', chann
   timer.unref?.();
   return {
     configured, repliesConfigured: configured && Boolean(replyToken), pollOnce,
+    completeInterview(input, { isActive = () => true } = {}) {
+      if (interviewReports.has(input.case_id)) return interviewReports.get(input.case_id);
+      if (interviewReports.size >= 1000) return Promise.resolve({ notification_status: 'unavailable', error: 'capacity_reached' });
+      const controller = new AbortController();
+      introControllers.set(`report:${input.case_id}`, controller);
+      const result = (async () => {
+        const base = { case_id: input.case_id, transport: 'slack', kind: 'interview_completed', simulated: false };
+        if (!configured || closed || !isActive()) return { ...base, notification_status: 'unavailable', error: 'slack_unconfigured_or_inactive' };
+        const sections = [
+          `相談者について（本人のお話）\n${input.applicant_summary || '氏名・経歴はまだ伺っていません。'}`,
+          `面接の要点\n${input.interview_summary}`,
+          `次に対応してほしいこと\n${input.next_actions.length ? input.next_actions.map(item => `・${item}`).join('\n') : '面接内容をご確認ください。'}`,
+        ];
+        try {
+          const { root } = await postCase(input.case_id, {
+            text: ['面接が終了しました', ...sections].map(escapeText).join('\n'),
+            blocks: [{ type: 'header', text: { type: 'plain_text', text: '面接が終了しました', emoji: false } },
+              { type: 'context', elements: [{ type: 'mrkdwn', text: '<!here> 採用担当の方、面接内容の確認をお願いします。' }] },
+              ...sections.map(text => ({ type: 'section', text: { type: 'plain_text', text: text.slice(0, 2900), emoji: false } })),
+              { type: 'context', elements: [{ type: 'plain_text', text: `本人の終了希望により共有しました。\n案件: ${input.case_id}`, emoji: false }] }],
+          }, controller.signal, true);
+          return { ...base, notification_status: isActive() ? 'sent' : 'cancelled', slack_thread_ts: root };
+        } catch (error) { return { ...base, notification_status: 'unavailable', error: error.safeCode || 'slack_delivery_unknown' }; }
+        finally { introControllers.delete(`report:${input.case_id}`); }
+      })();
+      interviewReports.set(input.case_id, result);
+      return result;
+    },
     notifyRecruiter(input, { isActive = () => true } = {}) {
       if (notifications.has(input.case_id)) return notifications.get(input.case_id);
       if (notifications.size >= 1000) return Promise.resolve({ transport: 'slack', notification_status: 'unavailable', error: 'capacity_reached' });
@@ -146,6 +175,7 @@ export function createSlackHumanTransport({ botToken = '', userToken = '', chann
     },
     closeCase(caseId) {
       introControllers.get(caseId)?.abort();
+      introControllers.get(`report:${caseId}`)?.abort();
       for (const entry of pending.values()) if (entry.record.case_id === caseId) remove(entry);
     },
     close() { closed = true; clearInterval(timer); for (const controller of introControllers.values()) controller.abort(); for (const entry of pending.values()) entry.controller.abort(); pending.clear(); },

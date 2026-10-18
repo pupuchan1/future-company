@@ -83,6 +83,22 @@ test('arrival notification is once per case, separate from human requests, and o
   f.service.requestHuman(args); await tick();
   assert.equal(f.calls.length, 2); assert.equal(JSON.parse(f.calls[1].request.body).thread_ts, '100.000001');
 });
+test('interview completion is separate from arrival, idempotent and mentions on a root message', async t => {
+  const f = fixture(t);
+  await f.slack.notifyRecruiter({ case_id: args.case_id });
+  const input = { case_id: args.case_id, applicant_summary: '予約画面を開発。', interview_summary: '<!channel> 入力エラー表示を工夫。', next_actions: ['本人の希望職種を確認する。'] };
+  const first = await f.slack.completeInterview(input);
+  assert.equal(first.notification_status, 'sent');
+  assert.deepEqual(await f.slack.completeInterview(input), first);
+  assert.equal(f.calls.length, 2);
+  const body = JSON.parse(f.calls[1].request.body);
+  assert.equal(body.thread_ts, undefined);
+  assert.equal(body.blocks[0].text.text, '面接が終了しました');
+  assert.equal(body.blocks[1].elements[0].text.startsWith('<!here>'), true);
+  assert.equal(body.blocks[3].text.type, 'plain_text');
+  assert.ok(!body.text.includes('<!channel>'));
+  assert.equal(f.events.length, 0);
+});
 test('missing history scope cannot manufacture a human answer', async t => {
   const f = fixture(t); const record = f.service.requestHuman(args); await tick();
   f.read(async () => Response.json({ ok: false, error: 'missing_scope', needed: 'private-detail' }));
