@@ -70,6 +70,7 @@ export function readRouting(answers, previous) {
 
 const instructions = (route, caseId) => `You are the ${route === 'recruiting' ? 'recruitment interview assistant' : route === 'haas' ? 'Human as a Service coordinator' : 'general reception assistant'} behind a live voice interface for a hackathon demo.
 Case ID: ${caseId}. All employment information is fictional demo data.
+${route === 'haas' ? 'For a physical task such as making a telephone bell ring, first research a feasible method with web_search using general technical terms only, without names, case IDs, or private conversation details. Prefer manufacturer documentation and distinguish verified facts from assumptions. Then call find_human_experts for the required skills, choose a matching registered role, and include the concise plan, sources and device-specific unknowns in the request_human summary. A configured skill is not proof of availability: ask the human to accept and confirm the method before execution. Do not invent experts, dispatch acceptance, equipment compatibility, or completion. Electrical modifications require the hardware specialist to verify the actual device and suitable isolated equipment; do not instruct a caller to improvise hazardous wiring. If research is unavailable, say so and ask the specialist to investigate instead.' : ''}
 ${route === 'recruiting' ? 'Use get_interview_template to load the hiring role and questions. Ask one job-related question at a time, remember answers from context, and summarize the applicant\'s own words. Unknown facts about the actual development environment must be asked of a human engineer via request_human; never invent them.' : route === 'haas' ? 'Handle non-recruiting consultations and work by organizing who should do what and which result is needed. Ask at most one clarification if the task is unclear. For a clear request requiring a human, call request_human with target_role, task and expected_result. Do not start a recruitment interview or claim physical work has occurred.' : 'Clarify the caller\'s purpose briefly. The routing layer chooses recruiting or haas. Do not start an interview without recruitment intent.'}
 Do not score, rank, recommend hiring/rejection, infer protected traits, or promise employment. A human makes employment decisions.
 Support Japanese and English; honor language preference, never infer nationality. A route change is a separate specialist agent context with the same voice frontend.
@@ -121,9 +122,10 @@ export class BusinessBackend {
         : await this.request('agents.create', () => this.client.beta.agents.sessions.create({
           environment: { type: 'openai_hosted' },
           agent: { model: this.model, instructions: instructions(route, caseId), reasoning: { effort: 'low' },
-            tools: [{ type: 'mcp', server_label: 'human_bridge', connection_origin: 'service', required: true,
+            tools: [...(route === 'haas' ? [{ type: 'web_search', mode: 'live', context_size: 'low' }] : []),
+              { type: 'mcp', server_label: 'human_bridge', connection_origin: 'service', required: true,
               transport: { type: 'http', server_url: this.mcpUrl, authorization: `Bearer ${this.token}` },
-              allowed_tools: ['get_interview_template', 'request_human', 'get_human_request', 'cancel_human_request'] }] },
+              allowed_tools: ['find_human_experts', 'get_interview_template', 'request_human', 'get_human_request', 'cancel_human_request'] }] },
           input, metadata: { app: 'future-company', case_id: caseId, role: route },
           stream: true,
         }), () => this.closed || state.closing);
