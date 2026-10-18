@@ -113,20 +113,26 @@ Viteも実起動してcompany取得、採用送信と再送、D1のrevision=1・
 
 2026-10-18、ユーザー承認のもと親チャットがR74 accountへ`cf deploy --prebuilt`で[試験デプロイ](https://future-company-demo.r74.workers.dev)を実施。既存Viteビルドを`.local/cf-demo`のBuild Outputへ変換して使用した。初回ソースは`250bab2`、Worker versionは`6392eed1-c66e-4b6a-8a05-10471640069b`。
 
-最終ソースは`d93780a`、Worker versionは`355f3741-8bf9-492d-9b9d-649bdd2f708c`、deploymentは`81272ce7-db68-4ad4-9562-d9f18a698815`。親チャットが`cf workers deployments list`でsource=`cf_cli`・100%配信・annotation=`d93780a`を確認済み。URLとAccess制限は初回と同じ。
+バックエンド単体の更新ソースは`d93780a`、Worker versionは`355f3741-8bf9-492d-9b9d-649bdd2f708c`、deploymentは`81272ce7-db68-4ad4-9562-d9f18a698815`。親チャットが`cf workers deployments list`でsource=`cf_cli`・100%配信・annotation=`d93780a`を確認済み。URLとAccess制限は初回と同じ。
 
 - D1は`future-company-demo`、IDは`5c48aef5-7f4a-4400-8822-a2ef79bf9eaa`。`0001_company.sql`と`0002_mcp_events.sql`の適用をremoteの`d1_migrations`で確認した。
 - Access appは`16f3252e-f749-41f8-91d4-323c91bb7e0a`。対象ホスト全体の`self_hosted`で、本人メール1件だけをallowする。未認証`GET /api/v1/company`がHTTP302で`r74.cloudflareaccess.com`へ転送されることを確認した。
-- Worker取得結果の`subdomain.previews_enabled`は`false`。Build Outputの`previewUrls: false`とも一致する。配信versionのbindingはCASESとDBで、社員用・OpenAI用の秘密値は未設定。
+- Worker取得結果の`subdomain.previews_enabled`は`false`。Build Outputの`previewUrls: false`とも一致する。初回のbindingはCASESとDBで、社員用・OpenAI用の秘密値は未設定だった。
 
-Access認証後の実API操作は未確認。OpenAIキーはユーザーが後で`.env`へ設定する予定で、秘密値の読取・保存・有料API呼出しは今回行っていない。Accessログインの成功だけで、社員認証や採用AI・音声の接続完了とは扱わない。
+### 認証後の実API試験
+
+2026-10-18 14:53〜14:55 JST、ユーザーの明示承認でデモ専用`STAFF_API_TOKEN`を試験Workerへ設定した。値はチャット・ソースへ出さず、権限0600の一時ファイル経由で`cf workers secrets update`へ渡し、設定後に一時ファイルを削除した。社員cookieは認証済みChromeで取得済み。OpenAIキーの読取・設定や有料API呼出しは行っていない。
+
+Access認証済みブラウザから案件作成201、面談送信200、社員ログイン200、claim 200、明示模擬回答の保存200、D1一覧200を確認。同じ命令の再送でもrevision=3・依頼1件を維持した。remote D1のSELECTでも`status: ready`、依頼`answered`、応募者言語`en`、回答言語`ja`、`simulated: true`、回答本文の一致を確認した。試験案件は`case-056533f2f2925759fb63f8211f1750a342814956071b3dc2bcad9e1c0b2e0fc6`。
+
+試験後の配信versionは`2732ac45-f00d-4c84-9895-cd165aef3f25`、deploymentは`067be93f-6d30-41e3-861a-febf09b79669`、100%配信。versionの注記は`FE4cbf25a backendd93780a`で、CASES・DBに加えて`STAFF_API_TOKEN`のsecret bindingがある。今後のデプロイでもこのsecretを保持する。本試験は認証後ブラウザからの実API操作。親チャットからはReact受付・会話・operatorのデモ回答反映とcompany APIのJSON応答も確認済みとの報告がある。元AIの翻訳・音声再開は未確認。
 
 ## 発表に向けた接続状況
 
-バックエンドの実証範囲は、採用面談の保存、社員の引き受けと回答、DOからD1一覧への反映、同一命令の再送での復旧まで。画面の`/`は現在も`Hello!`というHono雛形であり、採用の完成画面としては提示できない。
+バックエンドの実証範囲は、採用面談の保存、社員の引き受けと回答、DOからD1一覧への反映、同一命令の再送での復旧まで。認証後の試験サイトでも、面談送信から模擬回答の保存と一覧反映まで実測済み。
 
-ローカル起動には既存migrationを適用し、社員操作には`.dev.vars`の`STAFF_API_TOKEN`を設定する。追加の認証サービスやテーブルは不要。OpenAIキー・有料API・外部Cloudflare設定はこの担当では触っていない。
+ローカル起動には既存migrationを適用し、社員操作には`.dev.vars`の`STAFF_API_TOKEN`を設定する。追加の認証サービスやテーブルは不要。試験Workerの社員トークンは設定済み。OpenAIキーや有料APIには触っていない。
 
-元の採用Agentsが人間の回答本文を受け取って応募者の言語で説明し、Live音声へ返す部分、React FE、HaaS・電話、MCP認証と配信は別担当との実接続待ち。`ai.resume_pending`や電話の`accepted/completed`だけで、この部分まで動いたとは発表しない。
+元の採用Agentsが人間の回答本文を受け取って応募者の言語で説明し、Live音声へ返す部分、HaaS・電話、MCP認証と配信は別担当との実接続待ち。React画面を経由して同じAPIで面談送信・社員回答を行う操作は、本試験の対象外。`ai.resume_pending`や電話の`accepted/completed`だけで、この部分まで動いたとは発表しない。
 
 参照した公式仕様は[Prepared statements](https://developers.cloudflare.com/d1/worker-api/prepared-statements/)、[D1 local development](https://developers.cloudflare.com/d1/best-practices/local-development/)、[D1 migrations](https://developers.cloudflare.com/d1/reference/migrations/)、[Hono routing](https://hono.dev/docs/api/routing)。
