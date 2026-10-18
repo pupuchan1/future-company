@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLiveConnection } from '../live/useLiveConnection'
+import { caseVoicePrefix } from '../live/client'
 import type { LiveLanguage, LiveLanguagePreference } from '../live/types'
 import { WorkerCaseClient } from './cases'
 
@@ -7,7 +8,8 @@ import { WorkerCaseClient } from './cases'
 export function useReceptionConnection(language: LiveLanguage, languagePreference: LiveLanguagePreference = 'auto') {
   const [worker] = useState(() => new WorkerCaseClient())
   const [workerState, setWorkerState] = useState(() => worker.getSnapshot())
-  const live = useLiveConnection({ caseId: workerState.case?.id ?? '', language, languagePreference })
+  const caseId = workerState.case?.id ?? ''
+  const live = useLiveConnection({ caseId, language, languagePreference, enabled: Boolean(caseId), apiPrefix: caseId ? caseVoicePrefix(caseId) : undefined })
   const liveRef = useRef(live)
   useEffect(() => { liveRef.current = live }, [live])
   const generation = useRef(0)
@@ -23,7 +25,14 @@ export function useReceptionConnection(language: LiveLanguage, languagePreferenc
     const authorization = queued.current
     if (!authorization || authorization.ticket !== generation.current || workerState.phase !== 'ready' || !workerState.case || live.snapshot.caseId !== authorization.caseId || workerState.case.id !== authorization.caseId) return
     // A new case creates a new LiveClient whose status fetch may finish after the proof.
-    if (live.snapshot.configured === null || live.snapshot.mcpConfigured === null) return
+    if (live.snapshot.configured === null || live.snapshot.mcpConfigured === null) {
+      if (live.snapshot.error) {
+        const ticket = authorization.ticket
+        queued.current = null; starting.current = false
+        queueMicrotask(() => { if (ticket === generation.current) setPreparing(false) })
+      }
+      return
+    }
     const { ticket, bridgeToken } = authorization
     queued.current = null
     const operation = live.snapshot.configured && live.snapshot.mcpConfigured ? live.start(undefined, bridgeToken) : undefined
@@ -31,7 +40,7 @@ export function useReceptionConnection(language: LiveLanguage, languagePreferenc
   }, [workerState, live])
   async function start() {
     const current = liveRef.current.snapshot
-    if (starting.current || !current.configured || !current.mcpConfigured || ['connecting','connected','reconnecting','switching','stopping'].includes(current.phase)) return
+    if (starting.current || ['connecting','connected','reconnecting','switching','stopping'].includes(current.phase)) return
     const ticket = ++generation.current
     starting.current = true; setPreparing(true)
     try {
