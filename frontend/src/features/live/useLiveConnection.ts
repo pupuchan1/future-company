@@ -34,7 +34,7 @@ export function useLiveConnection({ caseId, language, apiPrefix, bridgeToken, en
   return {
     snapshot: enabled && snapshot.caseId === caseId ? snapshot : initialSnapshot(caseId, language),
     voice,
-    start: (route?: LiveRoute) => client.current?.start(languageRef.current, route),
+    start: (route?: LiveRoute, bridgeToken?: string) => client.current?.start(languageRef.current, route, bridgeToken),
     switchDepartment: (route: LiveRoute) => client.current?.switchDepartment(route),
     stop: () => client.current?.stop(),
     toggleMuted: () => client.current?.setMuted(!client.current.getSnapshot().muted),

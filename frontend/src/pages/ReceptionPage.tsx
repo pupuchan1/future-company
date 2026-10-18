@@ -11,6 +11,14 @@ const routes: Record<LiveRoute, [string, string]> = {
   recruiting: ["採用の相談", "Recruiting"],
   haas: ["仕事・人への依頼", "Work & human assistance"],
 };
+const requestLabels: Record<string, [string, string]> = {
+  requested: ["担当者へ依頼中", "Requested"],
+  ringing: ["着信要求に応答あり", "Ring request acknowledged"],
+  accepted: ["受話器の応答あり", "Handset answered"],
+  completed: ["対応終了", "Handling ended"],
+  unavailable: ["対応できません", "Unavailable"],
+  cancelled: ["取消済み", "Cancelled"],
+};
 function Mic({ off = false }: { off?: boolean }) {
   return (
     <svg
@@ -301,7 +309,7 @@ export function ReceptionPage() {
                         className="reception-request"
                         key={request.handoffId}
                       >
-                        <span className="tag">{request.status}</span>
+                        <span className="tag">{requestLabels[request.status]?.[isEnglish ? 1 : 0] ?? text("状態を確認中", "Checking status")}</span>
                         <h3>{request.task || request.summary}</h3>
                         {request.targetRole && (
                           <p className="small">
@@ -340,6 +348,11 @@ export function ReceptionPage() {
                             </strong>
                             <p>{request.result.text}</p>
                           </div>
+                        )}
+                        {request.status === "completed" && !request.result && (
+                          <p className="small">
+                            {text("対応の終了を受信しました。回答本文はまだ届いていません。", "Handling ended. The answer text has not arrived yet.")}
+                          </p>
                         )}
                         {request.unavailableReason && (
                           <p className="small">{request.unavailableReason}</p>

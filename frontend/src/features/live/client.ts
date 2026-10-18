@@ -441,7 +441,7 @@ export class LiveClient {
     return sdp
   }
 
-  async start(language = this.state.language, route: LiveRoute = 'reception') {
+  async start(language = this.state.language, route: LiveRoute = 'reception', preparedBridgeToken?: string) {
     if (this.disposed || this.connection || this.closing) return
     if (!this.state.configured || !this.state.mcpConfigured) {
       this.patch({ error: '音声サーバーの設定・接続を確認してください。 / Check voice server configuration.' })
@@ -460,9 +460,9 @@ export class LiveClient {
       // Construct/resume inside the user's Start gesture, before microphone await.
       this.createMeter(connection)
       this.patch({ meteringAvailable: !!connection.meter })
-      const bridgeToken = this.bridgeToken ? await this.bridgeToken() : undefined
+      const bridgeToken = preparedBridgeToken ?? (this.bridgeToken ? await this.bridgeToken() : undefined)
       if (this.connection !== connection) return
-      if (this.bridgeToken && (!bridgeToken || typeof bridgeToken !== 'string')) throw new Error('受付の認証を確認してください。 / Case authorization could not be verified.')
+      if ((preparedBridgeToken !== undefined || this.bridgeToken) && (typeof bridgeToken !== 'string' || !bridgeToken.trim())) throw new Error('受付の認証を確認してください。 / Case authorization could not be verified.')
       const stream = await this.runtime.microphone()
       if (this.connection !== connection) { stream.getTracks().forEach(track => track.stop()); return }
       connection.stream = stream
