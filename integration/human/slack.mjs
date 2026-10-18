@@ -95,13 +95,15 @@ export function createSlackHumanTransport({ botToken = '', userToken = '', chann
         const base = { case_id: input.case_id, transport: 'slack', kind: 'recruiting_arrival', simulated: false };
         if (!configured || closed || !isActive()) return { ...base, notification_status: 'unavailable', error: 'slack_unconfigured_or_inactive' };
         if (threads.has(input.case_id)) return { ...base, notification_status: 'sent', slack_thread_ts: threads.get(input.case_id) };
-        const facts = input.applicant_summary || '氏名・経歴はまだ未確認です。';
+        const facts = !input.applicant_summary || /^No applicant facts stated\.?$/i.test(input.applicant_summary.trim())
+          ? '氏名・経歴はまだ伺っていません。' : input.applicant_summary;
         try {
           const { root } = await postCase(input.case_id, {
-            text: escapeText(`採用受付に応募者が来られました。本人の発言: ${facts}\n採否判断・推薦は行っていません。`),
-            blocks: [{ type: 'header', text: { type: 'plain_text', text: '採用受付へのご来訪', emoji: false } },
-              { type: 'section', text: { type: 'plain_text', text: `応募者本人の発言: ${facts}`, emoji: false } },
-              { type: 'context', elements: [{ type: 'plain_text', text: `採否判断・推薦ではありません。質問が届いたらこのスレッドに「回答: 内容」で返信してください。\n案件: ${input.case_id}`, emoji: false }] }],
+            text: escapeText(`採用のご相談が届きました。\n相談者から伺ったこと: ${facts}\nAIが一次対応中です。確認が必要になったら、このスレッドでお知らせします。`),
+            blocks: [{ type: 'header', text: { type: 'plain_text', text: '採用のご相談が届きました', emoji: false } },
+              { type: 'context', elements: [{ type: 'mrkdwn', text: '<!here> 採用受付への新しい相談です。' }] },
+              { type: 'section', text: { type: 'plain_text', text: `相談者から伺ったこと\n${facts}`, emoji: false } },
+              { type: 'context', elements: [{ type: 'plain_text', text: `AIが一次対応中です。確認が必要になったら、このスレッドでお知らせします。\n案件: ${input.case_id}`, emoji: false }] }],
           }, controller.signal);
           return isActive() ? { ...base, notification_status: 'sent', slack_thread_ts: root }
             : { ...base, notification_status: 'cancelled' };
@@ -117,11 +119,13 @@ export function createSlackHumanTransport({ botToken = '', userToken = '', chann
       pending.set(record.handoff_id, entry);
       void (async () => {
         try {
-          const sections = [`応募者本人の発言: ${record.applicant_summary || '氏名・経歴は未確認です。'}`,
-            `相談・質問: ${record.task || record.summary}`, `補足: ${record.summary}`,
-            `返してほしい内容: ${record.expected_result || '質問への回答、または未確認であること。'}`];
-          const footer = 'このスレッドに「回答: 内容」または「answer: text」で返信してください。面談中のAIへ返されます。採否判断・推薦は行いません。';
+          const sections = [`確認してほしいこと\n${record.task || record.summary}`,
+            `相談者について（本人のお話）\n${record.applicant_summary || '氏名・経歴はまだ伺っていません。'}`,
+            ...(record.summary && record.summary !== record.task ? [`補足\n${record.summary}`] : []),
+            `回答してほしい内容\n${record.expected_result || '質問への回答をお願いします。未確認であれば、その旨をお知らせください。'}`];
+          const footer = 'このスレッドに「回答: 内容」で返信してください。AIが相談者へお伝えし、会話を続けます。英語は「answer: text」でも返信できます。';
           const blocks = [{ type: 'header', text: { type: 'plain_text', text: '採用担当への確認', emoji: false } },
+            { type: 'context', elements: [{ type: 'mrkdwn', text: '<!here> 採用担当の方、ご確認と返信をお願いします。' }] },
             ...sections.map(text => ({ type: 'section', text: { type: 'plain_text', text: text.slice(0, 2900), emoji: false } })),
             { type: 'context', elements: [{ type: 'plain_text', text: `${footer}\n案件: ${record.case_id} / 相談: ${record.handoff_id}`, emoji: false }] }];
           const text = ['採用担当への確認', ...sections, footer].map(escapeText).join('\n').slice(0, 9000);
