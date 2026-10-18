@@ -38,7 +38,7 @@ function fixture() {
     fetch: async (path: string, options?: RequestInit) => {
       calls.push({ path, options })
       if (path === '/api/status') return Response.json({ live_configured: true, mcp_configured: true, requests: [] })
-      if (options?.method === 'DELETE') return Response.json({ closed: true, cleanup_pending: [] })
+      if (options?.method === 'DELETE') return Response.json({ closed: true, live_finalized: true, cleanup_pending: [] })
       return create()
     },
     microphone: () => microphone(), peer: () => peer, events: () => source, audio: () => audio, supported: () => true,
@@ -67,11 +67,14 @@ test('case filtering precedes deduplication, and SSE/DC transcripts are deduplic
 test('old handoff revisions and other cases cannot overwrite results; completion never invents an answer', () => {
   const reducer = new LiveEventReducer()
   const initial = initialSnapshot('case-a', 'ja')
-  const request = { handoff_id: 'h1', case_id: 'case-a', status: 'completed', revision: 4, simulated: true, audio_connected: false }
+  const request = { handoff_id: 'h1', case_id: 'case-a', status: 'completed', revision: 4, simulated: true, audio_connected: false, target_role: 'engineer', task: 'Check tools', expected_result: 'Tool names' }
   const completed = reducer.apply(initial, { type: 'human.completed', data: request }, 'server')
   assert.equal(completed.requests[0]?.result, undefined)
   assert.equal(completed.requests[0]?.audioConnected, false)
   assert.equal(completed.requests[0]?.simulated, true)
+  assert.equal(completed.requests[0]?.targetRole, 'engineer')
+  assert.equal(completed.requests[0]?.task, 'Check tools')
+  assert.equal(completed.requests[0]?.expectedResult, 'Tool names')
   const older = reducer.apply(completed, { type: 'human.ringing', data: { ...request, status: 'ringing', revision: 2 } }, 'server')
   assert.equal(older, completed)
   const result = reducer.apply(completed, { type: 'human.completed', data: { ...request, revision: 5, result: { text: '確認しました', language: 'ja' } } }, 'server')
@@ -191,5 +194,26 @@ test('unconfigured or unreachable servers cannot request a microphone', async ()
   await client.refreshStatus(); await client.start()
   assert.equal(client.getSnapshot().configured, null)
   assert.equal(asked, false)
+  client.dispose()
+})
+
+test('stop mutes capture immediately, waits for backend finalization before closing RTC and blocks a new call', async () => {
+  const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+  const fetchApi = f.runtime.fetch
+  let finalize!: (response: Response) => void
+  f.runtime.fetch = async (input, options) => options?.method === 'DELETE'
+    ? new Promise(resolve => { finalize = resolve }) : fetchApi(input, options)
+  await client.refreshStatus(); await client.start()
+  const stopping = client.stop()
+  assert.equal(f.track.stopped, true)
+  assert.equal(f.peer.closed, false)
+  assert.equal(client.getSnapshot().phase, 'stopping')
+  await client.start()
+  assert.equal(f.calls.filter(call => call.path === '/api/live/session').length, 1)
+  finalize(Response.json({ closed: true, live_finalized: false, cleanup_pending: [] }))
+  await stopping
+  assert.ok(f.peer.closed && f.channel.closed)
+  assert.equal(client.getSnapshot().phase, 'ended')
+  assert.match(client.getSnapshot().cleanupWarning, /finalization is unconfirmed/)
   client.dispose()
 })

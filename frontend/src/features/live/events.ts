@@ -8,6 +8,9 @@ export function readHumanRequest(value: unknown, caseId: string): LiveHumanReque
   return {
     handoffId: record.handoff_id, caseId, status: record.status,
     summary: typeof record.summary === 'string' ? record.summary : '',
+    ...(typeof record.target_role === 'string' ? { targetRole: record.target_role } : {}),
+    ...(typeof record.task === 'string' ? { task: record.task } : {}),
+    ...(typeof record.expected_result === 'string' ? { expectedResult: record.expected_result } : {}),
     revision: typeof record.revision === 'number' ? record.revision : 0,
     ...(typeof record.simulated === 'boolean' ? { simulated: record.simulated } : {}),
     ...(typeof record.audio_connected === 'boolean' ? { audioConnected: record.audio_connected } : {}),

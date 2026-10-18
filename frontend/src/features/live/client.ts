@@ -44,6 +44,7 @@ export class LiveClient {
   private statusBusy = false
   private observing = false
   private disposed = false
+  private closing: Promise<void> | null = null
 
   constructor(caseId: string, language: LiveLanguage, runtime = browserRuntime()) {
     this.state = initialSnapshot(caseId, language)
@@ -133,7 +134,7 @@ export class LiveClient {
   }
 
   async start(language = this.state.language) {
-    if (this.disposed || this.connection) return
+    if (this.disposed || this.connection || this.closing) return
     if (!this.state.configured || !this.state.mcpConfigured) {
       this.patch({ error: '音声サーバーの設定・接続を確認してください。 / Check voice server configuration.' })
       return
@@ -226,11 +227,15 @@ export class LiveClient {
   private async deleteSession(id: string, keepalive = false) {
     try {
       const result = await this.api(`/api/live/session/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive })
-      if (Array.isArray(result.cleanup_pending) && result.cleanup_pending.length) this.patch({ cleanupWarning: 'サーバーで終了処理が残っています。 / Server cleanup is pending.' })
+      const warnings = []
+      if (result.live_finalized !== true) warnings.push('音声セッションの最終応答は未確認です。 / Live finalization is unconfirmed.')
+      if (Array.isArray(result.cleanup_pending) && result.cleanup_pending.length) warnings.push('サーバーで終了処理が残っています。 / Server cleanup is pending.')
+      if (warnings.length) this.patch({ cleanupWarning: warnings.join(' ') })
     } catch { this.patch({ cleanupWarning: 'マイクは停止しましたが、サーバー側の終了を確認できません。 / Microphone stopped; server cleanup could not be confirmed.' }) }
   }
 
   async stop(error = '', keepalive = false) {
+    if (this.closing) return this.closing
     const connection = this.connection
     if (!connection) return
     this.connection = null
@@ -238,11 +243,20 @@ export class LiveClient {
     clearTimeout(connection.disconnectTimer)
     connection.cancelIce?.()
     connection.stream?.getTracks().forEach(track => track.stop())
-    if (connection.channel) { connection.channel.onmessage = null; connection.channel.onclose = null; connection.channel.close() }
-    if (connection.peer) { connection.peer.ontrack = null; connection.peer.onconnectionstatechange = null; connection.peer.close() }
+    if (connection.channel) { connection.channel.onmessage = null; connection.channel.onclose = null }
+    if (connection.peer) { connection.peer.ontrack = null; connection.peer.onconnectionstatechange = null }
     if (this.audio) { this.audio.pause(); this.audio.srcObject = null }
-    this.patch({ phase: error ? 'error' : 'ended', error, muted: false, playbackBlocked: false })
-    if (connection.sessionId) await this.deleteSession(connection.sessionId, keepalive)
+    this.patch({ phase: 'stopping', error, muted: false, playbackBlocked: false })
+    // Stop capture immediately, retain transport until backend finalization, then close it.
+    this.closing = (async () => {
+      try { if (connection.sessionId) await this.deleteSession(connection.sessionId, keepalive) }
+      finally {
+        connection.channel?.close()
+        connection.peer?.close()
+        this.patch({ phase: error ? 'error' : 'ended' })
+      }
+    })()
+    try { await this.closing } finally { this.closing = null }
   }
 
   dispose() {

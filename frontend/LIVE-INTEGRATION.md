@@ -60,8 +60,10 @@ DataChannelとSSEに重複する文字起こしはevent IDで重複排除しま�
 `completed`のみでは回答を作らず、回答本文がないことを表示します。
 `backend.result`は業務処理結果で、AIの発話・再生完了とは別です。
 
-現在のPR #4にはHaaSルートの実処理、Workers/operator接続、人間の回答本文を
-返す統一契約が未実装の部分があります。UIが将来のresultを扱えても実装完了の証拠にはなりません。
+PR #4のa0134dcではHaaSルートと人間の回答`{text,language}`が追加されました。
+UIは依頼先・作業内容・期待する回答を表示し、DELETE応答の`live_finalized`も確認します。
+マイクは即座に停止し、サーバーの終了処理後にRTCを閉じます。最終応答が未確認なら表示します。
+Workers/operator接続と実機・実モデルの通し検証は別途必要です。
 
 ## 確認
 

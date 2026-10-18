@@ -12,7 +12,7 @@ export interface LiveConnectionPanelProps {
 
 const phases: Record<LivePhase, [string, string]> = {
   idle: ['待機中', 'Ready'], connecting: ['接続中', 'Connecting'], connected: ['会話中', 'Connected'],
-  reconnecting: ['再接続待ち', 'Reconnecting'], ended: ['音声終了', 'Voice ended'], error: ['接続エラー', 'Connection error'],
+  reconnecting: ['再接続待ち', 'Reconnecting'], stopping: ['音声を終了中', 'Stopping voice'], ended: ['音声終了', 'Voice ended'], error: ['接続エラー', 'Connection error'],
 }
 const requestLabels: Record<string, [string, string]> = {
   requested: ['依頼作成', 'Requested'], ringing: ['リング応答あり', 'Ring acknowledged'],
@@ -27,6 +27,7 @@ export function LiveConnectionPanel({ caseId, language, onSnapshot }: LiveConnec
   const en = language === 'en'
   const text = (ja: string, english: string) => en ? english : ja
   const active = ['connecting', 'connected', 'reconnecting'].includes(s.phase)
+  const stopping = s.phase === 'stopping'
   useEffect(() => { onSnapshot?.(s) }, [s, onSnapshot])
   return <section className="panel" aria-label={text('AI音声接続', 'AI voice connection')}>
     <h2 className="panel-heading">{text('AI音声接続', 'AI voice connection')}</h2>
@@ -39,7 +40,7 @@ export function LiveConnectionPanel({ caseId, language, onSnapshot }: LiveConnec
           ? text('音声サーバーの設定待ちです。', 'Waiting for voice server configuration.')
           : text('音声サーバーの設定あり。開始ボタンで接続できます。', 'Voice server configured. Press Start to connect.')}</p>
       <div className="row">
-        <button type="button" className="button primary" disabled={active || !s.configured || !s.mcpConfigured} onClick={() => void live.start()}>{text('AI音声を開始', 'Start AI voice')}</button>
+        <button type="button" className="button primary" disabled={active || stopping || !s.configured || !s.mcpConfigured} onClick={() => void live.start()}>{text('AI音声を開始', 'Start AI voice')}</button>
         <button type="button" className="button secondary" disabled={!active} onClick={() => void live.stop()}>{text('音声を停止', 'Stop voice')}</button>
       </div>
       {active && <button type="button" className="text-button" aria-pressed={s.muted} onClick={live.toggleMuted}>{s.muted ? text('マイクをオン', 'Unmute microphone') : text('マイクをミュート', 'Mute microphone')}</button>}
@@ -58,9 +59,14 @@ export function LiveConnectionPanel({ caseId, language, onSnapshot }: LiveConnec
       {s.requests.length > 0 && <section aria-label={text('サーバーの人間依頼', 'Server human requests')}><h3>{text('担当者への依頼', 'Requests to the team')}</h3>{s.requests.map(request => <article key={request.handoffId}>
         <p><strong>{requestLabels[request.status]?.[en ? 1 : 0] ?? request.status}</strong> · {request.simulated === true ? text('模擬デバイス', 'Simulated device') : request.simulated === false ? text('実機として報告', 'Reported as physical device') : text('デバイス種別未確認', 'Device type unconfirmed')}</p>
         <p>{request.summary}</p>
+        {(request.targetRole || request.task || request.expectedResult) && <dl className="facts">
+          {request.targetRole && <><dt>{text('依頼先', 'Requested role')}</dt><dd>{request.targetRole}</dd></>}
+          {request.task && <><dt>{text('依頼内容', 'Task')}</dt><dd>{request.task}</dd></>}
+          {request.expectedResult && <><dt>{text('必要な回答', 'Expected result')}</dt><dd>{request.expectedResult}</dd></>}
+        </dl>}
         {request.status === 'accepted' && <p className="small">{text('受話器の応答です。人間との音声通話がつながったことは意味しません。', 'The handset responded. This does not confirm a human audio connection.')}</p>}
         {request.unavailableReason && <p>{text('対応できなかった理由', 'Unavailable reason')}: {request.unavailableReason}</p>}
-        {request.result ? <div className="answer"><strong>{text('担当者の回答（原文）', 'Team reply (original)')}</strong><p>{request.result.text}</p></div> : request.status === 'completed' && <p className="small">{text('対応終了を確認しました。回答本文はまだ届いていません。', 'Handling ended. No answer text has arrived.')}</p>}
+        {request.result ? <div className="answer"><strong>{request.simulated ? text('架空の模擬回答（原文）', 'Fictional simulated reply (original)') : text('担当者の回答（原文）', 'Team reply (original)')}</strong><p>{request.result.text}</p></div> : request.status === 'completed' && <p className="small">{text('対応終了を確認しました。回答本文はまだ届いていません。', 'Handling ended. No answer text has arrived.')}</p>}
       </article>)}</section>}
     </div>
   </section>

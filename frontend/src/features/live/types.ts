@@ -1,6 +1,6 @@
 export type LiveLanguage = 'ja' | 'en'
 export type LiveRoute = 'reception' | 'recruiting' | 'haas'
-export type LivePhase = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'ended' | 'error'
+export type LivePhase = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopping' | 'ended' | 'error'
 export type JsonObject = Record<string, unknown>
 
 export interface LiveTranscript {
@@ -14,6 +14,9 @@ export interface LiveHumanRequest {
   handoffId: string
   caseId: string
   summary: string
+  targetRole?: string
+  task?: string
+  expectedResult?: string
   status: string
   revision: number
   simulated?: boolean
