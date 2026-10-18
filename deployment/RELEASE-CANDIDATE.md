@@ -1,8 +1,15 @@
 # 配備候補と受入状況
 
-2026-10-18 16:32 JSTのGitHub確認を記録する。配備前に[PR #39](https://github.com/pupuchan1/future-company/pull/39)のHEADと[全体管理 #94](https://github.com/pupuchan1/future-company/issues/94)を読み直す。
+2026-10-18 16:41 JSTまでのGitHub・配備記録の確認をまとめる。配備前に[PR #39](https://github.com/pupuchan1/future-company/pull/39)のHEADと[全体管理 #94](https://github.com/pupuchan1/future-company/issues/94)を読み直す。
 
-## 候補commit
+## 実配備版
+
+実配備commitは`73eb9ba4c8713e862068388845be432f67c63f62`。[PR #110](https://github.com/pupuchan1/future-company/pull/110)で共有されている。
+同PRが記録する配備チャットの追加指定により、PR #28のFE `3e036ab`を改変せず、BE `6176125`と組み合わせた版である。
+この文書の担当でもGit差分を取得し、`frontend`が`3e036ab`と差分0、`integration`・`deployment`・`src`が`6176125`と差分0であることを確認した。
+以下の#39候補と#76/#87/#101の統合条件は、実配備版の記録と分けて扱う。
+
+## #39の統合候補
 
 Limoが配備基準として指定したcommitは`617612592fda658304fe87f68d2166ceeac5f9c7`。これは会話画面・全文字幕・TXT・MP3・自動声交代を含む中間候補であり、#76の最新差分と#87を揃えた最終版ではない。
 指定と検証報告は[#99の引継ぎコメント](https://github.com/pupuchan1/future-company/issues/99#issuecomment-6247174890)を参照する。
@@ -43,16 +50,18 @@ Orbは同じ`backend.result`を再受信すると、音声応答終了後に`lis
 
 ## 本番への受渡し
 
-16:38 JSTのGitHub再確認で#39は`6176125`。16:36 JSTに確認した#76は`f0572a5`、#87は`d2f208b`。
+16:41 JSTのGitHub再確認で#39は`6176125`、#76は`f0572a5`、#87は`d2f208b`。#101は未マージ。
 [#87のレビュー指摘](https://github.com/pupuchan1/future-company/pull/87#discussion_r4306171872)は未解決で、修正後の最終配備commitはまだ確定していない。
 候補と受入範囲は[PR #103](https://github.com/pupuchan1/future-company/pull/103)、Node・Workerの配備記録は[PR #104](https://github.com/pupuchan1/future-company/pull/104)で扱う。別チャット「PR #39を本番デプロイ」で実際の切替と追加統合が進行しているため、この文書の値を固定した現在状態として扱わない。
 
-### 16:38 JSTに確認した配備状態
+### 16:41 JSTまでに確認した配備状態とsmoke
 
-- ローカルの`.local/production-runtime/state.json`は`sourceCommit=617612592fda658304fe87f68d2166ceeac5f9c7`、`relayOrigin=https://ellen-grid-entrance-mails.trycloudflare.com`、Node4350・relay4351を記録している。
-- Node4350の待受はPID9055。旧`319ffc1`のNodeを維持したままとは扱わない。
-- 配備担当チャットからはCloudflare APIでWorker version `66e5c8ad-22ff-491d-a735-d90f9b1aefbe`の100%配信を確認したとの報告がある。この文書の担当ではCloudflare APIを再取得していないため、#33の配備記録と照合する。
-- `6176125`の配備と、#76最新差分・#87修正・#101を揃えた最終版の確定、実マイク・本番の受入成功は別に記録する。
+- 配備担当が16:40 JSTに取得したCloudflare API記録を読み、Worker version `1a928084-a992-416c-9c7b-3761dd3df3d1`の100%配信とpreview無効を確認した。取得記録は手元の`production-refresh-after.json`。本チャットからAPIを再実行した結果ではない。
+- ローカルの`.local/production-runtime/state.json`はNode側の`sourceCommit=617612592fda658304fe87f68d2166ceeac5f9c7`、relay `https://ellen-grid-entrance-mails.trycloudflare.com`、Node4350・relay4351を記録している。FE/Workerの統合配備commit `73eb9ba`とNodeのBEソースを混同しない。Node4350はPID9055を保持するとの配備担当報告。
+- 配備担当の16:41 JSTの`production-refresh-smoke.json`は`source=73eb9ba`。採用・HaaSとも案件作成201、証明・status・SSE200、所有者なし401・別Origin403、社員引受・回答と再送200、revision3・answered・simulated=trueを記録している。
+- 同smokeの`liveSessionsCreated=0`。実Live往復・全文字幕/TXT/MP3・自動声交代・実マイク・黒電話の本番受入はこの試験に含まれない。
+
+`6176125`から`73eb9ba`への配備更新、#76最新差分・#87修正・#101を揃えた統合版の確定、実音声の受入成功はそれぞれ別に記録する。
 
 配備担当はr74tech。Worker・Node・relayの版を一組として記録し、次のNode更新は稼働中の通話を終了してから行う。
 stateDir・D1・CaseRoom・Access・secretを保持し、再配置前に実際のrelay originとWorker設定を照合する。以前のjamie URLへ記録だけを根拠に戻さない。
