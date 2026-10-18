@@ -33,12 +33,78 @@ async function denied(socket) {
 test('gateway challenges unauthenticated requests before reaching the Worker', async t => {
   const f = await fixture(t, (_req, res) => res.end('private'));
   for (const header of ['', 'Basic invalid']) {
-    const response = await fetch(f.origin, { headers: { Authorization: header } });
+    const response = await fetch(`${f.origin}/api/v1/cases/private`, { headers: { Authorization: header } });
     assert.equal(response.status, 401);
     assert.match(response.headers.get('www-authenticate'), /^Basic /);
     assert.equal(response.headers.get('cache-control'), 'no-store');
   }
   assert.equal(f.requests.length, 0);
+});
+
+async function login(f, fields = { username, password }, headers = {}) {
+  return fetch(`${f.origin}/auth`, { method: 'POST', redirect: 'manual', headers: { Origin: f.origin, 'Content-Type': 'application/x-www-form-urlencoded', ...headers }, body: new URLSearchParams(fields) });
+}
+
+test('only the unauthenticated root renders a login form; assets and APIs stay private', async t => {
+  const f = await fixture(t, (_req, res) => res.end('private app'));
+  const root = await fetch(f.origin);
+  assert.equal(root.status, 200); assert.equal(root.headers.get('www-authenticate'), null);
+  const html = await root.text();
+  assert.match(html, /<form action="\/auth" method="post">/);
+  assert.equal(html.includes(password), false); assert.equal(html.includes('private app'), false);
+  for (const path of ['/assets/app.js', '/api/v1/cases', '/favicon.ico']) assert.equal((await fetch(`${f.origin}${path}`)).status, 401);
+  assert.equal(f.requests.length, 0);
+});
+
+test('same-origin form login issues an HttpOnly Secure Strict cookie and never sends it to Worker', async t => {
+  const f = await fixture(t, (_req, res) => res.end('private app'));
+  const response = await login(f);
+  assert.equal(response.status, 303); assert.equal(response.headers.get('location'), '/');
+  const setCookie = response.headers.get('set-cookie');
+  assert.match(setCookie, /^__Host-haas_demo=[A-Za-z0-9_-]{43}; Path=\/; Max-Age=28[0-9]{3}; HttpOnly; Secure; SameSite=Strict$/);
+  assert.equal(setCookie.includes(password), false);
+  const cookie = setCookie.split(';')[0];
+  const page = await fetch(f.origin, { headers: { Cookie: `${cookie}; visitor=owned` } });
+  assert.equal(page.status, 200); assert.equal(await page.text(), 'private app');
+  assert.equal(f.requests[0].headers.cookie, 'visitor=owned');
+  assert.equal(f.requests[0].headers.authorization, undefined);
+  const logout = await fetch(`${f.origin}/logout`, { method: 'POST', redirect: 'manual', headers: { Origin: f.origin, Cookie: cookie } });
+  assert.equal(logout.status, 303); assert.match(logout.headers.get('set-cookie'), /__Host-haas_demo=; Path=\/; Max-Age=0;/);
+});
+
+test('form login rejects wrong credentials, cross-origin forms and oversized request bodies', async t => {
+  const f = await fixture(t, (_req, res) => res.end('private'));
+  const wrong = await login(f, { username, password: 'incorrect' });
+  assert.equal(wrong.status, 401); assert.equal(wrong.headers.get('set-cookie'), null);
+  assert.equal(wrong.headers.get('www-authenticate'), null);
+  assert.equal((await wrong.text()).includes('incorrect'), false);
+  assert.equal((await login(f, { username, password }, { Origin: 'https://elsewhere.test' })).status, 403);
+  assert.equal((await login(f, { username, password }, { Origin: '' })).status, 403);
+  assert.equal((await login(f, { username, password: 'x'.repeat(5000) })).status, 413);
+  assert.equal(f.requests.length, 0);
+});
+
+test('demo cookie expires after eight hours and old cookies do not revive after a new login', async t => {
+  let now = 0;
+  const f = await fixture(t, (_req, res) => res.end('private'), { clock: () => now });
+  const first = await login(f); const cookie = first.headers.get('set-cookie').split(';')[0];
+  now = 8 * 60 * 60 * 1000;
+  const expired = await fetch(`${f.origin}/api/v1/cases`, { headers: { Cookie: cookie } });
+  assert.equal(expired.status, 401);
+  const next = await login(f); const nextCookie = next.headers.get('set-cookie').split(';')[0];
+  assert.notEqual(cookie, nextCookie);
+  assert.equal((await fetch(`${f.origin}/api/v1/cases`, { headers: { Cookie: cookie } })).status, 401);
+  assert.equal((await fetch(`${f.origin}/api/v1/cases`, { headers: { Cookie: nextCookie } })).status, 200);
+});
+
+test('form session cookie authorizes WebSocket without relying on browser Basic caches', async t => {
+  const f = await fixture(t, (_req, res) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.write(': connected\n\n'); });
+  const response = await login(f); const cookie = response.headers.get('set-cookie').split(';')[0];
+  const ws = f.socket('/api/v1/cases/case-a/voice/events', { Authorization: '', Cookie: `${cookie}; visitor=owner` });
+  await once(ws, 'open');
+  assert.equal(f.requests[0].headers.cookie, 'visitor=owner');
+  assert.equal(f.requests[0].headers.authorization, undefined);
+  const ended = once(ws, 'close'); ws.close(); await ended;
 });
 
 test('HTML opts into WS while assets, visitor cookies and same-origin request bodies are proxied', async t => {
