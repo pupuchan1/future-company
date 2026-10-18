@@ -22,6 +22,8 @@ function fixture(t, options = {}) {
 test('fixed Slack destination, plain text and idempotency never report ringing or acceptance', async t => {
   const f = fixture(t);
   const record = f.service.requestHuman({ ...args, applicant_summary: '<!here> 名前は未確認' });
+  assert.equal(record.notification_status, 'queued');
+  assert.equal(record.reply_status, undefined, 'A queued request must not claim the configured reply channel is unavailable');
   f.service.requestHuman({ ...args, applicant_summary: '<!here> 名前は未確認' });
   assert.throws(() => f.service.requestHuman({ ...args, summary: 'different' }), /different arguments/);
   await tick();
@@ -33,6 +35,7 @@ test('fixed Slack destination, plain text and idempotency never report ringing o
   assert.ok(!body.text.includes('<!here>'));
   const latest = f.service.getHumanRequest(record.handoff_id);
   assert.equal(latest.status, 'requested'); assert.equal(latest.transport, 'slack'); assert.equal(latest.notification_status, 'sent');
+  assert.equal(latest.reply_status, 'polling');
   assert.equal(latest.audio_connected, false); assert.equal(latest.simulated, false);
   assert.ok(f.events.every(event => event.name === 'human.requested'));
 });
