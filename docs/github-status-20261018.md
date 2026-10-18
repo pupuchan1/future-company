@@ -1,5 +1,7 @@
 # GitHubの残件とpupu担当の作業（2026-10-18）
 
+> 以下は途中時点の実装記録です。現在の担当・進捗・受入条件は [Issue #94](https://github.com/pupuchan1/future-company/issues/94) が正本です。公開体験は採用に絞り、受付から採用担当へ声・文脈を切り替え、[Slack #aiへの人間確認](https://github.com/pupuchan1/future-company/issues/107)をつなぎます。オーブはpupu、配置はr74tech、結合と検証はLimo/Codexが担当します。
+
 2026-10-18 JSTにOpen Issue・PRと #18/#19/#33/#34 のコメントを確認した記録。IssueがOpenでも、過去の提案・判断記録をすべて未実装タスクとは扱わない。以後の進捗はリンク先を優先する。
 
 ## 現在の実装とPR

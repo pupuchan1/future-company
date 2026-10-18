@@ -1,0 +1,5 @@
+# Worker-only settings; match the Node values in .env.local.
+STAFF_API_TOKEN=
+NODE_RELAY_SECRET=
+NODE_RELAY_ORIGIN=http://127.0.0.1:4330
+NODE_RELAY_EVENTS_TRANSPORT=sse

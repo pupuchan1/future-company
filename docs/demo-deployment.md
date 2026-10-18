@@ -113,6 +113,8 @@ gitのHEAD、Worker versionと配備ログで確認する。
 以下は`2732ac45-f00d-4c84-9895-cd165aef3f25`の旧試験配信手順と結果。
 そのlocalStorageデモの画面確認と、上記の実LiveからWorker保存までの確認は別の結果として扱う。
 
+> 以下は初期の静的画面配信の記録です。現在の配置手順は [deployment/README.md](../deployment/README.md)、担当・受入範囲は [Issue #94](https://github.com/pupuchan1/future-company/issues/94) を使用してください。現在の本番デプロイ担当はr74techで、PR #39の統合版を既存Worker・Nodeへ反映します。
+
 試験URLはhttps://future-company-demo.r74.workers.dev/。R74のAccessで所有者のメールだけを許可し、プレビューURLは無効にしている。
 
 Honoのbackendと、PR #15のReactビルドを同じWorkerに配信する。`/api/*`と`/mcp`はWorkerを優先し、画面はStatic Assetsから配信する。会話・operatorの直打ちと再読込にはSPA fallbackを使う。FEの元ファイルは別担当のまま保持し、独立したビルドを使う。

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { LiveClient } from '../src/features/live/client.ts'
+import { LiveClient, caseVoicePrefix } from '../src/features/live/client.ts'
 import type { LiveRuntime } from '../src/features/live/client.ts'
 import { LiveEventReducer } from '../src/features/live/events.ts'
 import { initialSnapshot } from '../src/features/live/types.ts'
@@ -107,6 +107,106 @@ test('start uses PR #4 SDP contract, waits for session.started, then mutes and r
   assert.equal(f.source.closed, true)
 })
 
+for (const source of ['server', 'datachannel'] as const) {
+  test(`old lifecycle events on ${source} cannot affect a call awaiting its creation response`, async () => {
+    const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+    let respond!: (response: Response) => void
+    let created!: () => void
+    const creating = new Promise<void>(resolve => { created = resolve })
+    f.setCreate(() => { created(); return new Promise(resolve => { respond = resolve }) })
+    client.observe(); await new Promise(resolve => setImmediate(resolve))
+    const starting = client.start(); await creating
+    const deliver = (type: string, id: string) => (source === 'server' ? f.source : f.channel).onmessage!({
+      data: JSON.stringify({ type, case_id: 'case-a', session_id: id }),
+    })
+    try {
+      deliver('session.started', 'previous-live')
+      assert.equal(client.getSnapshot().phase, 'connecting')
+      for (const type of ['session.closed', 'session.ended', 'live.closed']) deliver(type, 'previous-live')
+      assert.equal(client.getSnapshot().phase, 'connecting')
+      assert.equal(f.track.stopped, false)
+      respond(Response.json({ session: { id: 'new-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+      await starting
+      assert.equal(client.getSnapshot().phase, 'connecting', 'Old starts cannot satisfy the new call readiness')
+      deliver('session.started', 'new-live')
+      assert.equal(client.getSnapshot().phase, 'connected')
+      assert.equal(f.calls.some(call => call.options?.method === 'DELETE'), false)
+    } finally {
+      respond(Response.json({ session: { id: 'new-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+      await starting; await client.stop(); client.dispose()
+    }
+  })
+
+  for (const types of [['session.started'], ['session.closed'], ['session.ended'], ['live.closed'], ['session.started', 'live.closed']]) {
+    test(`early ${types.join(' then ')} on ${source} applies only after the new Live ID is confirmed`, async () => {
+      const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+      let respond!: (response: Response) => void
+      let created!: () => void
+      const creating = new Promise<void>(resolve => { created = resolve })
+      f.setCreate(() => { created(); return new Promise(resolve => { respond = resolve }) })
+      client.observe(); await new Promise(resolve => setImmediate(resolve))
+      const starting = client.start(); await creating
+      try {
+        for (const type of types) (source === 'server' ? f.source : f.channel).onmessage!({
+          data: JSON.stringify({ type, case_id: 'case-a', session_id: 'new-live' }),
+        })
+        assert.equal(client.getSnapshot().phase, 'connecting', 'Unconfirmed events must wait for HTTP identity')
+        assert.equal(f.track.stopped, false)
+        respond(Response.json({ session: { id: 'new-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+        await starting
+        await new Promise(resolve => setImmediate(resolve))
+        const ended = types.some(type => type !== 'session.started')
+        assert.equal(client.getSnapshot().phase, ended ? 'ended' : 'connected')
+        assert.equal(f.track.stopped, ended)
+        if (ended) {
+          assert.equal(f.peer.answer, null, 'A confirmed early close cannot install a dead session')
+          assert.equal(f.calls.filter(call => call.options?.method === 'DELETE' && call.path.endsWith('/new-live')).length, 1)
+        }
+      } finally {
+        respond(Response.json({ session: { id: 'new-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+        await starting; await client.stop(); client.dispose()
+      }
+    })
+  }
+}
+
+test('an unscoped SSE lifecycle event cannot satisfy a pending call readiness', async () => {
+  const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+  client.observe(); await new Promise(resolve => setImmediate(resolve))
+  await client.start()
+  try {
+    f.source.onmessage!({ data: JSON.stringify({ type: 'session.started', case_id: 'case-a' }) })
+    assert.equal(client.getSnapshot().phase, 'connecting')
+    f.channel.onmessage!({ data: JSON.stringify({ type: 'session.started' }) })
+    assert.equal(client.getSnapshot().phase, 'connected', 'The current DataChannel is itself connection-scoped')
+  } finally { await client.stop(); client.dispose() }
+})
+
+test('Stop discards early lifecycle events and a late HTTP success cannot revive them on retry', async () => {
+  const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+  let respond!: (response: Response) => void
+  let created!: () => void
+  const creating = new Promise<void>(resolve => { created = resolve })
+  f.setCreate(() => { created(); return new Promise(resolve => { respond = resolve }) })
+  client.observe(); await new Promise(resolve => setImmediate(resolve))
+  const starting = client.start(); await creating
+  try {
+    f.source.onmessage!({ data: JSON.stringify({ type: 'session.started', case_id: 'case-a', session_id: 'cancelled-live' }) })
+    await client.stop()
+    respond(Response.json({ session: { id: 'cancelled-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+    await starting
+    assert.equal(client.getSnapshot().phase, 'ended')
+    assert.equal(f.peer.answer, null)
+    assert.equal(f.calls.filter(call => call.options?.method === 'DELETE' && call.path.endsWith('/cancelled-live')).length, 1)
+    f.setCreate(async () => Response.json({ session: { id: 'retry-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+    await client.start()
+    assert.equal(client.getSnapshot().phase, 'connecting', 'No buffered start can leak into a later attempt')
+  } finally {
+    respond(Response.json({ session: { id: 'cancelled-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+    await starting; await client.stop(); client.dispose()
+  }
+})
+
 test('Worker proof reaches only the Live creation body for the same case', async () => {
   const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
   await client.refreshStatus()
@@ -117,6 +217,66 @@ test('Worker proof reaches only the Live creation body for the same case', async
       sdp: 'v=0\r\no=mock', language: 'en', case_id: 'case-a', bridge_token: 'test-worker-proof',
     })
     assert.equal(JSON.stringify(client.getSnapshot()).includes('test-worker-proof'), false)
+  } finally { client.dispose() }
+})
+
+test('manual English is included at start and selection updates the existing voice session', async () => {
+  const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+  await client.refreshStatus()
+  try {
+    await client.start('en', 'reception', 'proof', 'en')
+    assert.equal(JSON.parse(String(f.calls.find(call => call.path === '/api/live/session')!.options!.body)).language_preference, 'en')
+    f.channel.onmessage!({ data: JSON.stringify({ type: 'session.started', session: { id: 'live_1' } }) })
+    f.setCreate(async () => Response.json({ case_id: 'case-a', language: 'ja', language_preference: 'ja' }))
+    await client.setLanguage('ja', 'ja')
+    assert.equal(client.getSnapshot().language, 'ja')
+    assert.equal(client.getSnapshot().phase, 'connected')
+    assert.equal(f.track.stopped, false)
+    const update = f.calls.find(call => call.path === '/api/live/session/live_1/language')!
+    assert.deepEqual(JSON.parse(String(update.options!.body)), { case_id: 'case-a', language: 'ja', language_preference: 'ja' })
+    assert.equal(f.calls.filter(call => call.path === '/api/live/session').length, 1)
+  } finally { client.dispose() }
+})
+
+test('rapid selections serialize updates and the last selected language wins', async () => {
+  const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+  await client.refreshStatus(); await client.start()
+  f.channel.onmessage!({ data: JSON.stringify({ type: 'session.started', session: { id: 'live_1' } }) })
+  let resolve!: (response: Response) => void
+  let updates = 0
+  f.setCreate(async () => ++updates === 1 ? new Promise<Response>(r => { resolve = r })
+    : Response.json({ case_id: 'case-a', language: 'ja', language_preference: 'ja' }))
+  try {
+    const first = client.setLanguage('en', 'en')
+    const last = client.setLanguage('ja', 'ja')
+    assert.equal(updates, 1)
+    resolve(Response.json({ case_id: 'case-a', language: 'en', language_preference: 'en' }))
+    await Promise.all([first, last])
+    assert.equal(updates, 2)
+    assert.equal(client.getSnapshot().language, 'ja')
+  } finally { client.dispose() }
+})
+
+test('a failed language update can retry without ending the call, and late replies cannot revive Stop', async () => {
+  const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+  await client.refreshStatus(); await client.start()
+  f.channel.onmessage!({ data: JSON.stringify({ type: 'session.started', session: { id: 'live_1' } }) })
+  try {
+    f.setCreate(async () => Response.json({}, { status: 503 }))
+    await client.setLanguage('en', 'en')
+    assert.match(client.getSnapshot().error, /Could not change/)
+    assert.equal(client.getSnapshot().phase, 'connected')
+    f.setCreate(async () => Response.json({ case_id: 'case-a', language: 'en', language_preference: 'en' }))
+    await client.setLanguage('en', 'en')
+    assert.equal(client.getSnapshot().error, '')
+    let resolve!: (response: Response) => void
+    f.setCreate(async () => new Promise<Response>(r => { resolve = r }))
+    const updating = client.setLanguage('ja', 'auto')
+    await client.stop()
+    resolve(Response.json({ case_id: 'case-a', language: 'ja', language_preference: 'auto' }))
+    await updating
+    assert.equal(client.getSnapshot().phase, 'ended')
+    assert.equal(client.getSnapshot().language, 'en')
   } finally { client.dispose() }
 })
 
@@ -306,5 +466,78 @@ test('status auth and HTML failures stay visible, and a recovered status clears 
     await client.refreshStatus()
     assert.equal(client.getSnapshot().configured, true)
     assert.equal(client.getSnapshot().error, '')
+  } finally { client.dispose() }
+})
+
+test('case transport rejects foreign or cross-origin prefixes before sending a request', () => {
+  const f = fixture()
+  for (const apiPrefix of ['https://example.invalid/api', '/api/v1/cases/case-b/voice', '/api/v1/cases/case-a/voice?x=1']) {
+    assert.throws(() => new LiveClient('case-a', 'ja', f.runtime, { apiPrefix }), /same origin/)
+  }
+  assert.equal(f.calls.length, 0)
+})
+
+test('case status failures are actionable, recover on retry, and never open the microphone', async () => {
+  const f = fixture()
+  let microphones = 0
+  let response = () => Response.json({ error: 'voice_relay_unconfigured' }, { status: 503 })
+  const client = new LiveClient('case-a', 'ja', { ...f.runtime,
+    fetch: async () => response(),
+    microphone: async () => { microphones++; return f.stream as unknown as MediaStream },
+  }, { apiPrefix: '/api/v1/cases/case-a/voice' })
+  try {
+    await client.refreshStatus()
+    assert.match(client.getSnapshot().error, /voice_relay_unconfigured/)
+    await client.start()
+    assert.equal(microphones, 0)
+    // Clear the unrelated Start error by using a fresh status-only client below.
+  } finally { client.dispose() }
+  const retry = new LiveClient('case-a', 'ja', { ...f.runtime, fetch: async () => response() }, { apiPrefix: '/api/v1/cases/case-a/voice' })
+  try {
+    await retry.refreshStatus()
+    response = () => Response.json({ live_configured: true, mcp_configured: true })
+    await retry.refreshStatus()
+    assert.equal(retry.getSnapshot().error, '')
+    assert.equal(retry.getSnapshot().configured, true)
+    response = () => new Response('<html>Login</html>', { status: 200 })
+    await retry.refreshStatus()
+    assert.equal(retry.getSnapshot().configured, null)
+    assert.match(retry.getSnapshot().error, /Check access/)
+  } finally { retry.dispose() }
+})
+
+test('case relay retains proof, selected language and the same authenticated endpoints through stop', async () => {
+  const f = fixture()
+  const prefix = caseVoicePrefix('case-a')
+  const paths: string[] = [], eventPaths: (string | undefined)[] = []
+  const fetchApi = f.runtime.fetch
+  f.runtime.fetch = async (input, options) => {
+    const path = String(input)
+    paths.push(path)
+    return fetchApi(path === `${prefix}/status` ? '/api/status' : path.replace(`${prefix}/session`, '/api/live/session'), options)
+  }
+  f.runtime.events = url => { eventPaths.push(url); return f.source as unknown as EventSource }
+  const client = new LiveClient('case-a', 'ja', f.runtime, { apiPrefix: prefix, bridgeToken: async () => 'case-only-proof' })
+  try {
+    client.observe()
+    await new Promise(resolve => setImmediate(resolve))
+    await client.start('en', 'reception', undefined, 'en')
+    const creation = f.calls.find(call => call.path === '/api/live/session')!
+    assert.deepEqual(JSON.parse(String(creation.options?.body)), { sdp: 'v=0\r\no=mock', language: 'en', case_id: 'case-a', bridge_token: 'case-only-proof', language_preference: 'en' })
+    assert.equal(creation.options?.credentials, 'same-origin')
+    assert.equal(creation.options?.redirect, 'manual')
+    f.channel.onmessage!({ data: JSON.stringify({ type: 'session.started', session: { id: 'live_1' } }) })
+    f.setCreate(async () => Response.json({ case_id: 'case-a', language: 'ja', language_preference: 'ja' }))
+    await client.setLanguage('ja', 'ja')
+    await client.stop()
+    assert.equal(client.getSnapshot().language, 'ja')
+    assert.equal(client.getSnapshot().phase, 'ended')
+    assert.equal(JSON.stringify(client.getSnapshot()).includes('case-only-proof'), false)
+    assert.deepEqual(eventPaths, [`${prefix}/events`])
+    assert.ok(paths.includes(`${prefix}/session/live_1/language`))
+    assert.ok(paths.includes(`${prefix}/session/live_1`))
+    assert.ok(paths.every(path => path.startsWith(`${prefix}/`)))
+    for (const invalid of ['https://other.test/api', '/api/v1/cases/case-b/voice']) assert.throws(() => new LiveClient('case-a', 'ja', f.runtime, { apiPrefix: invalid }), /this Worker case/)
+    for (const invalid of ['', 'a/b', '日本語', 'a'.repeat(201)]) assert.throws(() => caseVoicePrefix(invalid), /Invalid Worker case/)
   } finally { client.dispose() }
 })

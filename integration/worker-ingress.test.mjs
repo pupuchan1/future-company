@@ -139,13 +139,13 @@ test('HTTP result ingress requires active case proof and preserves cross-origin 
 
 test('saved Worker result waits for voice activation and reaches original Agent once', { timeout: 5000 }, async t => {
   const f = await fixture(t);
-  const started = await f.start();
+  const started = await f.start({ route: 'haas' });
   const oldId = started.body.session.id;
   const commands = [];
   f.app.gateway.service.connectDevice({ type: 'hello', device_id: 'black-phone-1', simulated: true, capabilities: ['ring.start', 'ring.stop'] }, command => { commands.push(command); return true; });
   const request = f.app.gateway.service.requestHuman({ case_id: 'case-owned', reason: 'human_requested', summary: '現場の開発環境', language: 'ja', idempotency_key: 'owned-question' });
   await f.registered.promise;
-  const prepared = await f.api(`/api/live/session/${oldId}/handoff`, { sdp: 'v=0\r\n', route: 'haas' });
+  const prepared = await f.api(`/api/live/session/${oldId}/handoff`, { sdp: 'v=0\r\n', route: 'recruiting' });
   assert.equal(prepared.status, 200);
   const completion = await f.event('human.completed');
   Object.assign(f.state.requests[0], { status: 'answered', result: { text: '【模擬回答】TypeScriptを使います。', language: 'ja' }, simulated: true, delivery: { status: 'pending' } });
@@ -158,7 +158,7 @@ test('saved Worker result waits for voice activation and reaches original Agent 
   assert.equal(active.status, 200);
   await f.delivered.promise;
   assert.equal(f.agentCalls.length, 1);
-  assert.equal(f.agentCalls[0].input.metadata.role, 'recruiting');
+  assert.equal(f.agentCalls[0].input.metadata.role, 'haas');
   assert.match(f.agentCalls[0].input.input, /TypeScript/);
   assert.match(f.agentCalls[0].input.input, new RegExp(request.handoff_id));
   assert.equal(f.liveSockets.get(prepared.body.session.id).sent.filter(e => e.type === 'session.commentary.append').length, 1);
@@ -168,7 +168,7 @@ test('saved Worker result waits for voice activation and reaches original Agent 
 
 test('late device ACKs keep the saved Worker answer in SSE and the real UI reducer without another Agent turn', { timeout: 5000 }, async t => {
   const f = await fixture(t);
-  await f.start();
+  await f.start({ route: 'haas' });
   const commands = [];
   const device = f.app.gateway.service.connectDevice({ type: 'hello', device_id: 'black-phone-1', simulated: true,
     capabilities: ['ring.start', 'ring.stop'] }, command => { commands.push(command); return true; });
@@ -192,7 +192,7 @@ test('late device ACKs keep the saved Worker answer in SSE and the real UI reduc
   for (const event of late) {
     assert.equal(event.data.status, 'completed');
     assert.deepEqual(event.data.result, answer);
-    assert.equal(event.data.source_route, 'recruiting');
+    assert.equal(event.data.source_route, 'haas');
   }
   const reducer = new LiveEventReducer();
   const ui = output.seen.reduce((snapshot, event) => reducer.apply(snapshot, event, 'server'), initialSnapshot('case-owned', 'ja'));

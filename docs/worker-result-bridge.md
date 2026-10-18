@@ -23,7 +23,7 @@ npm run db:migrate:local
 npm run dev
 ```
 
-Reactは5173、Nodeは4320、Workerは8787。`WORKER_API_URL`を設定するとWorker連携を有効にし、case限定証明のない音声開始を拒否する。空のままなら従来のNode音声構成で動く。WorkerのDO・D1はローカルの保存先を使用する。
+Reactは5173、Nodeは4320、認可relayは4330、Workerは8787。通常の受付はWorkerの`/api/v1/cases/:caseId/voice/*`を通し、Node直接APIは内部入口として使う。relay用設定と許可済みMCPトンネルの起動は[README](../README.md#ローカル起動)を参照。`WORKER_API_URL`を設定するとWorker連携を有効にし、case限定証明のない音声開始を拒否する。空のままなら従来のNode単独構成で動く。WorkerのDO・D1はローカルの保存先を使用する。
 
 ## ブラウザからの開始
 
@@ -93,4 +93,4 @@ Nodeの`POST /api/worker/results`へ`{case_id,bridge_token}`を送り、現在�
 
 既存の本人限定Accessは変更しない。Nodeから保護された公開Workerを使う場合は、すでに許可されたService Tokenの`WORKER_ACCESS_CLIENT_ID`と`WORKER_ACCESS_CLIENT_SECRET`をサーバーに設定する。未許可のサービス資格情報を作成したり、本人限定のポリシーを広げたりする処理は、このアダプターに含まれない。Accessが302を返した場合、ログインHTMLを回答データとして処理しない。
 
-接続試験の結果はPRとIssue #19へ記載する。実Worker・DO・D1を使ったローカル試験と、模擬providerによるAgent処理確認は、実モデルの発話・実機黒電話・実Work購読の確認とは分ける。公開voice relayの経路はLimo側で実装中で、この文書のNodeローカル入口とは別の配信経路になる。
+接続試験の結果はPRとIssue #19へ記載する。実Worker・DO・D1を使ったローカル試験と、模擬providerによるAgent処理確認は、実モデルの発話・実機黒電話・実Work購読の確認とは分ける。認可voice relayを通した画面・実Live・Agents・MCP・模擬人間回答の結合結果は[ローカル音声デモ検証](local-voice-demo-verification.md)を参照。実マイクや公開本番の確認とは分ける。

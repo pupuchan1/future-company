@@ -109,6 +109,7 @@ function clientFixture() {
     async play() { this.paused = false }, pause() { this.paused = true },
   }
   const channel = { onmessage: null as ((event: { data: string }) => void) | null, onclose: null, close() {} }
+  const source = { onmessage: null as ((event: { data: string }) => void) | null, close() {} }
   const peer = {
     iceGatheringState: 'complete', connectionState: 'new', localDescription: null as null | { sdp: string },
     ontrack: null as ((event: { streams: MediaStream[] }) => void) | null,
@@ -123,7 +124,7 @@ function clientFixture() {
       : options?.method === 'DELETE' ? Response.json({ live_finalized: true, cleanup_pending: [] })
         : Response.json({ session: { id: 'live_1' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }),
     microphone: async () => microphone.stream, peer: () => peer, audio: () => audio, supported: () => true,
-    events: () => ({ close() {} }),
+    events: () => source,
     metering: (callback: (levels: LiveAudioLevels) => void, activity?: (value: VoiceActivity) => void) => {
       publish = callback
       publishActivity = activity
@@ -131,7 +132,7 @@ function clientFixture() {
     },
   } as unknown as LiveRuntime
   const client = new LiveClient('case-a', 'ja', runtime)
-  return { client, runtime, microphone, remote, audio, peer, channel,
+  return { client, runtime, microphone, remote, audio, peer, channel, source,
     sample: (inputLevel: number, outputLevel: number) => {
       publish({ inputLevel, outputLevel })
       publishActivity?.({ available: true, input: measureSignal(new Float32Array(512).fill(inputLevel)), output: measureSignal(new Float32Array(512).fill(outputLevel)) })
@@ -228,4 +229,109 @@ test('stop/dispose closes the meter even while the microphone permission is pend
   assert.equal(f.input(), undefined)
   f.sample(1, 1)
   assert.equal(f.disposed(), 1)
+})
+
+test('active transcript changes intent but not sound; late session events and stopped callbacks cannot restore it', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 10000 })
+  const f = clientFixture()
+  await f.client.refreshStatus(); await f.client.start()
+  const deliver = f.channel.onmessage!
+  try {
+    deliver({ data: JSON.stringify({ type: 'session.started', session: { id: 'live_1' } }) })
+    deliver({ data: JSON.stringify({ type: 'session.input_transcript.delta', delta: 'こんにちは', event_id: 'input-1' }) })
+    assert.equal(f.client.getSnapshot().conversation, 'waiting')
+    assert.equal(f.client.getSnapshot().speaking, 'silent')
+    f.peer.ontrack!({ streams: [f.remote.stream] })
+    await new Promise(resolve => setImmediate(resolve))
+    t.mock.timers.tick(400)
+    f.sample(0, .2)
+    assert.equal(f.client.getSnapshot().conversation, 'assistant')
+    f.sample(0, 0)
+    assert.equal(f.client.getSnapshot().conversation, 'assistant', 'Short output gap keeps turn label, not fake energy')
+    assert.equal(f.client.getSnapshot().outputLevel, 0)
+    t.mock.timers.tick(700); f.sample(0, 0)
+    assert.equal(f.client.getSnapshot().conversation, 'listening')
+    deliver({ data: JSON.stringify({ type: 'session.input_transcript.delta', delta: 'こんにちは', event_id: 'input-1' }) })
+    assert.equal(f.client.getSnapshot().conversation, 'listening', 'Duplicate input cannot reopen a completed response')
+    deliver({ data: JSON.stringify({ type: 'session.input_transcript.delta', session_id: 'old', delta: '古い入力', event_id: 'old-1' }) })
+    assert.equal(f.client.getSnapshot().conversation, 'listening')
+    await f.client.stop()
+    deliver({ data: JSON.stringify({ type: 'session.input_transcript.delta', delta: '遅延', event_id: 'late-1' }) })
+    f.sample(.2, .2)
+    assert.equal(f.client.getSnapshot().conversation, 'listening')
+    assert.equal(f.client.getSnapshot().phase, 'ended')
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+test('a duplicate backend result cannot reopen finished Orb response intent', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 10000 })
+  const f = clientFixture()
+  await f.client.refreshStatus(); await f.client.start()
+  const receive = (f.client as unknown as { receive: (event: unknown, source: string) => void }).receive.bind(f.client)
+  const result = { name: 'backend.result', eventId: 'backend-result-1', data: { case_id: 'case-a', session_id: 'live_1', content: 'done' } }
+  try {
+    f.channel.onmessage!({ data: JSON.stringify({ type: 'session.started', session: { id: 'live_1' } }) })
+    f.peer.ontrack!({ streams: [f.remote.stream] })
+    await new Promise(resolve => setImmediate(resolve))
+    receive(result, 'server')
+    assert.equal(f.client.getSnapshot().conversation, 'waiting')
+    f.sample(0, .2)
+    t.mock.timers.tick(700); f.sample(0, 0)
+    assert.equal(f.client.getSnapshot().conversation, 'listening')
+    receive(result, 'server')
+    assert.equal(f.client.getSnapshot().conversation, 'listening', 'Seen event must not restart waiting after audible response completed')
+  } finally { await f.client.stop(); f.client.dispose() }
+})
+
+for (const type of ['backend.started', 'backend.result']) {
+  for (const transport of ['server', 'datachannel'] as const) {
+    test(`replayed ${type} from ${transport} cannot reopen a spoken response`, async t => {
+      t.mock.timers.enable({ apis: ['Date'], now: 10000 })
+      const f = clientFixture()
+      await f.client.refreshStatus(); f.client.observe(); await f.client.start()
+      const deliver = (event: Record<string, unknown>, source = transport) => {
+        const target = source === 'server' ? f.source : f.channel
+        target.onmessage!({ data: JSON.stringify(event) })
+      }
+      const event = { type, case_id: 'case-a', session_id: 'live_1', event_id: 'backend-1', content: 'Confirmed' }
+      try {
+        // Rejected cases must not consume the active case's event ID.
+        deliver({ ...event, case_id: 'other-case' }, 'server')
+        assert.equal(f.client.getSnapshot().conversation, 'listening')
+        deliver(event)
+        assert.equal(f.client.getSnapshot().conversation, 'waiting')
+        f.peer.ontrack!({ streams: [f.remote.stream] })
+        await new Promise(resolve => setImmediate(resolve))
+        f.sample(0, .2)
+        assert.equal(f.client.getSnapshot().conversation, 'assistant')
+        t.mock.timers.tick(700); f.sample(0, 0)
+        assert.equal(f.client.getSnapshot().conversation, 'listening')
+
+        deliver(event)
+        assert.equal(f.client.getSnapshot().conversation, 'listening', 'Same transport replay must stay complete')
+        deliver(event, transport === 'server' ? 'datachannel' : 'server')
+        assert.equal(f.client.getSnapshot().conversation, 'listening', 'Cross transport replay must stay complete')
+        deliver({ ...event, event_id: 'old-session', session_id: 'old' })
+        assert.equal(f.client.getSnapshot().conversation, 'listening', 'Old session cannot change active voice intent')
+        deliver({ ...event, event_id: 'backend-2' })
+        assert.equal(f.client.getSnapshot().conversation, 'waiting', 'A new event with identical content still waits')
+      } finally { await f.client.stop(); f.client.dispose() }
+    })
+  }
+}
+
+test('replayed backend errors cannot clear a new pending response', async () => {
+  const f = clientFixture()
+  await f.client.refreshStatus(); await f.client.start()
+  const deliver = (event: Record<string, unknown>) => f.channel.onmessage!({ data: JSON.stringify(event) })
+  try {
+    const error = { type: 'backend.error', event_id: 'error-1', message: 'Try again' }
+    deliver(error)
+    deliver({ type: 'backend.started', event_id: 'work-2' })
+    assert.equal(f.client.getSnapshot().conversation, 'waiting')
+    deliver(error)
+    assert.equal(f.client.getSnapshot().conversation, 'waiting')
+    deliver({ ...error, event_id: 'error-2' })
+    assert.equal(f.client.getSnapshot().conversation, 'listening')
+  } finally { await f.client.stop(); f.client.dispose() }
 })
