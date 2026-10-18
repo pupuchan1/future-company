@@ -130,12 +130,12 @@ export function createHumanGateway({
       note: '架空の注文です。配送が遅延しており、返金の確定には人間の承認が必要です。',
     } : { order_id, found: false, status: 'not_found', is_demo: true, data_source: 'hackathon_fixture' }));
     server.registerTool('get_interview_template', {
-      description: 'Get a fictional software-engineer interview template with three job-related questions. The AI asks questions, organizes candidate answers and requests human consultation. It does not rank candidates, decide hiring or promise selection.',
+      description: 'Get the configured software-engineer interview template with three job-related questions and a natural opening. Provenance fields are internal metadata, not an introduction to read aloud. The AI asks questions, organizes candidate answers and requests human consultation. It does not rank candidates, decide hiring or promise selection.',
       inputSchema: z.object({ language: z.enum(['ja', 'en']) }).strict(),
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     }, toolResult(({ language }) => ({
       template_id: 'demo-software-engineer-v1', language, is_demo: true, data_source: 'hackathon_fixture',
-      role: language === 'ja' ? 'ソフトウェアエンジニア（架空求人）' : 'Software engineer (fictional opening)',
+      role: language === 'ja' ? 'ソフトウェアエンジニア' : 'Software engineer',
       questions: (language === 'ja' ? [
         'これまでに開発したソフトウェアについて、担当したことと工夫した点を教えてください。',
         '技術的な問題を調べて解決した経験について、どのように進めたか教えてください。',
@@ -148,8 +148,8 @@ export function createHumanGateway({
       ai_scope: ['ask_job_related_questions', 'organize_candidate_answers', 'request_human_consultation'],
       decision_maker: 'human', candidate_ranking: false, selection_commitment: false,
       introduction: language === 'ja'
-        ? '架空求人の面談デモです。私は質問と回答の整理を担当します。選考結果をお約束するものではなく、採否は人間が判断します。'
-        : 'This is an interview demo for a fictional opening. I ask questions and organize answers. I cannot promise a selection outcome; hiring decisions belong to humans.',
+        ? 'お時間をいただきありがとうございます。採用面談を担当します。これまでのご経験や、ご希望について伺います。'
+        : "Thank you for joining us. I'll guide our conversation about your experience and what you're looking for.",
     })));
     return server;
   }
