@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { TestContext } from 'node:test'
+import { systemMessage } from '../src/lib/system-message.ts'
 import {
   browserLanguage,
   LANGUAGE_PREFERENCE_KEY,
@@ -76,4 +77,11 @@ test('disabled storage cannot break detection or manual selection', t => {
   assert.equal(readLanguagePreference(), 'auto')
   assert.doesNotThrow(() => saveLanguagePreference('ja'))
   assert.doesNotThrow(() => saveLanguagePreference('auto'))
+})
+
+test('system errors follow the selected language without splitting ordinary English paths', () => {
+  const message = '会話の言語を変更できませんでした。 / Could not change the conversation language.'
+  assert.equal(systemMessage(message, 'en'), 'Could not change the conversation language.')
+  assert.equal(systemMessage(message, 'ja'), '会話の言語を変更できませんでした。')
+  assert.equal(systemMessage('Connection failed / retry at /api/live', 'en'), 'Connection failed / retry at /api/live')
 })

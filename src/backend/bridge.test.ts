@@ -19,6 +19,19 @@ test('case proof is owner-scoped in payload and rejects expiry, tampering and ma
   for (const bad of [null, '', 'x.y', 'a'.repeat(2000), proof.slice(0, -1) + '!']) expect(await verifyBridgeProof(bad, 'case-1', secret, 1001)).toBe(false)
 })
 
+test('case proof tolerates a slightly faster issuer clock without accepting expired or distant-future proofs', async () => {
+  const verifierNow = 1000000
+  const proof = await issueBridgeProof('case-1', secret, verifierNow + 2173)
+  expect(await verifyBridgeProof(proof, 'case-1', secret, verifierNow)).toBe(true)
+  const boundary = await issueBridgeProof('case-1', secret, verifierNow + 30000)
+  expect(await verifyBridgeProof(boundary, 'case-1', secret, verifierNow)).toBe(true)
+  const beyond = await issueBridgeProof('case-1', secret, verifierNow + 30001)
+  expect(await verifyBridgeProof(beyond, 'case-1', secret, verifierNow)).toBe(false)
+  expect(await verifyBridgeProof(proof, 'case-2', secret, verifierNow)).toBe(false)
+  expect(await verifyBridgeProof(proof, 'case-1', 'b'.repeat(64), verifierNow)).toBe(false)
+  expect(await verifyBridgeProof(proof, 'case-1', secret, verifierNow + 902173)).toBe(false)
+})
+
 test('HaaS uses an explicit stable origin and saved result without exchange stock requirements', () => {
   let state = applyCommand(create(), staff, register, now)
   expect(state.requests[0].origin).toEqual({ nodeCaseId: 'case-1', handoffId: 'handoff-1', route: 'haas', targetRole: 'Engineer', expectedResult: 'Text answer' })

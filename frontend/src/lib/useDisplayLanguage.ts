@@ -35,10 +35,10 @@ export function useDisplayLanguage() {
 
   useEffect(() => {
     document.documentElement.lang = language
-    document.title = language === 'ja' ? 'Future Company | AI受付' : 'Future Company | AI Reception'
+    document.title = language === 'ja' ? '株式会社HaaS | 人の力につながるAI受付' : 'HaaS | Human as a Service · AI Reception'
     document.querySelector('meta[name="description"]')?.setAttribute('content', language === 'ja'
-      ? 'Future CompanyのAI受付。仕事の相談から、人への確認、会話メモまで。'
-      : 'Future Company AI reception. Discuss work, ask the team, and keep track of your conversation.')
+      ? 'AIの先に、人がいる。株式会社HaaSのAI総合受付。採用の相談も、仕事の依頼も。'
+      : 'Beyond AI, there are people. The HaaS AI front desk welcomes job inquiries and work requests.')
   }, [language])
 
   function selectLanguage(next: LanguagePreference) {

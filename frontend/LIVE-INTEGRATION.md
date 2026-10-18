@@ -5,29 +5,30 @@
 案件と開始証明の契約は [WORKER-CASE-CONTRACT.md](./WORKER-CASE-CONTRACT.md) を参照してください。
 オーブはpupuの `VoiceOrb` と同じWeb Audio解析を使います。表示用の合成波形は実音声の証拠にしません。
 
-## Node単体の開発用接続
+## 共通受付の接続
 
-PR #4の`integration/`があるcheckoutで、サーバー側の設定を用意して起動します。
-ブラウザにAPIキーやMCPトークンを渡す必要はありません。設定方法はPR #4の`integration/README.md`を参照してください。
+1. ホームの開始操作で `WorkerCaseClient` が `POST /api/v1/cases` を呼びます。同じvisitor cookieで案件を確認し、`POST /api/v1/cases/:id/bridge-token` から短期の所有者証明を取得します。
+2. 案件作成後に `LiveClient` が同一originの `/api/v1/cases/:id/voice/status` と `/events` を購読します。確認前にマイクを開きません。
+3. 設定が確認できたらマイクとWebRTCを準備し、`POST .../voice/session` にSDP・案件ID・短期証明を送ります。Workerが所有者を認可し、署名付きrelayを通してNodeへ渡します。サーバー専用キーはブラウザへ渡しません。
+4. `session.started` で `/conversation` へ移動します。`LiveSnapshot.transcripts` を右側の会話履歴へ表示し、SSEとDataChannelの同じevent IDは重複させません。左側のオーブは音声計測を使います。
+5. 言語変更・担当切替・終了も同じ案件のvoice APIを使います。画面移動では接続を作り直さず、終了後も現在のタブに履歴を残します。
+
+開始前の認証・案件証明・status失敗は画面に表示し、準備中の表示を解除します。設定が復旧したら「接続を再確認」後に再度開始できます。未作成の案件でグローバルな `/api/events` を購読しません。
+
+## ローカル設定と起動
+
+ルートの `.env.example` と `.dev.vars.example` を参照し、既存の私有設定に不足分を追加します。秘密値をGitへ登録しないでください。
+
+- Node `.env.local`: `OPENAI_API_KEY`、`HUMAN_MCP_URL`、`HUMAN_MCP_TOKEN`、`WORKER_API_URL=http://127.0.0.1:8787`、`STAFF_API_TOKEN`、`NODE_RELAY_SECRET`。
+- Worker `.dev.vars`: Nodeと同じ `STAFF_API_TOKEN` と `NODE_RELAY_SECRET`、`NODE_RELAY_ORIGIN=http://127.0.0.1:4330`、`NODE_RELAY_EVENTS_TRANSPORT=sse`。
+- MCP URLはAgentsが到達できる既存の認証付きHTTPS `/mcp` を使います。
 
 ```sh
-npm run integration
+npm run db:migrate:local
+npm run dev
 ```
 
-Reactのcheckoutで起動します。既存の通常Vite設定は変更していません。
-
-```sh
-npm run dev -- --config vite.live.config.ts
-```
-
-サーバーは`127.0.0.1:4320`、Reactはターミナルに表示されるlocalhost URLを使います。
-専用Vite設定が`/api`をサーバーへ転送します。同一originからのOriginヘッダーだけを
-転送先へ合わせます。cross-site判定やbackendのloopback制限は保持します。
-通常の`npm run dev`で起動した場合は音声サーバーへ転送されません。
-本番環境への公開やWorkers接続は、この開発用proxyでは扱いません。
-
-トップから会話画面に進み「AI音声に接続」を選びます。パネルの表示は設定・イベントの
-取得のみで、マイクは「AI音声を開始」を押すまで使いません。未設定時は開始できません。
+Node 4320、relay 4330、Worker 8787、FE 5173。`NODE_RELAY_SECRET` がある場合、起動スクリプトがNodeと認可relayを一緒に起動します。設定なしでも画面は起動しますが音声は開通しません。別画面用の5197も同じWorkerへ接続するFEプレビューです。既に他の作業が各ポートを使っている場合は、その作業者と起動元を揃えてください。
 
 ## 開発用パネルとの契約
 
@@ -53,7 +54,7 @@ WebRTCは`oai-events`を使います。HTTP作成が開始を行うので`sessio
 `session.started`を待ちます。PR #4はfrontend commandを許可していないため、文字送信も行いません。
 
 共通受付は `apiPrefix: /api/v1/cases/:caseId/voice` を指定し、`status`・`events`・
-`session`・担当交代・終了をすべてこの配下へ送ります。公開受付は空の案件IDでNodeの全体APIを呼びません。
+`session`・言語変更・担当交代・終了をすべてこの配下へ送ります。公開受付は空の案件IDでNodeの全体APIを呼びません。
 開始時の短命な `bridge_token` は毎回取得し、初回session作成本文だけに含めます。
 ブラウザからの秘密設定UIはありません。
 
@@ -80,8 +81,16 @@ npm run lint
 npm run build:frontend
 ```
 
-テストはイベント分離・重複排除・古い依頼の除外・遅れた接続応答の削除・
-マイク拒否と停止・SSE再接続をモックで確認します。実モデル発話や実機リングの確認とは区別します。
-公式仕様: https://developers.openai.com/api/docs/guides/voice-webrtc
+結合テストは実Worker/DO/D1、案件cookie・証明、署名付きrelay、Node HTTP/SSE、本物のフロント接続クライアントを通します。外部モデルとマイク/WebRTC機器、案件の人間回答WebSocketは代替します。開始・話者別履歴・重複除外・言語更新・他案件拒否・終了後の履歴保持を確認します。実モデルの音声、実機、人間回答の成功とは区別します。
 
-関連: https://github.com/pupuchan1/future-company/issues/13
+## 会話記録と言語
+
+`ReceptionPage` が単一の `useReceptionConnection` を所有します。ホームと `/conversation` の移動は History APIで表示だけを変え、WebRTC・録音を再作成しません。後続のホーム文言とフローティングオーブの導線も `/conversation` に統一しています。
+
+会話画面の `ConversationRecord` は同じhookの全件字幕と `recording` を受け、全文TXTと終了後のMP3を端末内から保存できます。候補の担当音声は採用前に記録せず、新しいマイク権限や音声アップロードを追加しません。終了後もそのタブに履歴とMP3を残します。
+
+言語選択は `POST .../voice/session/:id/language {language,language_preference}`。日本語/Englishの手動選択は自動分類より優先し、Autoで発話からの判定へ戻ります。担当の声を切り替えても同じcaseの選択を維持します。失敗は会話を終了せず表示し、再試行できます。
+
+## 実環境で残る確認
+
+現状と担当の正本は [Issue #94](https://github.com/pupuchan1/future-company/issues/94)。本番配置はr74techが既存アカウントで行い、既存のAccess・秘密設定・stateDirを維持します。稼働状態と実音声の受入は [VERIFICATION](../integration/VERIFICATION.md) の日時付き記録で確認します。会話はタブ内メモリで、リロード後の復元は含みません。PR #87のOrb更新はpupu担当で別統合です。

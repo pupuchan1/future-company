@@ -33,7 +33,7 @@ export function LiveConnectionPanel({ caseId, language, onSnapshot }: LiveConnec
   return <section className="panel" aria-label={text('AI音声接続', 'AI voice connection')}>
     <h2 className="panel-heading">{text('AI音声接続', 'AI voice connection')}</h2>
     <div className="task-body">
-      <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} />
+      <VoiceOrb activity={live.voice} conversation={s.conversation} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} />
       <div className="row spread"><strong>{phases[s.phase][en ? 1 : 0]}</strong><span className="tag">{text('サーバー接続モード', 'Server connection mode')}</span></div>
       <p className="small">{text('音声はAIに送信されます。開始するとマイクを使います。言語と担当は会話から自動判定します。', 'Audio is sent to the AI. Starting uses your microphone. Language and department are detected from the conversation.')}</p>
       <p role="status">{s.configured === null
@@ -55,7 +55,6 @@ export function LiveConnectionPanel({ caseId, language, onSnapshot }: LiveConnec
         <dt>{text('会話言語', 'Conversation language')}</dt><dd>{s.language === 'en' ? 'English' : '日本語'}</dd>
         <dt>{text('イベント接続', 'Events')}</dt><dd>{s.events === 'connected' ? text('受信中', 'Connected') : s.events === 'reconnecting' ? text('再接続待ち', 'Reconnecting') : text('接続待ち', 'Waiting')}</dd>
       </dl>
-      <p className="small">{text('この接続は音声専用です。文字のデモ送信やローカル担当者画面の操作は、音声サーバーへ送信されません。', 'This connection supports voice. Demo text messages and local team workspace actions are not sent to the voice server.')}</p>
       {s.transcripts.length > 0 && <section aria-label={text('実接続の文字起こし', 'Live transcript')}><h3>{text('音声の会話', 'Voice conversation')}</h3>{s.transcripts.map(item => <p key={item.id}><strong>{item.role === 'user' ? text('あなた', 'You') : item.role === 'system' ? text('システム', 'System') : 'AI'}: </strong>{item.text}</p>)}</section>}
       {s.backend !== 'idle' && <section><h3>{text('担当の処理', 'Department processing')}</h3><p>{s.backend === 'running' ? text('処理中', 'Working') : s.backend === 'error' ? text('処理エラー', 'Processing error') : text('処理結果を受信', 'Result received')}</p>{s.backendResult && <p>{s.backendResult}</p>}</section>}
       {s.requests.length > 0 && <section aria-label={text('サーバーの人間依頼', 'Server human requests')}><h3>{text('担当者への依頼', 'Requests to the team')}</h3>{s.requests.map(request => <article key={request.handoffId}>
@@ -68,7 +67,7 @@ export function LiveConnectionPanel({ caseId, language, onSnapshot }: LiveConnec
         </dl>}
         {request.status === 'accepted' && <p className="small">{text('受話器の応答です。人間との音声通話がつながったことは意味しません。', 'The handset responded. This does not confirm a human audio connection.')}</p>}
         {request.unavailableReason && <p>{text('対応できなかった理由', 'Unavailable reason')}: {request.unavailableReason}</p>}
-        {request.result ? <div className="answer"><strong>{request.simulated ? text('架空の模擬回答（原文）', 'Fictional simulated reply (original)') : text('担当者の回答（原文）', 'Team reply (original)')}</strong><p>{request.result.text}</p></div> : request.status === 'completed' && <p className="small">{text('対応終了を確認しました。回答本文はまだ届いていません。', 'Handling ended. No answer text has arrived.')}</p>}
+        {request.result ? <div className="answer"><strong>{text('確認結果（原文）', 'Response (original)')}</strong><p>{request.result.text}</p></div> : request.status === 'completed' && <p className="small">{text('対応終了を確認しました。回答本文はまだ届いていません。', 'Handling ended. No answer text has arrived.')}</p>}
       </article>)}</section>}
     </div>
   </section>

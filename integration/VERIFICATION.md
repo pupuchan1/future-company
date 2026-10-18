@@ -1,6 +1,6 @@
 # 接続プロトタイプの検証記録
 
-最新状況は末尾の「15:42以降」を参照。以下は各時点の試験記録であり、古い未接続項目を現在の状態として扱わない。
+最新状況は末尾の日時付き記録とIssue #94を参照。以下は各時点の試験記録であり、古い未接続項目を現在の状態として扱わない。
 
 2026-10-18 14:42 JST。PR #4 / Issue #8 / Issue #10。架空の会話・合成音声・模擬電話を使用。実ユーザーの録音やAPIキーは記録・コミットしていない。
 
@@ -99,3 +99,45 @@ aiortcで同じケースの一般受付→採用→HaaSを試験した。入力�
 - 15:45に、共有されたCloudflare Access設定で既存本番Workerのcompany APIは認証あり200 JSON／なし302を確認。現行本番は`haas`案件400、既存`support`案件201、案件証明とvoice/statusは404、手元の社員トークンは401。統合版の配置と社員認証の一致をIssue #33とSlackでr74techへ依頼済み。
 - 15:47のSlack更新で、共有Accessトークンは2026-10-19 00:00 JSTまでと確認。ID・Secretは変更なし。値はサーバー専用ファイルに保存し、Gitやブラウザには含めない。
 - 2回目の実ブラウザー試験では受付`shida`のままHaaSへ業務委譲し、同一case/handoffのWorker保存回答revision 5と英語の最終音声を確認。135秒時点でWebRTC接続とRTP送信が継続し、一度のICE切断からも復帰した。一方、status取得失敗後に声切替の可否が復旧せず、手動切替が拒否される不具合を確認。`browser-1792306151301.json`を根拠に #35 で修正する。
+
+
+## 2026-10-18 15:58–16:06 JST: 同じ案件で受付から採用音声へ切替
+
+継続した合成無音クロックを送る実ブラウザー試験で、受付 `shida` から採用 `harema` への手動切替が7.919秒で成功した。同じcaseと採用Agents sessionを維持し、切替後70.171秒まで接続を継続。追加の非無音サンプル178、候補側RTP 3,606 packets / 125,576 bytesを確認した。新しいLiveは `close_requested` でfinalized、業務Agentは削除済み。旧Liveの終了要求は送信済みだがfinalization応答がなく、新Liveの終了成功と分けて扱う。
+
+以前の30秒expiryはこの試行では再現していない。入力クロック変更だけが原因だと確定した試験ではなく、自動ルーティングや三担当の連続切替、実機電話までを確認したものではない。証跡は私有の `moj/work/browser-live-harness/evidence/p1-browser-manual-correlated.json`。
+
+- 一時的なstatus取得失敗で既知の声切替機能が無効になる問題を修正。403では無効化し、タイムアウト/5xxでは直前の機能情報を維持する。関連29テスト成功。
+- 自動切替はDecisionsの確定ルート、業務応答、発話後の静かな区間を待つ。声だけの変更から業務Agentを再実行せず、409時の再試行は最大3回。関連70テストと型検査成功。自動切替自体の新たな実ブラウザー確認は未完了。
+- r74techが16:01に既存本番Workerへ `7439949` を配置。version `8213ab20-f524-4ca9-8662-7f3b2fc57bc2`。16:06の独立確認でcompany/案件取得200、voice/status 503 (`voice_relay_unconfigured`)、社員認証401。本番にNodeと同一の2つのサーバーsecretを設定し、Nodeの `WORKER_API_URL` を本番へ向ける作業に進む。15:45時点の400/404は現在の状態ではない。
+
+
+## 2026-10-18 16:17 JST: r74担当の本番経路の通し確認
+
+#33 の [r74techによる本番実測](https://github.com/pupuchan1/future-company/issues/33#issuecomment-6247048799) で、Worker version `c27057a9-c69b-4d7e-9ba6-dcb69cc383b9` / 配置元 `319ffc1` が報告された。これは `7439949` 基点の配備で、`93cde97` のMP3・全文字幕・最新画面・後続自動声切替とは別版。以前の400/404/503/401はこの配備で解消している。担当者報告であり、Limo側の別Node試験として数えない。
+
+r74側のNode4350/relay4351、`https://jamie-journey-redhead-smart.trycloudflare.com`、既存本番Workerを1組として使用する。Limo側のNode4340/旧videos relayはローカル検証経路であり、本番へ上書きしない。production configのrelay参照を現行本番へ訂正した。secretは既存の一致を維持し、再配布しない。
+
+本番のhaas作成201、証明/status/SSE200、社員回答200、D1 revision5/answered/live_submitted、同一HaaS AgentとLive英語音声、正常終了が報告済み。入力と電話側は合成/模擬。初回の一過性530、試験末尾のowner cookie Path由来401は別途記録されており、全試験無条件exit0とは扱わない。実機ベル・実人間回答・実マイクの聞こえ方、最新差分の本番受入は未完。
+
+ユーザーの最新指定により、本番デプロイ担当はr74tech。Limo/Codexは統合・Issue棚卸し・検証・引渡しを担当し、別アカウントの認証切替は続けない。
+
+
+## 2026-10-18 16:25 JST: 端末内MP3の実ブラウザー確認
+
+録音基点は `5814a00` を含む `0a26c9d`（PR #76合流前）。実ブラウザーのAudioWorkletとencoding Workerへ合成入力440Hz・AI出力660Hzを渡し、3.669秒の記録から59,136 bytesのMP3を生成した。独立decodeは3.696秒、48kHz mono。両信号の検出、音声再生開始/終了、ダウンロードとffprobeでMP3形式を確認。ローカル生成元の解放も成功した。
+
+証跡は私有の `moj/work/browser-live-harness/evidence/browser-1792308338018.json`、画面は `moj/outputs/haas-mp3-verified.png`。実マイクや外部音声送信を使わない録音モジュールの試験で、PR #76画面統合後や本番の実会話全体の受入とは分ける。
+
+## 2026-10-18: PR #76会話画面のrelease統合
+
+`5fe608f` の会話専用画面を `0a26c9d` へ通常merge。後続ホーム文言と会話への導線を `/conversation` に揃え、接続を所有するhookは1つのまま、同じ全件字幕・TXT保存・端末内MP3を会話画面へ表示する。既存の自動担当交代、候補音声の録音除外、案件cookie/bridge-token/同一case prefixを維持した。PR #87のOrb本体は未統合でpupu担当。
+
+- フロント92件、Node言語/担当交代・Worker/relay/proxy・会話結合27件が成功。後者は実Worker/DO/D1・署名付きrelay・Node HTTP/SSE・本物のフロントクライアントを通し、外部モデルとマイク/WebRTC機器、人間回答WebSocketを代替する。
+- FEと表示フィクスチャーの型検査、FE/Worker buildが成功。Orbの既存chunkサイズ警告は残る。
+- 新しい `.../voice/session/:id/language` は所有caseとactive sessionを照合。手動選択は分類より優先し、担当の声を交代しても継承する。API応答喪失時はエラー表示して再試行でき、会話を止めない。
+- この合流後の本番実音声・画面往復のブラウザー受入は別途実施する。録音モジュールの実ブラウザーMP3証跡は上記の合流前確認。担当と最終受入条件はIssue #94。
+
+限定レビューで、言語POSTの応答が担当交代より遅れると最後の選択を再送しない競合を再現した。送信中は旧言語キャッシュを未確定とし、応答確認後だけ確定する修正と回帰テストを追加した。Autoの言語を担当交代のたびにブラウザー言語へ戻す処理は追加していない。
+
+PR #76由来の `import.meta.env.PROD` 直接参照は、Viteを経由しないWranglerで起動失敗するため、明示的な `import.meta.env?.DEV === true` の場合だけloopbackを許可する判定へ変更。未定義の本番環境は許可しない。修正後の実Worker/relay/Node結合を再実行して成功。direct Wrangler本番configのdry-run/起動読戻しは配置担当の受入として残す。
