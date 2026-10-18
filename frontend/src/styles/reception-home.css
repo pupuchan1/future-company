@@ -566,7 +566,23 @@
     grid-column: 2;
     grid-row: 1;
     width: 100%;
-    max-width: 390px;
+    max-width: none;
     justify-self: center;
+  }
+
+  .haas-homepage .reception-start,
+  .haas-homepage .reception-start:disabled {
+    min-height: 96px;
+    padding: 24px 28px;
+    font-size: 22px;
+    font-weight: 600;
+    background: var(--blue);
+    color: var(--white);
+    border-color: var(--blue);
+  }
+
+  .haas-homepage .reception-start svg {
+    width: 28px;
+    height: 28px;
   }
 }
