@@ -110,3 +110,14 @@ aiortcで同じケースの一般受付→採用→HaaSを試験した。入力�
 - 一時的なstatus取得失敗で既知の声切替機能が無効になる問題を修正。403では無効化し、タイムアウト/5xxでは直前の機能情報を維持する。関連29テスト成功。
 - 自動切替はDecisionsの確定ルート、業務応答、発話後の静かな区間を待つ。声だけの変更から業務Agentを再実行せず、409時の再試行は最大3回。関連70テストと型検査成功。自動切替自体の新たな実ブラウザー確認は未完了。
 - r74techが16:01に既存本番Workerへ `7439949` を配置。version `8213ab20-f524-4ca9-8662-7f3b2fc57bc2`。16:06の独立確認でcompany/案件取得200、voice/status 503 (`voice_relay_unconfigured`)、社員認証401。本番にNodeと同一の2つのサーバーsecretを設定し、Nodeの `WORKER_API_URL` を本番へ向ける作業に進む。15:45時点の400/404は現在の状態ではない。
+
+
+## 2026-10-18 16:17 JST: r74担当の本番経路の通し確認
+
+#33 の [r74techによる本番実測](https://github.com/pupuchan1/future-company/issues/33#issuecomment-6247048799) で、Worker version `c27057a9-c69b-4d7e-9ba6-dcb69cc383b9` / 配置元 `319ffc1` が報告された。これは `7439949` 基点の配備で、`93cde97` のMP3・全文字幕・最新画面・後続自動声切替とは別版。以前の400/404/503/401はこの配備で解消している。担当者報告であり、Limo側の別Node試験として数えない。
+
+r74側のNode4350/relay4351、`https://jamie-journey-redhead-smart.trycloudflare.com`、既存本番Workerを1組として使用する。Limo側のNode4340/旧videos relayはローカル検証経路であり、本番へ上書きしない。production configのrelay参照を現行本番へ訂正した。secretは既存の一致を維持し、再配布しない。
+
+本番のhaas作成201、証明/status/SSE200、社員回答200、D1 revision5/answered/live_submitted、同一HaaS AgentとLive英語音声、正常終了が報告済み。入力と電話側は合成/模擬。初回の一過性530、試験末尾のowner cookie Path由来401は別途記録されており、全試験無条件exit0とは扱わない。実機ベル・実人間回答・実マイクの聞こえ方、最新差分の本番受入は未完。
+
+ユーザーの最新指定により、本番デプロイ担当はr74tech。Limo/Codexは統合・Issue棚卸し・検証・引渡しを担当し、別アカウントの認証切替は続けない。
