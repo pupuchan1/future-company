@@ -146,7 +146,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     const deferred = [...state.deferredDelegations];
     state.deferredDelegations.clear();
     for (const id of state.handoffBeforeWork ? deferred.slice(0, 1) : deferred) {
-      if (!state.closed && previous?.canWork() && !state.seen.has(id)) {
+      if (!state.closed && previous?.canWork() && (state.handoffBeforeWork || !state.seen.has(id))) {
         state.seen.add(id);
         previous.enqueue(id, state.handoffBeforeWork ? 'handoff_fallback' : 'delegation');
       }

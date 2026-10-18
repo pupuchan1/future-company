@@ -156,7 +156,7 @@ test('a current native department decision starts handoff without waiting for mo
 
 test('failed early candidate continues the unstarted task once on the original voice', async t => {
   const f = await fixture(t, { create: (_input, count) => {
-    if (count > 1) throw new Error('Candidate unavailable');
+    if (count > 1) throw new OpenAI.APIConnectionError({ cause: new TypeError('Candidate unavailable') });
     return { session: { id: 'original' }, transport: { type: 'webrtc', sdp: 'v=0\r\nanswer' } };
   } });
   const started = await f.api('/api/live/session', { sdp: 'v=0\r\n', case_id: 'case-switch', handoff_before_work: true });
