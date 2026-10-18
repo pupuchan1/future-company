@@ -13,7 +13,7 @@ test('Worker returns the only real case ID; parallel starts create once with sam
   assert.equal(calls[0].init?.credentials, 'same-origin')
   assert.equal(calls[0].init?.redirect, 'manual')
   const sent = JSON.parse(String(calls[0].init?.body))
-  assert.equal(sent.kind, 'support'); assert.equal(sent.expectedRevision, 0)
+  assert.equal(sent.kind, 'haas'); assert.equal(sent.expectedRevision, 0)
   assert.equal(Object.hasOwn(sent, 'id'), false)
   assert.equal(client.getSnapshot().phase, 'ready')
 })

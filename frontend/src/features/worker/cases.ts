@@ -1,5 +1,5 @@
 export type CaseLanguage = 'ja' | 'en'
-export type WorkerCase = { id: string; revision: number; kind: 'support' | 'sales' | 'recruitment'; locale: CaseLanguage }
+export type WorkerCase = { id: string; revision: number; kind: 'support' | 'sales' | 'recruitment' | 'haas'; locale: CaseLanguage }
 export type WorkerCaseState = { phase: 'idle' | 'creating' | 'ready' | 'error'; case: WorkerCase | null; error: string }
 export type WorkerVoiceAuthorization = { case: WorkerCase; bridgeToken: string }
 
@@ -12,7 +12,7 @@ function readCase(body: unknown): WorkerCase {
   const value = body && typeof body === 'object' ? (body as { case?: unknown }).case : null
   if (!value || typeof value !== 'object') throw new WorkerCaseError('案件サーバーの応答を確認してください。 / Invalid case response.')
   const c = value as Record<string, unknown>
-  if (typeof c.id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(c.id) || !Number.isSafeInteger(c.revision) || (c.revision as number) < 0 || !['support','sales','recruitment'].includes(String(c.kind)) || !['ja','en'].includes(String(c.locale))) throw new WorkerCaseError('案件サーバーの応答を確認してください。 / Invalid case response.')
+  if (typeof c.id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(c.id) || !Number.isSafeInteger(c.revision) || (c.revision as number) < 0 || !['support','sales','recruitment','haas'].includes(String(c.kind)) || !['ja','en'].includes(String(c.locale))) throw new WorkerCaseError('案件サーバーの応答を確認してください。 / Invalid case response.')
   return { id: c.id, revision: c.revision as number, kind: c.kind as WorkerCase['kind'], locale: c.locale as CaseLanguage }
 }
 
@@ -20,7 +20,7 @@ function readCase(body: unknown): WorkerCase {
 export class WorkerCaseClient {
   private state: WorkerCaseState = { phase: 'idle', case: null, error: '' }
   private listeners = new Set<(state: WorkerCaseState) => void>()
-  private command: { commandId: string; expectedRevision: 0; kind: 'support'; locale: CaseLanguage } | null = null
+  private command: { commandId: string; expectedRevision: 0; kind: 'haas'; locale: CaseLanguage } | null = null
   private pending: Promise<WorkerCase> | null = null
   private voicePending: Promise<WorkerVoiceAuthorization> | null = null
   private voiceGeneration = 0
@@ -35,9 +35,9 @@ export class WorkerCaseClient {
   ensureCase(locale: CaseLanguage): Promise<WorkerCase> {
     if (this.pending) return this.pending
     const known = this.state.case
-    // Reception has no employment intent yet. 'support' is the Worker's general
-    // consultation category; the AI's recruitment/HaaS route remains independent.
-    this.command ??= { commandId: `voice-intake-${crypto.randomUUID()}`, expectedRevision: 0, kind: 'support', locale }
+    // The Worker's general HaaS case can receive either specialist's handoff.
+    // AI routing remains independent; existing support cases are still accepted.
+    this.command ??= { commandId: `voice-intake-${crypto.randomUUID()}`, expectedRevision: 0, kind: 'haas', locale }
     const controller = new AbortController()
     this.controller = controller
     const generation = ++this.generation
