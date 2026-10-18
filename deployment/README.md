@@ -58,6 +58,10 @@ relayの公開pathは `/relay/voice/*`（HMAC）、`/mcp`（Bearer）、`/bridge
 
 ## Workerの配置
 
+本番Workerへのサーバー間接続は、共有された `WORKER_API_ORIGIN`、`CF_ACCESS_CLIENT_ID`、`CF_ACCESS_CLIENT_SECRET` を私有の `.env.local` に保存する。NodeのWorkerBridgeはHTTPとWebSocketの両方にAccessの2ヘッダーを付ける。Access通過後も案件cookie・`bridge_token`・`STAFF_API_TOKEN` のアプリ認可は必要。Accessの値はWranglerの配置権限ではない。`WORKER_API_URL` が既存設定にあればそちらを優先するため、切替時には意図した接続先かを確認する。
+
+公開gatewayも同じ2ヘッダーで固定本番Workerへ接続できる。`DEMO_GATEWAY_WORKER_ORIGIN=https://future-company-demo.r74.workers.dev` を指定し、同じ私有envを読み込む。許可した固定originだけへ送信し、ブラウザへAccess値を渡さない。本番の `haas` 案件、案件証明、voice/status、社員認証が揃ってから接続先を切り替える。稼働中のローカルWorkerを使うデモは、それまでは維持する。
+
 `deployment/worker-entry.ts` は既存appとCaseRoomを取り込み、case付きvoice pathだけproxyへ流し、画面はStatic Assetsから配信する。既存server/apiの直接変更は不要。フロントには上記base pathを適用してから配信する。
 
 ```sh

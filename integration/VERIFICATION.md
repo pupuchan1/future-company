@@ -96,4 +96,6 @@ aiortcで同じケースの一般受付→採用→HaaSを試験した。入力�
 - 証跡は私有の`moj/work/browser-live-harness/evidence/browser-1792305753649.json`。この試験はローカルWorker/DO/D1と公開Node relayを通す。正式なCloudflare本番D1とは分けて扱う。
 - 続く手動のHaaS→採用切替は、新しい`harema`接続まで成功したが、30秒後にexpiredと`context_injection_incomplete`が発生。原因切り分け中で、切替後の音声成功とは扱わない。証跡`browser-1792305821579.json`。
 - 認証付き公開gatewayからpupu最新の画面を表示し、実ブラウザーでフォームログイン成功。秘密はサーバー側だけに保存。gatewayの認証・Origin・cookie・WebSocket中継13テスト、フロント70テストとbuild成功。
-- 15:45に共有されたCloudflare Access設定で、既存本番Workerのcompany APIは認証あり200 JSON／なし302を確認。現行本番は`haas`案件400、既存`support`案件201、案件証明とvoice/statusは404、手元の社員トークンは401。統合版の配置と社員認証の一致をIssue #33とSlackでr74techへ依頼済み。
+- 15:45に、共有されたCloudflare Access設定で既存本番Workerのcompany APIは認証あり200 JSON／なし302を確認。現行本番は`haas`案件400、既存`support`案件201、案件証明とvoice/statusは404、手元の社員トークンは401。統合版の配置と社員認証の一致をIssue #33とSlackでr74techへ依頼済み。
+- 15:47のSlack更新で、共有Accessトークンは2026-10-19 00:00 JSTまでと確認。ID・Secretは変更なし。値はサーバー専用ファイルに保存し、Gitやブラウザには含めない。
+- 2回目の実ブラウザー試験では受付`shida`のままHaaSへ業務委譲し、同一case/handoffのWorker保存回答revision 5と英語の最終音声を確認。135秒時点でWebRTC接続とRTP送信が継続し、一度のICE切断からも復帰した。一方、status取得失敗後に声切替の可否が復旧せず、手動切替が拒否される不具合を確認。`browser-1792306151301.json`を根拠に #35 で修正する。

@@ -2,6 +2,8 @@
 
 2026-10-18 時点の公式資料と changelog を確認。過去の AI Catchup の紹介時点と現在の API 提供状況を分ける。
 
+**15:50時点の実測:** GPT Live、Decisions、Agents API、公開MCP、人間回答のWorker保存と元Agentへの返却は実APIで接続済み。HaaSの調査・技能検索・依頼・回答照合も実Agentsで確認した。実ブラウザー試験の入力音声と電話側は模擬であり、実機ベル、人間の通話音声、実Work/dotsからのMCP Events購読は別途確認が必要。担当別の自動音声切替は #35 で修正中。詳細は [VERIFICATION.md](VERIFICATION.md)。
+
 | 機能 | 今回の使い方 | 確認するもの |
 | --- | --- | --- |
 | GPT Live | 総合受付、日英会話、会話を保った委譲 | WebRTC音声往復、session.started、sideband、終了 |
