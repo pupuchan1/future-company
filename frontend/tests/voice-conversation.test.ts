@@ -41,3 +41,19 @@ test('noise without accepted input does not invent a pending response', () => {
   turn.sample(.1, 0, false, false, 1000)
   assert.equal(turn.sample(0, 0, false, false, 1400), 'listening')
 })
+
+import { orbVolumes } from '../src/features/voice/orb-volumes.ts'
+import { SILENT_SIGNAL } from '../src/features/voice/activity.ts'
+test('both speakers articulate inside the sphere; visual gain is bounded and silence stays silent', () => {
+  const quiet = { ...SILENT_SIGNAL, active: true, level: .04 }
+  const loud = { ...quiet, level: .36 }
+  const input = orbVolumes(quiet, SILENT_SIGNAL)
+  const output = orbVolumes(SILENT_SIGNAL, quiet)
+  assert.ok(input.deformation > quiet.level)
+  assert.equal(output.deformation, input.deformation, 'AI output must deform the interior too')
+  assert.ok(output.flow > input.flow)
+  assert.ok(orbVolumes(loud, SILENT_SIGNAL).deformation > input.deformation)
+  assert.deepEqual(orbVolumes(SILENT_SIGNAL, SILENT_SIGNAL), { deformation: 0, flow: 0 })
+  assert.deepEqual(orbVolumes({ ...quiet, level: NaN }, SILENT_SIGNAL), { deformation: 0, flow: 0 })
+  assert.deepEqual(orbVolumes({ ...loud, level: 2 }, { ...loud, level: 2 }), { deformation: 1, flow: 1 })
+})

@@ -1,7 +1,8 @@
 # Orb conversation state — issue #59
 
-The official ElevenLabs sphere is unchanged. Real microphone PCM still drives the
-sphere and real, playable remote PCM drives the gray output rings. A separate
+The official ElevenLabs sphere is unchanged. Both real microphone PCM and playable remote PCM drive deformation inside the
+sphere, with bounded visual gain to make quiet syllables visible. Real remote
+PCM also drives the gray output rings. Detection uses the original levels. A separate
 conversation state distinguishes listening, user speech, waiting, assistant
 speech and simultaneous speech. Waiting has a subdued dotted pulse, not fake
 output energy. Reduced-motion mode disables that pulse.
