@@ -143,13 +143,14 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     if (candidate) void candidate.close({ preserveCase: true });
     drainHuman(state);
     const previous = sessions.get(state.activeSessionId);
-    for (const id of state.deferredDelegations) {
+    const deferred = [...state.deferredDelegations];
+    state.deferredDelegations.clear();
+    for (const id of state.handoffBeforeWork ? deferred.slice(0, 1) : deferred) {
       if (!state.closed && previous?.canWork() && !state.seen.has(id)) {
         state.seen.add(id);
-        previous.enqueue(id, 'delegation');
+        previous.enqueue(id, state.handoffBeforeWork ? 'handoff_fallback' : 'delegation');
       }
     }
-    state.deferredDelegations.clear();
   }
   function observeSession(result, state, { route = state.routing.route, standby = false } = {}) {
     const id = result.session.id;
@@ -225,6 +226,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         if (input.route !== undefined && !isVoiceRoute(input.route)) return json(res, 400, { error: 'Unknown voice department.', code: 'invalid_route' });
         const route = input.route || 'reception';
         if (input.language_preference !== undefined && !['auto', 'ja', 'en'].includes(input.language_preference)) return json(res, 400, { error: 'Invalid language preference.' });
+        if (input.handoff_before_work !== undefined && typeof input.handoff_before_work !== 'boolean') return json(res, 400, { error: 'Invalid voice handoff capability.' });
         const languagePreference = input.language_preference || 'auto';
         const language = languagePreference === 'auto' ? (input.language === 'en' ? 'en' : 'ja') : languagePreference;
         const caseId = identifier(input.case_id) ? input.case_id : `case-${randomUUID()}`;
@@ -239,6 +241,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
             transport: { type: 'webrtc', sdp: input.sdp } });
           const state = createCaseState(caseId, language, route);
           state.languagePreference = languagePreference;
+          state.handoffBeforeWork = input.handoff_before_work === true;
           state.activeSessionId = result.session.id;
           cases.set(caseId, state);
           const session = observeSession(result, state);
@@ -350,6 +353,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         clearTimeout(ticket.timer);
         state.activeSessionId = candidate.id;
         state.switching = null;
+        const continueWork = state.handoffBeforeWork && state.deferredDelegations.size > 0;
         state.deferredDelegations.clear();
         candidate.updateRouting({ route: ticket.route, language: state.routing.language }, 'voice_handoff');
         const response = { ...connectionInfo(candidate), old_session_id: ticket.oldId, active: true };
@@ -357,6 +361,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         const resumedHuman = drainHuman(state);
         candidate.activateDepartment({ announce: !ticket.automatic && resumedHuman === 0, automatic: ticket.automatic,
           announceVoice: ticket.automatic && resumedHuman === 0 });
+        if (continueWork) void candidate.enqueue(null, 'handoff_continuation');
         emit({ type: 'live.handoff', ...response, session_id: candidate.id });
         void previous.close({ preserveCase: true });
         return json(res, 200, response);

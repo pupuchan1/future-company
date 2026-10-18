@@ -140,6 +140,7 @@ export class LiveConversation {
     if (this.caseState) this.caseState.routing = next;
     this.emit({ type: 'routing.updated', case_id: this.caseId, session_id: this.id,
       voice_route: this.voiceRoute, voice: this.voice, ...next, source,
+      ...(source === 'decisions' && this.caseState?.handoffBeforeWork && next.route !== this.voiceRoute ? { handoff_before_work: true } : {}),
       ...(source === 'decisions' ? { source_event_id: this.lastInputId } : {}) });
     this.send('session.instructions.append', { delegation_id: null,
       content: `The app has routed this conversation to ${next.route === 'recruiting' ? 'the recruitment interview specialist' : next.route === 'haas' ? 'the Human as a Service coordinator' : 'general reception'}. Speak ${next.language === 'en' ? 'English' : 'Japanese'}. If the department differs from this voice transport, briefly say once that you are connecting the caller and their context will be shared. Do not repeat this transition if it was already said. This is a specialist backend context change; do not say the voice or person changed, or introduce yourself as the new specialist before activation.` });
@@ -189,6 +190,14 @@ export class LiveConversation {
       // commit the department only at delegation using the accumulated context.
       this.emit({ type: 'routing.candidate', case_id: this.caseId,
         ...readRouting(event.event.decision.answers, this.routing), source: 'live_decisions', source_event_id: event.source_event_id });
+      if (this.caseState?.handoffBeforeWork && this.canWork() && !this.busy) {
+        const next = readRouting(event.event.decision.answers, this.routing);
+        if (next.route !== this.routing.route) {
+          this.updateRouting({ ...this.routing, route: next.route }, 'decisions');
+          if (next.route !== this.voiceRoute) this.deferHandoff(`routing:${this.caseState.callerTurnId}`);
+          else this.caseState.deferredDelegations.clear();
+        }
+      }
     }
     if (event.type === 'session.delegation.created' && event.delegation?.target === 'client') {
       if (this.awaitFreshInput) return;
@@ -201,6 +210,19 @@ export class LiveConversation {
       this.seen.add(id);
       this.enqueue(id, 'delegation');
     }
+  }
+
+  deferHandoff(delegationId) {
+    const pending = this.caseState.deferredDelegations;
+    if (pending.has(delegationId)) return;
+    pending.add(delegationId);
+    // A client that cannot prepare a candidate still keeps its working voice.
+    const fallback = setTimeout(() => {
+      if (!pending.delete(delegationId) || !this.canWork()) return;
+      pending.clear();
+      void this.enqueue(null, 'handoff_fallback');
+    }, 10000);
+    fallback.unref?.();
   }
 
   enqueue(delegationId, source, extra = '', resumeRoute = null, isValid = () => true) {
@@ -241,6 +263,11 @@ export class LiveConversation {
         }
       }
       if (this.closed) return;
+      if (source === 'delegation' && this.caseState?.handoffBeforeWork && this.routing.route !== this.voiceRoute) {
+        // Move this unstarted turn to the new voice instead of reading it on reception.
+        this.deferHandoff(delegationId);
+        return { status: 'waiting_handoff' };
+      }
       const content = await this.backend.run({ caseId: this.caseId, liveSessionId: this.id, ...this.routing, route: resumeRoute || this.routing.route,
         transcript: transcript + extra, handoffs: this.handoffs(), source });
       if (this.closed || !isValid()) return { status: 'cancelled' };
