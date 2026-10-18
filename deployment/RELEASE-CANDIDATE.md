@@ -12,7 +12,7 @@ Limoが配備基準として指定したcommitは`617612592fda658304fe87f68d2166
 | 会話画面 #76 | `5fe608ffe4b48fe1a909f640859a90d03441f5e1`までを通常merge | 最新HEAD`f0572a563f8b2660076871e084bf1470980a841c`のOrb中央配置修正は未統合 |
 | Orb #87 | 未統合。確認時のHEADは`d2f208b69fd3af40a71f4f27f414ff21c480b65c` | pupuが重複イベントの修正・仕上げを行い、そのcommitと受入結果を確認してから合流 |
 | 自動声交代 #81 | Limoの比較では必須修正は#39に実装済み | 並立する実装を丸ごとmergeしない。音量計測不能時の制限を残件として扱う |
-| 本番Worker型検査 #101 | `319ffc1`の試験コード除外はこの候補に未統合 | PR #101を確認し、最終配備commitで型検査を実行 |
+| 本番Worker型検査 #101 | `319ffc1`の試験コード除外はこの候補に未統合。配備担当の型検査は失敗 | PR #101を合流し、最終配備commitで型検査を通す |
 
 #81の字幕fallbackは、後続deltaでタイマーを延長せず発話中に交代する懸念があるため、Limoが未採用とした差分。
 判断の根拠は[#81の比較結果](https://github.com/pupuchan1/future-company/pull/81#issuecomment-6247136638)。
@@ -24,6 +24,8 @@ Orbは同じ`backend.result`を再受信すると、音声応答終了後に`lis
 ## 検証の範囲
 
 `6176125`について、LimoからFE92件・Worker/relay/Node結合27件、型検査・build・lint、本番configのdry-run成功が報告されている。
+一方、[配備担当の#104](https://github.com/pupuchan1/future-company/pull/104)では同じ候補のFE92件・Node接続関連40件・FE build・22 assets dry-runが成功したが、配備用`tsc --noEmit -p deployment/tsconfig.json`はtest経由でfrontendを取り込んで失敗している。#101の除外設定は未統合であり、型検査成功とは扱わない。
+同担当の`npm run lint`は既存Orb・LegacyPrototypeのReact規則9 warningで終了1。Limoの成功報告と区別し、最終合流commitでコマンドと終了コードを確認する。外部CLIレビューも未完了。
 内部ブラウザーの録音・MP3再生・保存は合成した入力とAI音声による確認である。
 この記録は別担当の報告を整理したもので、ここで実AI・実マイク・本番を再試験した結果ではない。
 
