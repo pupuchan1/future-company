@@ -7,8 +7,10 @@ export function loadServerEnvironment(root, env = process.env, load = path => pr
     const path = fileURLToPath(new URL(name, root));
     if (!existsSync(path)) continue;
     const content = readFileSync(path, 'utf8').trim();
-    if (/^sk-[A-Za-z0-9_-]+$/.test(content)) {
-      if (!env.OPENAI_API_KEY) env.OPENAI_API_KEY = content;
+    const assignments = /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=/m.test(content);
+    const pasted = content.match(/\bsk-[A-Za-z0-9_-]+/g) || [];
+    if (!assignments && pasted.length === 1) {
+      if (!env.OPENAI_API_KEY) env.OPENAI_API_KEY = pasted[0];
     } else load(path);
   }
 }
