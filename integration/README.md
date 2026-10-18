@@ -61,6 +61,8 @@ Decisionsは `route=reception|recruiting|haas` と `language=ja|en` を分類し
 
 WebRTC の HTTP 作成で session は開始済み。`oai-events` で `session.started` を待ち、`session.start` を重ねて送らない。権限のある sideband だけが業務結果を Live に送ります。
 
+`backend.started` / `backend.result` / `backend.error` は、`case_id` と `live_session_id` で発生元のLive会話を特定し、`event_id` で再送を除外します。`backend.started/result` の `agent_session_id` は業務処理のAgents会話IDです（新規開始時は `null`）。互換性のため `backend.result.session_id` は従来のAgent ID、`backend.error.session_id` は従来のLive IDを保持します。音声状態の判定には `live_session_id` を使ってください。Liveを伴わない直接の `BusinessBackend.run` 呼び出しでは `live_session_id` は省略され、Orbの状態を変更しません。
+
 声の交代では候補の `session.started` とWebRTC connectedを両方確認してからactivateします。業務処理中や別の切替中は409。候補は30秒で期限切れとなり元の会話を維持します。確定失敗なら候補だけをDELETEします。activateの応答が失われた場合は同じtokenで再試行し、未確定のまま候補を削除しないでください。旧セッションの `live.closed` は `session_id` で識別します。旧セッションの終了ではcaseやAgentsを削除せず、最終終話だけで削除します。切替待ち中の人間回答はキューし、確定した会話へ一度だけ返します。
 
 会社トップのUI差分は #16。既存フロントを維持し、開始入口を1つにする方針は #22。Workersのcase ID・認証境界は #18、保存した人間回答のAgent/Live返却は #19 を接続窓口とします。
