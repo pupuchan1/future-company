@@ -1,5 +1,7 @@
 # 接続プロトタイプの検証記録
 
+最新状況は末尾の「15:42以降」を参照。以下は各時点の試験記録であり、古い未接続項目を現在の状態として扱わない。
+
 2026-10-18 14:42 JST。PR #4 / Issue #8 / Issue #10。架空の会話・合成音声・模擬電話を使用。実ユーザーの録音やAPIキーは記録・コミットしていない。
 
 | 確認 | 結果 |
@@ -27,7 +29,7 @@
 - Agents作成応答待ちの終了、Live並行作成の同一case/上限、開発APIのHost/Origin制限。
 - MCP Eventsの購読検証、署名、有限再送、イベントID維持、解除・失効。
 
-## チーム結合として残るもの
+## 14:42時点でチーム結合として残っていたもの
 
 - pupuのReact画面と、r74techのWorker/DO/D1への接続。15時台にはPR #15/#12としてコード共有済み。画面はpupuの実装を採用し、案件ID・認証境界と結果返却の結合は #18/#19 で進める。
 - Node handoff_idとWorker requestIdの対応、社員認証/claim/revisionを通した結果APIアダプター。
@@ -87,3 +89,11 @@ aiortcで同じケースの一般受付→採用→HaaSを試験した。入力�
 - 人間イベントで検索や依頼を再実行せず、元のAgentで結果を照合した。終了時はAgents削除済み、`cleanup_pending=[]`。
 
 局所テストはMCP/ネットワーク10件成功。証跡は私有の`moj/work/quality-1792304972588.json`、実行スクリプトは`agents-quality-probe.mjs`。これは1シナリオの実接続確認であり、全タスクの品質や実機動作を保証する評価ではない。発話へMarkdownリンクが混ざったため、資料URLは依頼summaryに保持し音声には含めない指示を追加した。この最後の文面調整は別の実API試験をまだ行っていない。
+
+## 2026-10-18 15:42以降: 実ブラウザー・Worker回答・公開入口
+
+- 本物の`LiveClient`と`WorkerCaseClient`をブラウザーで動かし、合成音声から実GPT Live/HaaS Agents/MCPへ接続。Workerに保存された模擬人間回答が、元のAgents sessionで処理され、Liveの音声・字幕へ戻った。66.796秒時点でWebRTC/ICEはconnected、`marin`、非無音の音量サンプル259、同一handoffのcompleted/revision 5を確認。76秒時点まで回答音声の字幕が続いた。実マイク・黒電話の実機を使った試験ではない。
+- 証跡は私有の`moj/work/browser-live-harness/evidence/browser-1792305753649.json`。この試験はローカルWorker/DO/D1と公開Node relayを通す。正式なCloudflare本番D1とは分けて扱う。
+- 続く手動のHaaS→採用切替は、新しい`harema`接続まで成功したが、30秒後にexpiredと`context_injection_incomplete`が発生。原因切り分け中で、切替後の音声成功とは扱わない。証跡`browser-1792305821579.json`。
+- 認証付き公開gatewayからpupu最新の画面を表示し、実ブラウザーでフォームログイン成功。秘密はサーバー側だけに保存。gatewayの認証・Origin・cookie・WebSocket中継13テスト、フロント70テストとbuild成功。
+- 15:45に共有されたCloudflare Access設定で、既存本番Workerのcompany APIは認証あり200 JSON／なし302を確認。現行本番は`haas`案件400、既存`support`案件201、案件証明とvoice/statusは404、手元の社員トークンは401。統合版の配置と社員認証の一致をIssue #33とSlackでr74techへ依頼済み。
