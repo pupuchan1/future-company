@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import type { AudioSignal } from './activity.ts'
 
 const Orb = lazy(() => import('./elevenlabs/Orb.tsx').then(module => ({ default: module.Orb })))
-const officialColors: [string, string] = ['#E8D5B5', '#7F9FC9']
+const brandColors: [string, string] = ['#00757D', '#9ACFC2']
 const fallback = <div className="voice-orb-static" />
 
 class OrbBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -34,7 +34,7 @@ export function OfficialOrbView({ input, output }: { input: AudioSignal; output:
   }, [])
   return <div className="voice-orb-surface" ref={host} data-renderer="elevenlabs-official">
     {enabled ? <OrbBoundary><Suspense fallback={fallback}>
-      <Orb seed={1000} colors={officialColors} volumeMode="manual" getInputVolume={getInputVolume} getOutputVolume={getSurfaceFlow} className="voice-orb-official" />
+      <Orb seed={1000} colors={brandColors} volumeMode="manual" getInputVolume={getInputVolume} getOutputVolume={getSurfaceFlow} className="voice-orb-official" />
     </Suspense></OrbBoundary> : fallback}
   </div>
 }

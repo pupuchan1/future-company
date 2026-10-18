@@ -15,6 +15,7 @@ export interface VoiceOrbProps {
   muted?: boolean
   playbackBlocked?: boolean
   floating?: boolean
+  onOpenConversation?: () => void
 }
 
 function OrbArt({ input, output, waiting }: { input: AudioSignal; output: AudioSignal; waiting: boolean }) {
@@ -30,7 +31,7 @@ function OrbArt({ input, output, waiting }: { input: AudioSignal; output: AudioS
   </div>
 }
 
-export function VoiceOrb({ activity = idleSource, conversation, phase = 'idle', language = 'ja', muted = false, playbackBlocked = false, floating = true }: VoiceOrbProps) {
+export function VoiceOrb({ activity = idleSource, conversation, phase = 'idle', language = 'ja', muted = false, playbackBlocked = false, floating = true, onOpenConversation }: VoiceOrbProps) {
   const audio = useSyncExternalStore(activity.subscribe, activity.getSnapshot, activity.getSnapshot)
   const host = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState(true)
@@ -46,7 +47,7 @@ export function VoiceOrb({ activity = idleSource, conversation, phase = 'idle', 
     : phase === 'error' ? text('接続を確認してください', 'Check the connection')
     : phase === 'connecting' ? text('接続しています', 'Connecting')
     : phase === 'reconnecting' ? text('再接続しています', 'Reconnecting')
-    : !running ? text('AI受付 · 待機中', 'AI reception · Ready')
+    : !running ? text('ご相談をお待ちしています', 'Ready when you are')
     : playbackBlocked ? text('AI音声の再生待ち', 'AI audio paused')
     : turn === 'both' ? text('あなたの声とAI音声', 'Your voice & AI audio')
     : turn === 'assistant' ? text('AIが話しています', 'AI is speaking')
@@ -68,7 +69,7 @@ export function VoiceOrb({ activity = idleSource, conversation, phase = 'idle', 
       <OrbArt input={input} output={output} waiting={waiting} />
       <p className="voice-orb-status" role="status">{status}</p>
     </div>
-    {floating && <button type="button" className="voice-orb-dock" hidden={visible} aria-label={`${text('音声受付へ戻る', 'Return to voice reception')} · ${status}`} onClick={() => host.current?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' })}>
+    {floating && <button type="button" className="voice-orb-dock" hidden={visible} aria-label={`${text('会話画面を開く', 'Open conversation')} · ${status}`} onClick={onOpenConversation ?? (() => window.location.assign('/#conversation'))}>
       <OrbArt input={input} output={output} waiting={waiting} />
     </button>}
   </>
