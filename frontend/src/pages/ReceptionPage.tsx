@@ -12,7 +12,7 @@ import "@/styles/reception-conversation.css";
 const phrase = (language: LiveLanguage, ja: string, en: string) =>
   language === "ja" ? ja : en;
 const routes: Record<LiveRoute, [string, string]> = {
-  reception: ["AI受付", "AI reception"],
+  reception: ["ご相談窓口", "Reception"],
   recruiting: ["採用の相談", "Recruiting"],
   haas: ["仕事・人への依頼", "Work & human assistance"],
 };
@@ -104,14 +104,14 @@ export function ReceptionPage() {
           </svg>
         </a>
         <span className="reception-header-label">
-          {text("AI総合受付", "AI RECEPTION")}
+          {text("ご相談窓口", "LET’S TALK")}
         </span>
         <LanguageSelector language={language} preference={preference} onChange={selectLanguage} />
       </header>
       <main id="main" className="page-width reception-main">
         {conversationView && <div className="reception-conversation-heading">
           <a className="text-button" href="#home">← {text("ホームへ戻る", "Back to home")}</a>
-          <h1 id="conversation" ref={conversationHeading} tabIndex={-1}>{text("AIとの会話", "Conversation with AI")}</h1>
+          <h1 id="conversation" ref={conversationHeading} tabIndex={-1}>{text("まずは、気軽に話してみませんか。", "Let’s start with a conversation.")}</h1>
         </div>}
         <section className="reception-hero">
           {!conversationView && <ReceptionIntro language={language} />}
@@ -129,14 +129,14 @@ export function ReceptionPage() {
               aria-label={
                 active
                   ? text("会話を終了", "End conversation")
-                  : text("AIに話しかける", "Talk to AI")
+                  : text("話してみる", "Let’s talk")
               }
             >
               <Mic off={active} />
               <span>
                 {active
                   ? text("会話を終了", "End conversation")
-                  : text("AIに話しかける", "Talk to AI")}
+                  : text("話してみる", "Let’s talk")}
               </span>
               <span aria-hidden="true">{active ? "■" : "→"}</span>
             </button>

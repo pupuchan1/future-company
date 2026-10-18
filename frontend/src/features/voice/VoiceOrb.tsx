@@ -48,7 +48,7 @@ export function VoiceOrb({ activity = idleSource, phase = 'idle', language = 'ja
                   : phase === 'error' ? text('接続を確認してください', 'Check the connection')
             : phase === 'connecting' ? text('接続しています', 'Connecting')
               : running && !audio.available ? text('音量表示を利用できません', 'Audio meter unavailable')
-                : running ? text('声を待っています', 'Waiting for speech') : text('AI受付 · 待機中', 'AI reception · Ready')
+                : running ? text('声を待っています', 'Waiting for speech') : text('ご相談をお待ちしています', 'Ready when you are')
 
   useEffect(() => {
     if (!floating || !host.current || typeof IntersectionObserver === 'undefined') return

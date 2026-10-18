@@ -35,7 +35,7 @@ export function useDisplayLanguage() {
 
   useEffect(() => {
     document.documentElement.lang = language
-    document.title = language === 'ja' ? '株式会社HaaS | ミライの会社・AI受付' : 'HaaS | Human as a Service · AI Reception'
+    document.title = language === 'ja' ? '株式会社HaaS | 人の力につながるAI受付' : 'HaaS | Human as a Service · AI Reception'
     document.querySelector('meta[name="description"]')?.setAttribute('content', language === 'ja'
       ? 'AIの先に、人がいる。株式会社HaaSのAI総合受付。採用の相談も、仕事の依頼も。'
       : 'Beyond AI, there are people. The HaaS AI front desk welcomes job inquiries and work requests.')
