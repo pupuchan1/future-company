@@ -18,14 +18,14 @@ export interface VoiceOrbProps {
   onOpenConversation?: () => void
 }
 
-function OrbArt({ input, output, waiting }: { input: AudioSignal; output: AudioSignal; waiting: boolean }) {
+function OrbArt({ input, output, waiting, userSpeaking }: { input: AudioSignal; output: AudioSignal; waiting: boolean; userSpeaking: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const signals = useRef({ input, output })
   useEffect(() => { signals.current = { input, output } }, [input, output])
   useEffect(() => {
     if (canvas.current) return animateOrb(canvas.current, () => signals.current)
   }, [])
-  return <div className="voice-orb-art" data-waiting={waiting} data-input={input.active} data-output={output.active} aria-hidden="true">
+  return <div className="voice-orb-art" data-waiting={waiting} data-input={input.active} data-output={output.active} data-user-speaking={userSpeaking} aria-hidden="true">
     <OfficialOrbView input={input} output={output} />
     <canvas ref={canvas} className="voice-orb-canvas" />
   </div>
@@ -40,6 +40,7 @@ export function VoiceOrb({ activity = idleSource, conversation, phase = 'idle', 
   const input = running && !muted && audio.available ? audio.input : SILENT_SIGNAL
   const output = running && !playbackBlocked && audio.available ? audio.output : SILENT_SIGNAL
   const turn = conversation ?? (input.active && output.active ? 'both' : output.active ? 'assistant' : input.active ? 'user' : 'listening')
+  const userSpeaking = running && !muted && audio.available && (input.active || turn === 'user' || turn === 'both')
   const waiting = phase === 'connected' && turn === 'waiting' && !playbackBlocked
   const status = phase === 'switching' ? text('担当に引き継ぎ中', 'Switching assistant')
     : phase === 'stopping' ? text('会話を終了中', 'Ending conversation')
@@ -66,11 +67,11 @@ export function VoiceOrb({ activity = idleSource, conversation, phase = 'idle', 
 
   return <>
     <div className="voice-orb-stage" data-conversation={turn} data-phase={phase} ref={host} aria-label={text('音声の入出力', 'Voice input and output')}>
-      <OrbArt input={input} output={output} waiting={waiting} />
+      <OrbArt input={input} output={output} waiting={waiting} userSpeaking={userSpeaking} />
       <p className="voice-orb-status" role="status">{status}</p>
     </div>
     {floating && <button type="button" className="voice-orb-dock" hidden={visible} aria-label={`${text('会話画面を開く', 'Open conversation')} · ${status}`} onClick={onOpenConversation ?? (() => window.location.assign('/conversation'))}>
-      <OrbArt input={input} output={output} waiting={waiting} />
+      <OrbArt input={input} output={output} waiting={waiting} userSpeaking={userSpeaking} />
     </button>}
   </>
 }
