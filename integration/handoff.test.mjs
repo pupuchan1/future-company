@@ -277,7 +277,7 @@ test('retired-session close events identify their transport and never delete a s
   await session.close();
   assert.equal(closed, 0);
   assert.deepEqual(emitted.find((event) => event.type === 'live.closed'), {
-    type: 'live.closed', case_id: 'shared-case', session_id: 'old-live',
+    type: 'live.closed', case_id: 'shared-case', session_id: 'old-live', reason: 'unknown',
   });
 });
 
