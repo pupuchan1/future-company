@@ -9,7 +9,8 @@ import { McpEvents } from './events/mcp-events.mjs';
 import { BusinessBackend, connectionDiagnostic, retryConnection } from './backend.mjs';
 import { LiveConversation, liveConfig } from './live-session.mjs';
 import { mcpCall } from './mcp-client.mjs';
-import { createCaseState, initialHistory, isVoiceRoute, voiceMap } from './case-state.mjs';
+import { createCaseState, initialHistory, historyTurns, isVoiceRoute, voiceMap } from './case-state.mjs';
+import { requestedInterviewEnd } from './interview.mjs';
 import { WorkerBridge } from './worker-bridge.mjs';
 import { loadServerEnvironment } from './environment.mjs';
 import { createSlackHumanTransport } from './human/slack.mjs';
@@ -82,6 +83,14 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
   const gateway = createHumanGateway({ token: env.HUMAN_MCP_TOKEN || '', slack,
     notifyRecruiter: input => slack.notifyRecruiter(input, { isActive: () => Boolean(cases.get(input.case_id)
       && !cases.get(input.case_id).closed && cases.get(input.case_id).routing.route === 'recruiting') }),
+    completeInterview: input => {
+      const isActive = () => Boolean(cases.get(input.case_id) && !cases.get(input.case_id).closed
+        && cases.get(input.case_id).routing.route === 'recruiting');
+      const latestCaller = historyTurns(cases.get(input.case_id)?.history || []).filter(turn => turn.role === 'user').at(-1)?.text;
+      if (!isActive() || !requestedInterviewEnd(latestCaller)) return { case_id: input.case_id,
+        notification_status: 'unavailable', error: 'interview_end_not_requested' };
+      return slack.completeInterview(input, { isActive });
+    },
     transportForCase: (caseId) => cases.get(caseId)?.routing.route === 'haas' || manualPhoneCases.has(caseId) ? 'phone' : 'slack',
     caseActive: (caseId) => manualPhoneCases.has(caseId) || Boolean(cases.get(caseId) && !cases.get(caseId).closed),
     handleEventRpc: (rpc) => events.handleRpc(rpc),
