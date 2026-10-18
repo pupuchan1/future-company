@@ -1,5 +1,8 @@
 # Worker と Node 音声の配置
 
+既存の本人限定本番の配備版と接続先は[配備記録](../docs/demo-deployment.md)、起動、再起動と復帰は[本番運用手順](PRODUCTION.md)を参照する。
+起動スクリプトの既定値はNode4340/relay4330。本番はNode4350/relay4351を明示して使う。
+
 最新の一般公開入口は **Codex Sites**。pupuのビルド済み画面を `sites/export-site.mjs` で登録済みSitesのVinext checkoutへ反映する。`sites/proxy.mjs` はvisitor APIだけを既存Workerへ中継する。Sites側に `CF_ACCESS_CLIENT_ID` と `CF_ACCESS_CLIENT_SECRET` をsecretで設定し、全員が音声会話できるpublic audienceで公開する。これは既存Worker・Node・Slack認証の設定を置き換えない。r74techは下記の既存backend配置を担当する。
 
 既存の Worker に React・DO・D1 を残し、Node 24 の音声・人間MCPを常駐プロセスで動かす。`server.mjs` の localhost guard はそのまま使う。Worker 側の既存 Access 本人限定設定と社員認証も変更しない。
@@ -88,7 +91,7 @@ npx wrangler secret put NODE_RELAY_SECRET --config deployment/wrangler.productio
 npx wrangler secret put STAFF_API_TOKEN --config deployment/wrangler.production.jsonc
 ```
 
-`--keep-vars` は既存変数を保持する。relayのトンネルを変更する場合は、configの `NODE_RELAY_ORIGIN` と実際のWorker変数を一致させる。現在のrelay/MCPは `https://jamie-journey-redhead-smart.trycloudflare.com` / 同originの `/mcp` を使い、Node 4350 / relay 4351へ対応させる。トンネル・stateDir・既存secretは維持する。共有AccessはNodeサーバーの `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` に設定し、`WORKER_API_URL=https://future-company-demo.r74.workers.dev` を明示する。現在の `integration/server.mjs` は `WORKER_API_URL` でWorkerBridgeの起動を判定するため、`WORKER_API_ORIGIN` だけでは起動しない。ブラウザのビルド変数へ秘密値を入れない。
+`--keep-vars` は既存変数を保持する。relayのトンネルを変更する場合は、configの `NODE_RELAY_ORIGIN` と実際のWorker変数を一致させる。relay/MCPは[配備記録](../docs/demo-deployment.md)とruntimeで今回のoriginを確認し、同originの `/mcp`、Node 4350 / relay 4351へ対応させる。過去のQuick Tunnel URLを固定しない。stateDir・既存secretは維持する。共有AccessはNodeサーバーの `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` に設定し、`WORKER_API_URL=https://future-company-demo.r74.workers.dev` を明示する。現在の `integration/server.mjs` は `WORKER_API_URL` でWorkerBridgeの起動を判定するため、`WORKER_API_ORIGIN` だけでは起動しない。ブラウザのビルド変数へ秘密値を入れない。
 
 配置後はAccess認証付きの `haas` 案件作成201、同じvisitor cookieによる `bridge-token` 200、case別 `voice/status` 200を順に確認する。`voice_relay_unconfigured` はWorkerのrelay設定不足、status 200は接続口の確認まで。Live開始・保存済み人間回答の返却・音声出力は別に通し確認する。既存Accessポリシーとpreview無効を維持する。
 
