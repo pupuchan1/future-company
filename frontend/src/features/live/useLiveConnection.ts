@@ -4,7 +4,7 @@ import { LiveClient } from './client.ts'
 import { initialSnapshot } from './types.ts'
 import type { LiveLanguage, LiveLanguagePreference, LiveRoute } from './types.ts'
 
-export function useLiveConnection({ caseId, language, languagePreference = 'auto' }: { caseId: string; language: LiveLanguage; languagePreference?: LiveLanguagePreference }) {
+export function useLiveConnection({ caseId, language, languagePreference = 'auto', enabled = true, apiPrefix }: { caseId: string; language: LiveLanguage; languagePreference?: LiveLanguagePreference; enabled?: boolean; apiPrefix?: string }) {
   const [snapshot, setSnapshot] = useState(() => initialSnapshot(caseId, language))
   const [voice, setVoice] = useState(() => new VoiceActivityStore())
   const client = useRef<LiveClient | null>(null)
@@ -16,7 +16,8 @@ export function useLiveConnection({ caseId, language, languagePreference = 'auto
     if (snapshot.phase === 'connected') void client.current?.setLanguage(language, languagePreference)
   }, [language, languagePreference, snapshot.phase])
   useEffect(() => {
-    const next = new LiveClient(caseId, languageRef.current)
+    if (!enabled) return
+    const next = new LiveClient(caseId, languageRef.current, undefined, { apiPrefix })
     client.current = next
     setSnapshot(next.getSnapshot())
     setVoice(next.voice)
@@ -33,9 +34,9 @@ export function useLiveConnection({ caseId, language, languagePreference = 'auto
       window.removeEventListener('pagehide', pagehide)
       window.removeEventListener('pageshow', pageshow)
     }
-  }, [caseId])
+  }, [caseId, enabled, apiPrefix])
   return {
-    snapshot,
+    snapshot: enabled && snapshot.caseId === caseId ? snapshot : initialSnapshot(caseId, language),
     voice,
     retryLanguage: () => client.current?.setLanguage(languageRef.current, preferenceRef.current),
     start: (route?: LiveRoute, bridgeToken?: string) => client.current?.start(languageRef.current, route, bridgeToken, preferenceRef.current),

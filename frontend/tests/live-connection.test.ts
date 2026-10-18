@@ -309,3 +309,40 @@ test('a permanently closed SSE after proxy failure is recreated, and dispose can
   t.mock.timers.tick(3000)
   assert.equal(opened, 2)
 })
+
+test('case transport rejects foreign or cross-origin prefixes before sending a request', () => {
+  const f = fixture()
+  for (const apiPrefix of ['https://example.invalid/api', '/api/v1/cases/case-b/voice', '/api/v1/cases/case-a/voice?x=1']) {
+    assert.throws(() => new LiveClient('case-a', 'ja', f.runtime, { apiPrefix }), /same origin/)
+  }
+  assert.equal(f.calls.length, 0)
+})
+
+test('case status failures are actionable, recover on retry, and never open the microphone', async () => {
+  const f = fixture()
+  let microphones = 0
+  let response = () => Response.json({ error: 'voice_relay_unconfigured' }, { status: 503 })
+  const client = new LiveClient('case-a', 'ja', { ...f.runtime,
+    fetch: async () => response(),
+    microphone: async () => { microphones++; return f.stream as unknown as MediaStream },
+  }, { apiPrefix: '/api/v1/cases/case-a/voice' })
+  try {
+    await client.refreshStatus()
+    assert.match(client.getSnapshot().error, /voice_relay_unconfigured/)
+    await client.start()
+    assert.equal(microphones, 0)
+    // Clear the unrelated Start error by using a fresh status-only client below.
+  } finally { client.dispose() }
+  const retry = new LiveClient('case-a', 'ja', { ...f.runtime, fetch: async () => response() }, { apiPrefix: '/api/v1/cases/case-a/voice' })
+  try {
+    await retry.refreshStatus()
+    response = () => Response.json({ live_configured: true, mcp_configured: true })
+    await retry.refreshStatus()
+    assert.equal(retry.getSnapshot().error, '')
+    assert.equal(retry.getSnapshot().configured, true)
+    response = () => new Response('<html>Login</html>', { status: 200 })
+    await retry.refreshStatus()
+    assert.equal(retry.getSnapshot().configured, null)
+    assert.match(retry.getSnapshot().error, /Check access/)
+  } finally { retry.dispose() }
+})

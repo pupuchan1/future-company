@@ -14,9 +14,14 @@
 - 会話終了後も現在の履歴を表示します。「新しい会話を用意する」でリセットしてホームに戻ります。
 - 再読み込みやタブを閉じた後の復元・過去セッションの保存や検索は含みません。既存の音声接続・認証の動作を使います。
 
+## BE接続
+
+[接続手順と検証範囲](LIVE-INTEGRATION.md)を参照してください。案件所有者のcookieと短期証明を使い、`/api/v1/cases/:id/voice/*` からWorker・認可relay・Nodeへ接続します。設定欠落時は実音声を開始せず、画面にエラーを表示します。
+
 ## 検証
 
 ```sh
+npm run test:conversation-backend
 npm run typecheck:frontend
 npm exec --workspace frontend -- tsc -p tests/tsconfig.fixtures.json
 npm run test:frontend

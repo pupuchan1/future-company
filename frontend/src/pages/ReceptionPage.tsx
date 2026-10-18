@@ -68,7 +68,7 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
     "switching",
     "stopping",
   ].includes(s.phase);
-  const available = Boolean(s.configured && s.mcpConfigured);
+  const available = !caseId || Boolean(s.configured && s.mcpConfigured);
   const isEnglish = language === "en";
   const hasConversation = Boolean(s.transcripts.length || s.requests.length || s.backendResult || s.phase === "connected");
   useEffect(() => {
@@ -176,10 +176,10 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
                 "Starting uses your microphone and sends audio to the AI.",
               )}
             </p>
-            {!available && !active && (
+            {caseId && !available && !active && (
               <div className="reception-unavailable" role="status">
                 <p>
-                  {s.configured === null
+                  {s.configured === null && !s.error
                     ? text(
                         "受付への接続を確認しています。",
                         "Checking the reception connection.",
