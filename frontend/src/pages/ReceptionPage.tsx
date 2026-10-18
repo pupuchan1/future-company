@@ -53,7 +53,7 @@ export function ReceptionPage() {
     "switching",
     "stopping",
   ].includes(s.phase);
-  const available = Boolean(s.configured && s.mcpConfigured);
+  const available = !caseId || Boolean(s.configured && s.mcpConfigured);
   const isEnglish = language === "en";
   const hasConversation = Boolean(s.transcripts.length || s.requests.length || s.backendResult || s.phase === "connected");
   useEffect(() => {
