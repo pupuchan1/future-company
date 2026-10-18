@@ -233,7 +233,7 @@ export class LiveClient {
   private endpoints: { status: string; events: string; session: string }
   private bridgeToken?: () => Promise<string>
   private media?: LiveMediaObserver
-  private automaticHandoff: { route: LiveRoute; attempts: number; awaitingOutput: boolean } | null = null
+  private automaticHandoff: { route: LiveRoute; attempts: number; awaitingOutput: boolean; inputGraceUsed?: boolean } | null = null
   private automaticTimer?: ReturnType<typeof setTimeout>
   private lastSpeechAt = 0
   private lastAutomaticRouting = ''
@@ -366,7 +366,17 @@ export class LiveClient {
     const audible = connection.outputPlaying && audio && !this.voiceSwitch && !this.state.playbackBlocked && !audio.paused && !audio.muted
     const outputLevel = audible ? normalizedLevel(levels.outputLevel) * normalizedLevel(audio!.volume ?? 1) : 0
     const speaking = speakerFor(inputLevel, outputLevel)
-    if (inputLevel >= SPEAKING_RMS || outputLevel >= SPEAKING_RMS) this.lastSpeechAt = Date.now()
+    // A busy room can keep microphone RMS high indefinitely. Caller transcript
+    // events still postpone the handoff; raw input noise must not lock the voice.
+    const pending = this.automaticHandoff
+    if (pending && !pending.awaitingOutput && !pending.inputGraceUsed
+      && inputLevel >= SPEAKING_RMS && this.state.inputLevel < SPEAKING_RMS) {
+      // Give one new speech onset time to produce its transcript. Repeated
+      // fluctuations cannot keep extending this grace period.
+      pending.inputGraceUsed = true
+      this.lastSpeechAt = Date.now()
+    }
+    if (outputLevel >= SPEAKING_RMS) this.lastSpeechAt = Date.now()
     if (outputLevel >= SPEAKING_RMS && this.automaticHandoff && this.state.backend === 'result') this.automaticHandoff.awaitingOutput = false
     const conversation = this.conversation.sample(inputLevel, outputLevel, !!audible && (audio?.volume ?? 1) > 0, this.state.muted)
     if (inputLevel !== this.state.inputLevel || outputLevel !== this.state.outputLevel || speaking !== this.state.speaking || conversation !== this.state.conversation) {
