@@ -1,5 +1,8 @@
 # Worker と Node 音声の配置
 
+既存の本人限定本番の配備版と接続先は[配備記録](../docs/demo-deployment.md)、起動、再起動と復帰は[本番運用手順](PRODUCTION.md)を参照する。
+以下の4330/4340は一般向けの既定値。本番は4350/4351を使う。
+
 既存の Worker に React・DO・D1 を残し、Node 24 の音声・人間MCPを常駐プロセスで動かす。`server.mjs` の localhost guard はそのまま使う。Worker 側の既存 Access 本人限定設定と社員認証も変更しない。
 
 ```text
@@ -60,7 +63,7 @@ relayの公開pathは `/relay/voice/*`（HMAC）、`/mcp`（Bearer）、`/bridge
 
 ### 現在の本番へ配置する場合
 
-`deployment/wrangler.production.jsonc` は既存の `future-company-demo.r74.workers.dev`、R74アカウント、D1、CaseRoomを指定している。LimoさんはCF招待を承諾してから、そのアカウントでログインする。Access Service TokenとCFへの配置権限は別に必要。
+`deployment/wrangler.production.jsonc` は既存の `future-company-demo.r74.workers.dev`、R74アカウント、D1、CaseRoomを指定している。本番配備担当はr74tech。Access Service TokenとCFへの配置権限は別に必要。
 
 ```sh
 npx wrangler login
