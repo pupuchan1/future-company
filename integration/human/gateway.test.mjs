@@ -86,6 +86,8 @@ test('HTTP MCP tools and Events discovery use the SDK; auth covers both', async 
     assert.equal(template.questions.length, 3);
     assert.equal(template.language, language);
     assert.equal(template.is_demo, true);
+    assert.equal(template.data_source, 'hackathon_fixture');
+    assert.doesNotMatch(`${template.role} ${template.introduction}`, /架空|デモ|模擬|fictional|demo|simulat/i);
     assert.equal(template.decision_maker, 'human');
     assert.equal(template.candidate_ranking, false);
     assert.equal(template.selection_commitment, false);

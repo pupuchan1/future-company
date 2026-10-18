@@ -36,7 +36,9 @@ const gateway = createHumanGateway({
 | `get_human_request` | `handoff_id` で最新状態を取得 |
 | `cancel_human_request` | `handoff_id` で取消し、機器へ `ring.stop` を送信。終端状態は変更しない |
 | `lookup_demo_order` | `order_id`。架空注文 `DEMO-1001` だけが配送遅延・返金に人間承認が必要な結果。それ以外は `not_found`。実注文の照会・変更はしない |
-| `get_interview_template` | `language` (`ja` / `en`)。架空のソフトウェアエンジニア求人・職務関連質問 3 個・面談冒頭文を取得。AI はランキング・採否判断・選考の確約を行わず、人間が採否を判断する契約を返す |
+| `get_interview_template` | `language` (`ja` / `en`)。設定済みのソフトウェアエンジニア求人・職務関連質問 3 個・自然な面談冒頭文を取得。出所は `is_demo` / `data_source` に保持する。AI はランキング・採否判断・選考の確約を行わず、人間が採否を判断する契約を返す |
+
+音声では「デモです」「架空求人です」と毎回説明せず、受付・面談・依頼の内容を自然に進めます。出所のフラグは内部で保持し、実作業の実行確認や情報源を尋ねられたときには正確に答えます。模擬の ACK や回答を、実機の成功・実担当者の確認・採否の決定と取り違えないことは従来どおりです。
 
 Handoff の返り値は `handoff_id, case_id, device_id, status, simulated, revision, reason, summary, language, created_at, updated_at, audio_connected`。任意の依頼項目は record と `ring.start` に同じ内容で入り、失敗時には `unavailable_reason` が加わります。追加項目を省略した従来の呼出しも使えます。
 
@@ -71,7 +73,7 @@ Handoff の返り値は `handoff_id, case_id, device_id, status, simulated, revi
 回答が得られた場合だけ、最後の `handset.on_hook` に `result` を追加します。他の機器イベントに付けた回答、不正な言語、空の回答、上限を超える回答は拒否します。
 
 ```json
-{"type":"handset.on_hook","command_id":"command-uuid","handoff_id":"handoff-uuid","result":{"text":"このデモ用の架空回答です。TypeScript と React を使用し、PR レビューを行います。実企業の情報ではありません。","language":"ja"}}
+{"type":"handset.on_hook","command_id":"command-uuid","handoff_id":"handoff-uuid","result":{"text":"TypeScript と React を使用し、プルリクエストでコードレビューを行います。","language":"ja"}}
 ```
 
 `accepted` の状態で、同じ接続・handoff・元の command に対する最初の有効な完了だけを採用します。重複する完了で回答を書き換えず、取消後や期限切れ後の回答も保存しません。`completed` は機器側の対応終了を意味し、`result` がなければ質問の回答が得られたとはみなしません。
@@ -102,7 +104,7 @@ node integration/human/simulate-phone.mjs --auto
 node --test integration/human/*.test.mjs
 ```
 
-手動操作は `p` = 受話器を上げる、`h` = 戻す、`q` = 終了。`HUMAN_DEVICE_ID` と `HUMAN_MCP_TOKEN` を必要に応じて設定します。**シミュレーターは `simulated:true` 固定。ベルも音声も実際には動きません。** `--auto` では開発環境の質問用に TypeScript / React、PR レビュー、CI 自動テストについての明示的な架空回答を、依頼言語に合わせて返します。通常の手動 `h` は回答なしで完了します。
+手動操作は `p` = 受話器を上げる、`h` = 戻す、`q` = 終了。`HUMAN_DEVICE_ID` と `HUMAN_MCP_TOKEN` を必要に応じて設定します。**シミュレーターは `simulated:true` 固定。ベルも音声も実際には動きません。** `--auto` では開発環境の質問用に TypeScript / React、PR レビュー、CI 自動テストについての回答を、依頼言語に合わせた自然文で返します。模擬であることはフラグと `[SIMULATED]` ログに保持します。通常の手動 `h` は回答なしで完了します。
 
 実機接続時の確認は「指令受信 → 実際のベル → 受話器検知 → 取消/切断時の停止」を順番に行います。電話音声の通話接続はこの確認とは別に検証が必要です。
 

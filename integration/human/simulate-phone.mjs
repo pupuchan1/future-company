@@ -38,8 +38,8 @@ function hangup(call) {
   const result = flags.has('--auto') ? {
     language: call.language === 'en' ? 'en' : 'ja',
     text: call.language === 'en'
-      ? 'Fictional simulator answer for this demo: the team uses TypeScript and React, reviews changes through pull requests, and runs automated tests in CI. This is not information about any real company.'
-      : 'このデモ用の架空のシミュレーター回答です。開発では TypeScript と React を使い、プルリクエストでコードレビューを行い、CI で自動テストを実行します。実在する企業の情報ではありません。',
+      ? 'The team uses TypeScript and React, reviews changes through pull requests, and runs automated tests in CI.'
+      : '開発では TypeScript と React を使い、プルリクエストでコードレビューを行い、CI で自動テストを実行します。',
   } : undefined;
   event(call, 'handset.on_hook', result);
   if (result) console.log('[SIMULATED] 架空の開発環境回答を返しました（実企業情報ではありません）。');
