@@ -7,6 +7,7 @@ import { LanguageSelector } from "@/components/LanguageSelector";
 import { systemMessage } from "@/lib/system-message";
 import { LANGUAGE_CHANGE_ERROR } from "@/features/live/types";
 import { ReceptionIntro, ReceptionOffice, ReceptionCapabilities } from "@/components/ReceptionHome";
+import "@/styles/reception-conversation.css";
 
 const phrase = (language: LiveLanguage, ja: string, en: string) =>
   language === "ja" ? ja : en;
@@ -46,6 +47,8 @@ export function ReceptionPage() {
   const s = live.snapshot;
   const text = (ja: string, en: string) => phrase(language, ja, en);
   const [showDetails, setShowDetails] = useState(false);
+  const [conversationView, setConversationView] = useState(() => window.location.hash === "#conversation");
+  const conversationHeading = useRef<HTMLHeadingElement>(null);
   const log = useRef<HTMLDivElement>(null);
   const active = live.preparing || [
     "connecting",
@@ -56,7 +59,25 @@ export function ReceptionPage() {
   ].includes(s.phase);
   const available = Boolean(s.configured && s.mcpConfigured);
   const isEnglish = language === "en";
-  const hasConversation = Boolean(s.transcripts.length || s.requests.length || s.backendResult || s.phase === "connected");
+  const hasConversation = conversationView || Boolean(s.transcripts.length || s.requests.length || s.backendResult || s.phase === "connected");
+  useEffect(() => {
+    const updateView = () => setConversationView(window.location.hash === "#conversation");
+    window.addEventListener("hashchange", updateView);
+    return () => window.removeEventListener("hashchange", updateView);
+  }, []);
+  useEffect(() => {
+    if (conversationView) {
+      conversationHeading.current?.focus({ preventScroll: true });
+      window.scrollTo({ top: 0, behavior: "instant" });
+    }
+  }, [conversationView]);
+  function openConversation() {
+    if (window.location.hash !== "#conversation") window.location.hash = "conversation";
+    else {
+      conversationHeading.current?.focus({ preventScroll: true });
+      window.scrollTo({ top: 0, behavior: "instant" });
+    }
+  }
   useEffect(() => {
     if (log.current) log.current.scrollTop = log.current.scrollHeight;
   }, [s.transcripts]);
@@ -65,12 +86,12 @@ export function ReceptionPage() {
     else await live.start();
   }
   return (
-    <div className={`app-shell reception-shell haas-homepage${hasConversation ? " haas-in-conversation" : ""}`}>
-      <a className="skip-link" href="#main">
+    <div className={`app-shell reception-shell haas-homepage${hasConversation ? " haas-in-conversation" : ""}${conversationView ? " haas-conversation-view" : ""}`}>
+      <a className="skip-link" href={conversationView ? "#conversation" : "#main"}>
         {text("本文へ移動", "Skip to content")}
       </a>
       <header className="site-header">
-        <a className="brand" href="/" aria-label={text("株式会社HaaS ホーム", "HaaS home")}>
+        <a className="brand" href={conversationView ? "#home" : "/"} aria-label={text("株式会社HaaS ホーム", "HaaS home")}>
           <span className="brand-mark brand-reserved" aria-hidden="true">
             H<span>↗</span>
           </span>
@@ -88,14 +109,18 @@ export function ReceptionPage() {
         <LanguageSelector language={language} preference={preference} onChange={selectLanguage} />
       </header>
       <main id="main" className="page-width reception-main">
+        {conversationView && <div className="reception-conversation-heading">
+          <a className="text-button" href="#home">← {text("ホームへ戻る", "Back to home")}</a>
+          <h1 id="conversation" ref={conversationHeading} tabIndex={-1}>{text("AIとの会話", "Conversation with AI")}</h1>
+        </div>}
         <section className="reception-hero">
-          <ReceptionIntro language={language} />
+          {!conversationView && <ReceptionIntro language={language} />}
           {!hasConversation && <ReceptionOffice language={language} />}
           <section
             className="reception-voice"
             aria-label={text("共通音声受付", "Shared voice reception")}
           >
-            <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} />
+            <VoiceOrb activity={live.voice} phase={s.phase} language={language} muted={s.muted} playbackBlocked={s.playbackBlocked} onOpenConversation={openConversation} />
             <div className="reception-controls">
             <button
               className="button primary reception-start"
