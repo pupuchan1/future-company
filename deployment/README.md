@@ -89,3 +89,10 @@ npx esbuild deployment/worker-entry.ts --bundle --platform=browser --format=esm 
 ```
 
 テストはfake providerを使ったローカルHTTP/WebSocket試験。cookie認可呼出し、body/proof保持、別case拒否、SSE/status隔離、HMAC改変・期限・再送拒否、handoff後の所有権、再起動時拒否、結果再同期の202保持、実MCP SDKのdiscovery/tool call、MCP header透過、実WebSocketを確認する。実CloudflareのAccess、OpenAI音声、#19結果アダプター、黒電話実機、実ChatGPT MCP Events購読はこのテストの成功だけでは確認済みにならない。
+
+
+## 追加のデモgateway認証（Issue #60）
+
+`demo-gateway.mjs` はフォームログイン後、8時間のHttpOnly/Secure/SameSite=Strict cookieでHTTPとWebSocketを認証します。ローカルWorkerが既定の接続先です。既存の固定試験Workerへ接続する設定は `DEMO_GATEWAY_WORKER_ORIGIN=https://future-company-demo.r74.workers.dev` で、サーバー専用の `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`（互換名 `WORKER_ACCESS_CLIENT_ID` / `WORKER_ACCESS_CLIENT_SECRET`）が必要です。認証情報はブラウザへ返さず、許可した接続先以外へ送りません。
+
+NodeからWorkerへ接続するURLは `WORKER_API_URL`、社員認可は `STAFF_API_TOKEN` を使います。Accessが通っても案件cookie・bridge-token・社員認可は別途必要です。本番側のhaas案件・bridge-token・voice経路と社員認証が揃うまで、稼働するローカル構成を維持してください。コードの取り込みだけで公開先やAccess設定は変わりません。

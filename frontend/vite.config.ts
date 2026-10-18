@@ -32,6 +32,7 @@ export default defineConfig({
       "/api/status": localProxy("http://127.0.0.1:4320"),
       "/api/events": localProxy("http://127.0.0.1:4320"),
       "/api/live": localProxy("http://127.0.0.1:4320"),
+      "/api/worker": localProxy("http://127.0.0.1:4320"),
       "/api/v1": localProxy("http://127.0.0.1:8787", true),
     },
   },

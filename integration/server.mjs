@@ -50,6 +50,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
   const emit = (event) => {
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const res of clients) {
+      if (res.destroyed || res.writableEnded) { clients.delete(res); continue; }
       if (!res.write(payload)) { clients.delete(res); res.end(); }
     }
   };
@@ -67,7 +68,8 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     return Promise.resolve(active.humanEvent(event));
   }
   const workerBridge = env.WORKER_API_URL ? new WorkerBridge({ url: env.WORKER_API_URL, token: env.STAFF_API_TOKEN,
-    accessClientId: env.WORKER_ACCESS_CLIENT_ID, accessClientSecret: env.WORKER_ACCESS_CLIENT_SECRET,
+    accessClientId: env.CF_ACCESS_CLIENT_ID || env.WORKER_ACCESS_CLIENT_ID,
+    accessClientSecret: env.CF_ACCESS_CLIENT_SECRET || env.WORKER_ACCESS_CLIENT_SECRET,
     fetcher: workerFetch, socketFactory: workerSocketFactory, deliver: receiveHuman, emit }) : null;
   const createLive = (input) => retryConnection(() => provider.live.create(input), {
     onRetry: (diagnostic) => remember({ type: 'provider_retry', operation: 'live.create', ...diagnostic }),
@@ -85,6 +87,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
       if (workerBridge) {
         const route = state.handoffRoutes.get(event.data.handoff_id) || state.routing.route;
         void workerBridge.humanEvent(event, route).then(linked => {
+          if (state.closed || event.isValid?.() === false) return;
           if (!linked) return receiveHuman(event);
           if (event.name === 'human.completed') {
             if (!event.data.result && !workerBridge.requests(state.id, [event.data])[0]?.result) return receiveHuman(event);
@@ -92,8 +95,8 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
           }
           const data = ['human.requested', 'human.ringing', 'human.accepted'].includes(event.name)
             ? workerBridge.requests(state.id, [event.data])[0] : event.data;
-          if (data.status === 'completed' && event.name !== 'human.completed') {
-            emit({ ...event, name: 'human.completed', type: 'human.completed', data });
+          if (['completed', 'cancelled', 'unavailable'].includes(data.status)) {
+            emit({ ...event, type: event.name, data });
             return;
           }
           return receiveHuman({ ...event, data });
@@ -339,6 +342,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
   return { server, gateway, backend, events, async close() {
     workerBridge?.close();
     for (const res of clients) res.end();
+    clients.clear();
     await Promise.allSettled([...sessions.values()].map((session) => session.close()));
     await backend?.close(); await gateway.close(); await events.close();
     server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));

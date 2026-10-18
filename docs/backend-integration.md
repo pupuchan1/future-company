@@ -159,3 +159,17 @@ relay（605aad4）とdemo gateway（b53f62f）の成果物もdeploymentへ取り
 統合検証時点のNode integration 74件、Worker 77件（Node 46 + Bun 31）、relay/gateway 20件、計171件が成功。実Worker・DO・D1のbridge試験は9件で、2つのNodeの配信排他と予約保存後の応答紛失を含みます。型検査、Worker/Reactビルド、deploymentの型検査・bundleも成功しました。外部AI/MCPは試験用の代替接続です。
 
 ローカル再起動後はlive_configured / mcp_configured / worker_bridge_configuredがすべてfalseです。設定なしでは接続準備中として表示します。実音声・実人間回答・電話・公開環境の一連動作は未確認です。GPT Live 1.1の正式model IDも未確定のため推測で変更していません。過去の試験環境・別担当による実機記録は、その確認範囲のまま扱います。
+
+
+### 最新差分の吸い上げ（Issue #60、2026-10-18）
+
+#39はbda188d、#44は2c31b84、#4はe9d8f7aまで比較しました。#44の新規mergeは既に取り込み済みの共通FEとの競合解消で、画面やオーブを巻き戻す更新はありません。環境読込のd013d0cは既存a1769faの包含範囲のため、引用符付きキー対応を維持します。
+
+新規の36f6171 / f196215 / 09f6225を取り込み、デモのフォーム認証・8時間のHttpOnly/Secure/SameSite=Strict cookie・cookieによるWebSocket認証・同一originのフォーム送信を接続しました。固定の試験Workerへ接続する場合だけ、サーバー設定のAccess認証を付加し、ブラウザ由来の認証ヘッダーやAccess cookieを引き継ぎません。gatewayはコード・試験を適用したもので、この環境で新しい公開入口を起動したものではありません。
+
+WorkerBridgeも#39の最新キャッシュ・Access境界へ合わせ、正規の保存済み回答が古い端末通知で上書きされないようにしました。Access認証は設定したHTTPSのWorkerだけへ送信し、HTTP/WSのredirectは拒否します。Node側の既存APIとの互換メソッドを保ち、#53の修正と同じくhandoffごとの予約IDを再利用します。応答紛失後の実Worker再試行の回帰試験も保持しています。開発用5173では `/api/worker/results` を既存Nodeの同一origin guardへproxyします。
+
+#39の2f9db2eには、別担当による合成音声・実Live/Agents・模擬人間回答のブラウザ往復成功記録と、その後の採用切替でのcontext_injection_incompleteが報告されています。これは別環境の記録で、こちらのローカル実測ではありません。正式な本番Workerにはhaas/bridge-token/voiceが未反映との報告もあり、公開配置は#33で継続確認が必要です。現在のローカルstatusのlive_configured / mcp_configured / worker_bridge_configuredはfalseです。秘密設定は読み出し・変更せず、公開デプロイやAccess設定変更は行っていません。
+
+
+追加でcfc694d / 1433bb3の遅延ACK・取消/終了済み案件のSSE抑制・閉じたSSEの安全な終了・CF_ACCESS認証変数の互換名を反映しました。既存の日本語/English切替と、回答なし完了通知の処理は保っています。今回の変更に対応する検証は計75件成功（gateway 16、proxy 13、bridge 14、Node ingress 9、orchestration 14、実Worker/DO/D1 bridge 9）。FE/Worker型検査とFEビルドも成功。ローカル再起動後のstatus 200、同一originの結果再同期503（未設定）、別originの再同期403を確認しています。設定なしを接続成功とは扱いません。
