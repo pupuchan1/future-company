@@ -1,4 +1,4 @@
-export type CaseKind = 'support' | 'sales' | 'recruitment'
+export type CaseKind = 'support' | 'sales' | 'recruitment' | 'haas'
 export type Locale = 'en' | 'ja'
 export type Actor = { role: 'visitor'; ownerHash: string } | { role: 'staff'; id: string }
 export type CaseStatus = 'active' | 'investigating' | 'awaiting_human' | 'ready' | 'resolved'
@@ -17,6 +17,8 @@ export type HumanRequest = {
   stockAvailable?: boolean
   createdAt: string
   answeredAt?: string
+  origin?: { nodeCaseId: string; handoffId: string; route: 'reception' | 'recruiting' | 'haas'; targetRole: string; expectedResult: string }
+  delivery?: { status: 'pending' | 'queued' | 'agent_completed' | 'live_submitted' | 'failed'; updatedAt: string }
 }
 export type CaseSnapshot = {
   id: string
@@ -48,6 +50,9 @@ export type IntegrationOperation = {
 export type IntegrationView = { liveSessionId?: string; agentSessionId?: string; agentStatus?: string; lastEventId?: string }
 export type StoredCase = CaseSnapshot & { ownerHash: string; integration?: IntegrationView & { operations: Record<string, IntegrationOperation>; eventIds: string[] } }
 export type Command =
+  | { type: 'register_handoff'; nodeCaseId: string; handoffId: string; route: 'reception' | 'recruiting' | 'haas'; summary: string; task: string; targetRole: string; expectedResult: string }
+  | { type: 'cancel_handoff'; handoffId: string }
+  | { type: 'delivery'; handoffId: string; status: NonNullable<HumanRequest['delivery']>['status'] }
   | { type: 'message'; text: string }
   | { type: 'submit_recruitment'; roleInterest: string; experience: string; questions: string[] }
   | { type: 'begin_investigation'; investigationId: string; inputHash: string }
@@ -89,7 +94,7 @@ export function parseCreate(value: unknown): { kind: CaseKind; locale: Locale } 
   const data = object(value)
   const kind = data.kind ?? 'support'
   const locale = data.locale ?? 'en'
-  if (kind !== 'support' && kind !== 'sales' && kind !== 'recruitment') throw new ApiError(400, 'invalid_input', 'Unknown case kind.')
+  if (kind !== 'support' && kind !== 'sales' && kind !== 'recruitment' && kind !== 'haas') throw new ApiError(400, 'invalid_input', 'Unknown case kind.')
   if (locale !== 'en' && locale !== 'ja') throw new ApiError(400, 'invalid_input', 'Unknown locale.')
   return { kind, locale }
 }
@@ -107,11 +112,35 @@ export function applyCommand(state: StoredCase, actor: Actor, command: Command, 
   snapshotFor(state, actor)
   if (state.status === 'resolved') throw new ApiError(409, 'case_resolved', 'This case is already resolved.')
   const next = structuredClone(state)
-  const staffCommand = command.type === 'claim' || command.type === 'answer'
+  const staffCommand = ['claim', 'answer', 'register_handoff', 'cancel_handoff', 'delivery'].includes(command.type)
   if (staffCommand && actor.role !== 'staff') throw new ApiError(403, 'staff_required', 'Staff authentication is required.')
   if (!staffCommand && actor.role !== 'visitor') throw new ApiError(403, 'visitor_required', 'This action belongs to the visitor.')
 
   switch (command.type) {
+    case 'register_handoff': {
+      if (next.requests.some(item => item.origin?.handoffId === command.handoffId)) throw new ApiError(409, 'handoff_exists', 'This handoff already has a request. Reuse its original command.')
+      next.requests.push({ id: `request-handoff-${command.handoffId}`, status: 'pending', summary: command.summary, question: command.task, facts: [], createdAt: now,
+        origin: { nodeCaseId: command.nodeCaseId, handoffId: command.handoffId, route: command.route, targetRole: command.targetRole, expectedResult: command.expectedResult } })
+      next.status = 'awaiting_human'
+      next.ai = { status: 'awaiting_human', reason: 'A linked Agent requires a human response.' }
+      break
+    }
+    case 'cancel_handoff': {
+      const request = next.requests.find(item => item.origin?.handoffId === command.handoffId)
+      if (!request) throw new ApiError(404, 'request_not_found', 'Linked request not found.')
+      if (request.delivery?.status === 'live_submitted') throw new ApiError(409, 'already_delivered', 'This result was already submitted to Live.')
+      request.status = 'cancelled'
+      next.ai = { status: 'unavailable', reason: 'The linked request was cancelled before delivery.' }
+      break
+    }
+    case 'delivery': {
+      const request = next.requests.find(item => item.origin?.handoffId === command.handoffId)
+      if (!request || request.status !== 'answered' || !request.result) throw new ApiError(409, 'answer_required', 'Only a saved answer on an active linked request can be delivered.')
+      const order = ['pending', 'queued', 'agent_completed', 'live_submitted']
+      if (request.delivery?.status === 'failed' || (command.status !== 'failed' && request.delivery && order.indexOf(command.status) < order.indexOf(request.delivery.status))) throw new ApiError(409, 'stale_delivery', 'Delivery cannot be repeated or moved backwards.')
+      request.delivery = { status: command.status, updatedAt: now }
+      break
+    }
     case 'message':
       next.messages.push({ id: `message-${state.revision + 1}`, role: 'visitor', text: command.text, createdAt: now })
       break
@@ -171,7 +200,7 @@ export function applyCommand(state: StoredCase, actor: Actor, command: Command, 
       const request = next.requests.find((item) => item.id === command.requestId)
       if (!request) throw new ApiError(404, 'request_not_found', 'Request not found.')
       if (actor.role !== 'staff' || request.status !== 'claimed' || request.assignedTo !== actor.id) throw new ApiError(409, 'claim_required', 'Only the assigned staff member can answer this request.')
-      if (state.kind !== 'recruitment' && typeof command.stockAvailable !== 'boolean') throw new ApiError(400, 'invalid_input', 'stockAvailable must be a boolean.')
+      if (!request.origin && state.kind !== 'recruitment' && typeof command.stockAvailable !== 'boolean') throw new ApiError(400, 'invalid_input', 'stockAvailable must be a boolean.')
       const answer = textField(command.answer, 'answer')
       if (command.answerLanguage !== undefined || command.simulated !== undefined) {
         if ((command.answerLanguage !== 'en' && command.answerLanguage !== 'ja') || typeof command.simulated !== 'boolean') throw new ApiError(400, 'invalid_input', 'A result requires an explicit answerLanguage and simulated flag.')
@@ -179,6 +208,7 @@ export function applyCommand(state: StoredCase, actor: Actor, command: Command, 
         request.simulated = command.simulated
       }
       request.status = 'answered'
+      if (request.origin) request.delivery = { status: 'pending', updatedAt: now }
       request.answer = answer
       if (state.kind !== 'recruitment') request.stockAvailable = command.stockAvailable
       request.answeredAt = now
