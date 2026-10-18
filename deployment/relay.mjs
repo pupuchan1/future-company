@@ -53,7 +53,8 @@ export function filterStatus(value, caseId) {
     mcp_configured: value?.mcp_configured === true, decisions_enabled: value?.decisions_enabled === true,
     recruiting_human_transport: value?.recruiting_human_transport === 'slack' ? 'slack' : null,
     slack_configured: value?.slack_configured === true, slack_replies_configured: value?.slack_replies_configured === true,
-    handoff_configured: value?.handoff_configured === true, voice_map: voiceMap, requests, devices };
+    handoff_configured: value?.handoff_configured === true, prewarm_configured: value?.prewarm_configured === true,
+    voice_map: voiceMap, requests, devices };
 }
 
 /** Reject global and conflicting-case events; normalize the top-level case for clients. */

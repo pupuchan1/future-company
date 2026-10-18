@@ -42,7 +42,8 @@ export function isLocalRequest(req) {
 }
 
 export function createIntegration({ env = process.env, client, stateDir = resolve(root, '../.integration-state'),
-  socketFactory, workerFetch, workerSocketFactory, slackFetch, closeTimeoutMs, handoffTimeoutMs = 30000 } = {}) {
+  socketFactory, workerFetch, workerSocketFactory, slackFetch, closeTimeoutMs, handoffTimeoutMs = 30000,
+  prewarmTimeoutMs = 60000 } = {}) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const remember = (record) => appendFileSync(join(stateDir, 'resources.jsonl'), JSON.stringify({ at: new Date().toISOString(), ...record }) + '\n', { mode: 0o600 });
   const clients = new Set();
@@ -69,7 +70,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     if (!state || state.closed || event.isValid?.() === false) return Promise.resolve({ status: 'cancelled' });
     emit({ ...event, type: event.name });
     const active = sessions.get(state.activeSessionId);
-    if (state.switching || !active) return new Promise(resolve => state.pendingHumanEvents.push({ ...event, onProcessed: resolve }));
+    if ((state.switching && !state.switching.prewarm) || !active) return new Promise(resolve => state.pendingHumanEvents.push({ ...event, onProcessed: resolve }));
     return Promise.resolve(active.humanEvent(event));
   }
   const workerBridge = env.WORKER_API_URL ? new WorkerBridge({ url: env.WORKER_API_URL, token: env.STAFF_API_TOKEN,
@@ -120,7 +121,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
   }
   function drainHuman(state) {
     const active = sessions.get(state.activeSessionId);
-    if (!active || state.closed || state.switching) return 0;
+    if (!active || state.closed || (state.switching && !state.switching.prewarm)) return 0;
     const pending = state.pendingHumanEvents.splice(0);
     for (const event of pending) Promise.resolve(active.humanEvent(event)).then(event.onProcessed || (() => {}));
     return pending.filter((event) => ['human.completed', 'human.unavailable', 'human.cancelled'].includes(event.name)).length;
@@ -170,7 +171,9 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
     return session;
   }
   const connectionInfo = (session) => ({ session: { id: session.id }, case_id: session.caseId,
-    route: session.voiceRoute, voice: session.voice });
+    route: session.voiceRoute, voice: session.voice,
+    ...(session.observedVoice ? { observed_voice: session.observedVoice } : {}),
+    ...(session.observedModel ? { observed_model: session.observedModel } : {}) });
   let pendingCreates = 0;
   const pendingCaseIds = new Set();
   const server = createServer(async (req, res) => {
@@ -183,7 +186,7 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         recruiting_human_transport: 'slack', slack_configured: slack.configured, slack_replies_configured: slack.repliesConfigured,
         devices: gateway.service.listDevices(), requests: currentHumanRequests(),
         decisions_enabled: env.LIVE_DECISIONS_ENABLED !== 'false',
-        handoff_configured: true, voice_map: voiceMap,
+        handoff_configured: true, prewarm_configured: true, voice_map: voiceMap,
       });
       if (req.method === 'GET' && path === '/api/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
@@ -265,18 +268,24 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         if (typeof input.sdp !== 'string' || !input.sdp.startsWith('v=0')) return json(res, 400, { error: 'A WebRTC SDP offer is required.' });
         if (!isVoiceRoute(input.route)) return json(res, 400, { error: 'Unknown voice department.', code: 'invalid_route' });
         if (input.automatic !== undefined && typeof input.automatic !== 'boolean') return json(res, 400, { error: 'Invalid handoff mode.' });
+        if ((input.prewarm !== undefined && typeof input.prewarm !== 'boolean') || (input.prewarm && input.automatic !== true)) {
+          return json(res, 400, { error: 'Prewarming requires automatic handoff.', code: 'invalid_prewarm' });
+        }
         const state = current.caseState;
         if (state.closed || current.closed || current.closing || state.activeSessionId !== current.id) {
           return json(res, 409, { error: 'This is no longer the active voice session.', code: 'inactive_session' });
         }
-        if (state.switching || current.busy) return json(res, 409, {
+        if (state.switching || (!input.prewarm && current.busy)) return json(res, 409, {
           error: 'Wait until the current work or handoff finishes.', code: state.switching ? 'handoff_in_progress' : 'busy' });
         if (input.automatic && input.route !== state.routing.route) return json(res, 409, {
           error: 'The confirmed department changed.', code: 'routing_changed' });
         const ticket = { token: randomUUID(), oldId: current.id, newId: null, route: input.route,
-          automatic: input.automatic === true, ready: false };
+          automatic: input.automatic === true, prewarm: input.prewarm === true, ready: false,
+          historyEvents: new Set(state.history) };
         state.switching = ticket;
-        ticket.timer = setTimeout(() => abandonHandoff(state, ticket), handoffTimeoutMs);
+        const lifetime = ticket.prewarm ? Math.min(60000, Math.max(1, prewarmTimeoutMs)) : handoffTimeoutMs;
+        ticket.expiresAt = Date.now() + lifetime;
+        ticket.timer = setTimeout(() => abandonHandoff(state, ticket), lifetime);
         ticket.timer.unref?.();
         try {
           const result = await createLive({ session: liveConfig({ model: env.LIVE_MODEL || 'gpt-live-1',
@@ -293,7 +302,8 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
           }
           ticket.ready = true;
           return json(res, 200, { ...connectionInfo(candidate), transport: result.transport,
-            old_session_id: ticket.oldId, handoff_token: ticket.token });
+            old_session_id: ticket.oldId, handoff_token: ticket.token,
+            ...(ticket.prewarm ? { prewarm: true, expires_at: new Date(ticket.expiresAt).toISOString() } : {}) });
         } catch (error) {
           abandonHandoff(state, ticket);
           throw error;
@@ -316,6 +326,16 @@ export function createIntegration({ env = process.env, client, stateDir = resolv
         if (!ticket.ready || candidate.closed || candidate.closing || state.closed || !previous || previous.closed || previous.closing) {
           abandonHandoff(state, ticket);
           return json(res, 409, { error: 'The handoff is not ready or the original call closed.', code: 'handoff_expired' });
+        }
+        if (ticket.prewarm && ticket.route !== state.routing.route) {
+          abandonHandoff(state, ticket);
+          return json(res, 409, { error: 'The confirmed department changed.', code: 'routing_changed' });
+        }
+        if (ticket.prewarm && previous.busy) return json(res, 409, {
+          error: 'Wait until the current work finishes before activating.', code: 'busy' });
+        if (ticket.prewarm && !candidate.catchUpHistory(state.history.filter(event => !ticket.historyEvents.has(event)))) {
+          abandonHandoff(state, ticket);
+          return json(res, 409, { error: 'The prepared voice connection is unavailable.', code: 'handoff_expired' });
         }
         // No await between validation and commit: every human event has one owner.
         clearTimeout(ticket.timer);
