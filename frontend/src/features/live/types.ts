@@ -1,0 +1,56 @@
+export type LiveLanguage = 'ja' | 'en'
+export type LiveRoute = 'reception' | 'recruiting' | 'haas'
+export type LivePhase = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopping' | 'ended' | 'error'
+export type JsonObject = Record<string, unknown>
+
+export interface LiveTranscript {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  text: string
+  final: boolean
+}
+
+export interface LiveHumanRequest {
+  handoffId: string
+  caseId: string
+  summary: string
+  targetRole?: string
+  task?: string
+  expectedResult?: string
+  status: string
+  revision: number
+  simulated?: boolean
+  audioConnected?: boolean
+  unavailableReason?: string
+  result?: { text: string; language: LiveLanguage }
+}
+
+export interface LiveSnapshot {
+  caseId: string
+  phase: LivePhase
+  events: 'connecting' | 'connected' | 'reconnecting' | 'closed'
+  configured: boolean | null
+  mcpConfigured: boolean | null
+  route: LiveRoute
+  language: LiveLanguage
+  muted: boolean
+  playbackBlocked: boolean
+  transcripts: LiveTranscript[]
+  requests: LiveHumanRequest[]
+  backend: 'idle' | 'running' | 'result' | 'error'
+  backendResult: string
+  error: string
+  cleanupWarning: string
+}
+
+export function object(value: unknown): JsonObject {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : {}
+}
+
+export function initialSnapshot(caseId: string, language: LiveLanguage): LiveSnapshot {
+  return {
+    caseId, language, route: 'reception', phase: 'idle', events: 'connecting',
+    configured: null, mcpConfigured: null, muted: false, playbackBlocked: false,
+    transcripts: [], requests: [], backend: 'idle', backendResult: '', error: '', cleanupWarning: '',
+  }
+}
