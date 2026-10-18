@@ -1,5 +1,6 @@
 {
   "name": "future-company",
+  "type": "module",
   "private": true,
   "version": "0.0.0",
   "workspaces": ["frontend"],
@@ -7,10 +8,32 @@
     "node": ">=24.14.0 <25"
   },
   "scripts": {
-    "dev": "npm run dev --workspace frontend --",
-    "build": "npm run build --workspace frontend",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "$npm_execpath run build && vite preview",
+    "deploy": "$npm_execpath run build && wrangler deploy",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "typecheck": "bun run cf-typegen && tsc --noEmit",
+    "test": "node --experimental-strip-types --test src/backend/backend.test.ts src/backend/api.test.ts src/backend/persistence.test.ts src/backend/persistence.integration.test.ts && bun test src/backend/auth.test.ts src/backend/mcp-events.test.ts src/backend/openai.test.ts",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "dev:frontend": "npm run dev --workspace frontend --",
+    "build:frontend": "npm run build --workspace frontend",
     "lint": "npm run lint --workspace frontend",
-    "typecheck": "npm run typecheck --workspace frontend",
-    "preview": "npm run preview --workspace frontend --"
+    "typecheck:frontend": "npm run typecheck --workspace frontend",
+    "preview:frontend": "npm run preview --workspace frontend --"
+  },
+  "dependencies": {
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.44.0",
+    "@types/bun": "^1.4.3",
+    "@types/node": "^26.6.5",
+    "esbuild": "^0.28.2",
+    "miniflare": "5.20261012.1-beta",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.4",
+    "vite-ssr-components": "^0.8.0",
+    "wrangler": "^4.110.0"
   }
 }
