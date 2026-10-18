@@ -12,7 +12,7 @@ export interface LiveConnectionPanelProps {
 
 const phases: Record<LivePhase, [string, string]> = {
   idle: ['待機中', 'Ready'], connecting: ['接続中', 'Connecting'], connected: ['会話中', 'Connected'],
-  reconnecting: ['再接続待ち', 'Reconnecting'], stopping: ['音声を終了中', 'Stopping voice'], ended: ['音声終了', 'Voice ended'], error: ['接続エラー', 'Connection error'],
+  reconnecting: ['再接続待ち', 'Reconnecting'], switching: ['担当に引き継ぎ中', 'Switching department'], stopping: ['音声を終了中', 'Stopping voice'], ended: ['音声終了', 'Voice ended'], error: ['接続エラー', 'Connection error'],
 }
 const requestLabels: Record<string, [string, string]> = {
   requested: ['依頼作成', 'Requested'], ringing: ['リング応答あり', 'Ring acknowledged'],
@@ -26,7 +26,7 @@ export function LiveConnectionPanel({ caseId, language, onSnapshot }: LiveConnec
   const s = live.snapshot
   const en = language === 'en'
   const text = (ja: string, english: string) => en ? english : ja
-  const active = ['connecting', 'connected', 'reconnecting'].includes(s.phase)
+  const active = ['connecting', 'connected', 'reconnecting', 'switching'].includes(s.phase)
   const stopping = s.phase === 'stopping'
   useEffect(() => { onSnapshot?.(s) }, [s, onSnapshot])
   return <section className="panel" aria-label={text('AI音声接続', 'AI voice connection')}>
