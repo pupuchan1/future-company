@@ -130,6 +130,42 @@ test('initial department selects its voice; switch waits for both readiness sign
   } finally { f.client.dispose() }
 })
 
+for (const source of ['server', 'datachannel'] as const) for (const closed of [false, true]) {
+  test(`candidate ${closed ? 'close' : 'start'} on ${source} before the handoff HTTP response stays bound to its candidate`, async () => {
+    const f = fixture(); await f.start()
+    let respond!: (response: Response) => void
+    f.setHandoff(() => new Promise(resolve => { respond = resolve }))
+    const switching = f.client.switchDepartment('haas')
+    await tick()
+    try {
+      serverEvent(f, { type: 'live.closed', session_id: 'unrelated-old' })
+      const event = { type: closed ? 'live.closed' : 'session.started', case_id: 'case-a', session_id: 'new' }
+      if (source === 'server') serverEvent(f, event)
+      else f.peers[1].channel.onmessage!({ data: JSON.stringify(event) })
+      assert.equal(f.client.getSnapshot().phase, 'switching')
+      assert.equal(f.track.stopped, 0)
+      respond(Response.json({ session: { id: 'new' }, transport: { sdp: 'answer-new' }, case_id: 'case-a',
+        old_session_id: 'old', route: 'haas', voice: 'marin', handoff_token: 'token-1' }))
+      await tick()
+      if (!closed) {
+        f.peers[1].ontrack!({ streams: [f.stream] })
+        f.peers[1].connectionState = 'connected'; f.peers[1].onconnectionstatechange!()
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([switching, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Early candidate lifecycle was lost')), 1000) })])
+      } finally { clearTimeout(timer) }
+      assert.equal(f.client.getSnapshot().phase, 'connected')
+      assert.equal(f.client.getSnapshot().voiceRoute, closed ? 'reception' : 'haas')
+      assert.equal(f.track.stopped, 0)
+      assert.equal(f.calls.filter(call => call.path.endsWith('/activate')).length, closed ? 0 : 1)
+      if (closed) assert.equal(f.peers[1].answer, null)
+    } finally {
+      await f.client.stop(); await switching; f.client.dispose()
+    }
+  })
+}
+
 test('busy handoff restores old playback and preserves the prior mute state', async () => {
   const f = fixture(); await f.start()
   f.client.setMuted(true)

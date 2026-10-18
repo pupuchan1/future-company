@@ -107,6 +107,106 @@ test('start uses PR #4 SDP contract, waits for session.started, then mutes and r
   assert.equal(f.source.closed, true)
 })
 
+for (const source of ['server', 'datachannel'] as const) {
+  test(`old lifecycle events on ${source} cannot affect a call awaiting its creation response`, async () => {
+    const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+    let respond!: (response: Response) => void
+    let created!: () => void
+    const creating = new Promise<void>(resolve => { created = resolve })
+    f.setCreate(() => { created(); return new Promise(resolve => { respond = resolve }) })
+    client.observe(); await new Promise(resolve => setImmediate(resolve))
+    const starting = client.start(); await creating
+    const deliver = (type: string, id: string) => (source === 'server' ? f.source : f.channel).onmessage!({
+      data: JSON.stringify({ type, case_id: 'case-a', session_id: id }),
+    })
+    try {
+      deliver('session.started', 'previous-live')
+      assert.equal(client.getSnapshot().phase, 'connecting')
+      for (const type of ['session.closed', 'session.ended', 'live.closed']) deliver(type, 'previous-live')
+      assert.equal(client.getSnapshot().phase, 'connecting')
+      assert.equal(f.track.stopped, false)
+      respond(Response.json({ session: { id: 'new-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+      await starting
+      assert.equal(client.getSnapshot().phase, 'connecting', 'Old starts cannot satisfy the new call readiness')
+      deliver('session.started', 'new-live')
+      assert.equal(client.getSnapshot().phase, 'connected')
+      assert.equal(f.calls.some(call => call.options?.method === 'DELETE'), false)
+    } finally {
+      respond(Response.json({ session: { id: 'new-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+      await starting; await client.stop(); client.dispose()
+    }
+  })
+
+  for (const types of [['session.started'], ['session.closed'], ['session.ended'], ['live.closed'], ['session.started', 'live.closed']]) {
+    test(`early ${types.join(' then ')} on ${source} applies only after the new Live ID is confirmed`, async () => {
+      const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+      let respond!: (response: Response) => void
+      let created!: () => void
+      const creating = new Promise<void>(resolve => { created = resolve })
+      f.setCreate(() => { created(); return new Promise(resolve => { respond = resolve }) })
+      client.observe(); await new Promise(resolve => setImmediate(resolve))
+      const starting = client.start(); await creating
+      try {
+        for (const type of types) (source === 'server' ? f.source : f.channel).onmessage!({
+          data: JSON.stringify({ type, case_id: 'case-a', session_id: 'new-live' }),
+        })
+        assert.equal(client.getSnapshot().phase, 'connecting', 'Unconfirmed events must wait for HTTP identity')
+        assert.equal(f.track.stopped, false)
+        respond(Response.json({ session: { id: 'new-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+        await starting
+        await new Promise(resolve => setImmediate(resolve))
+        const ended = types.some(type => type !== 'session.started')
+        assert.equal(client.getSnapshot().phase, ended ? 'ended' : 'connected')
+        assert.equal(f.track.stopped, ended)
+        if (ended) {
+          assert.equal(f.peer.answer, null, 'A confirmed early close cannot install a dead session')
+          assert.equal(f.calls.filter(call => call.options?.method === 'DELETE' && call.path.endsWith('/new-live')).length, 1)
+        }
+      } finally {
+        respond(Response.json({ session: { id: 'new-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+        await starting; await client.stop(); client.dispose()
+      }
+    })
+  }
+}
+
+test('an unscoped SSE lifecycle event cannot satisfy a pending call readiness', async () => {
+  const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+  client.observe(); await new Promise(resolve => setImmediate(resolve))
+  await client.start()
+  try {
+    f.source.onmessage!({ data: JSON.stringify({ type: 'session.started', case_id: 'case-a' }) })
+    assert.equal(client.getSnapshot().phase, 'connecting')
+    f.channel.onmessage!({ data: JSON.stringify({ type: 'session.started' }) })
+    assert.equal(client.getSnapshot().phase, 'connected', 'The current DataChannel is itself connection-scoped')
+  } finally { await client.stop(); client.dispose() }
+})
+
+test('Stop discards early lifecycle events and a late HTTP success cannot revive them on retry', async () => {
+  const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
+  let respond!: (response: Response) => void
+  let created!: () => void
+  const creating = new Promise<void>(resolve => { created = resolve })
+  f.setCreate(() => { created(); return new Promise(resolve => { respond = resolve }) })
+  client.observe(); await new Promise(resolve => setImmediate(resolve))
+  const starting = client.start(); await creating
+  try {
+    f.source.onmessage!({ data: JSON.stringify({ type: 'session.started', case_id: 'case-a', session_id: 'cancelled-live' }) })
+    await client.stop()
+    respond(Response.json({ session: { id: 'cancelled-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+    await starting
+    assert.equal(client.getSnapshot().phase, 'ended')
+    assert.equal(f.peer.answer, null)
+    assert.equal(f.calls.filter(call => call.options?.method === 'DELETE' && call.path.endsWith('/cancelled-live')).length, 1)
+    f.setCreate(async () => Response.json({ session: { id: 'retry-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+    await client.start()
+    assert.equal(client.getSnapshot().phase, 'connecting', 'No buffered start can leak into a later attempt')
+  } finally {
+    respond(Response.json({ session: { id: 'cancelled-live' }, transport: { sdp: 'v=0' }, case_id: 'case-a' }))
+    await starting; await client.stop(); client.dispose()
+  }
+})
+
 test('Worker proof reaches only the Live creation body for the same case', async () => {
   const f = fixture(); const client = new LiveClient('case-a', 'ja', f.runtime)
   await client.refreshStatus()
