@@ -12,4 +12,5 @@
     "jsx": "react-jsx",
     "jsxImportSource": "hono/jsx"
   },
+  "include": ["src", "vite.config.ts", "worker-configuration.d.ts"]
 }
