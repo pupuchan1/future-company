@@ -35,8 +35,32 @@
 .conversation-empty { min-height: 220px; display: grid; place-items: center; text-align: center; }
 .conversation-empty p { font-size: 12px; line-height: 1.9; color: #526572; }
 .conversation-latest { display: block; margin: 0 auto 18px; font-size: 12px; }
-.haas-homepage.haas-conversation .reception-voice { display: block; max-width: 360px; }
-.haas-conversation .voice-orb-stage { color: var(--black); }
+.haas-homepage.haas-conversation .reception-voice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  justify-items: center;
+  gap: 24px;
+  min-width: 0;
+  max-width: 360px;
+}
+.haas-homepage.haas-conversation .reception-voice > .voice-orb-stage {
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  width: 100%;
+  color: var(--black);
+}
+.haas-homepage.haas-conversation .reception-voice > .voice-orb-stage .voice-orb-art {
+  max-width: 100%;
+}
+.haas-homepage.haas-conversation .reception-controls {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+  width: 100%;
+}
 .haas-conversation .reception-work { margin-bottom: 28px; }
 .conversation-return { display: flex; justify-content: flex-end; gap: 18px; padding: 20px 0; font-size: 12px; }
 .conversation-return span { color: #526572; }
