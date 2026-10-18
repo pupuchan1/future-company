@@ -109,14 +109,17 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
         {text("本文へ移動", "Skip to content")}
       </a>
       <header className="site-header">
-        <a className="brand" href="/" onClick={(event) => navigateLink(event, "home")}>
-          <span className="brand-mark" aria-hidden="true">
+        <a className="brand" href="/" aria-label={text("株式会社HaaS ホーム", "HaaS home")} onClick={(event) => navigateLink(event, "home")}>
+          <span className="brand-mark brand-reserved" aria-hidden="true">
             H<span>↗</span>
           </span>
-          <span className="haas-brand-name">
+          <span className="haas-brand-name brand-reserved" aria-hidden="true">
             {text("株式会社HaaS", "HaaS, Inc.")}
             <small lang="en">Human as a Service.</small>
           </span>
+          <svg className="haas-brand-logo" viewBox="190 165 1608 450" aria-hidden="true">
+            <image href="/images/haas-logo.png" width="1983" height="793" />
+          </svg>
         </a>
         <span className="reception-header-label">
           {text("AI総合受付", "AI RECEPTION")}
@@ -130,9 +133,7 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
       </header>
       <main id="main" tabIndex={-1} className="page-width reception-main">
         <section className="reception-hero">
-          {conversationScreen
-            ? <ConversationTranscript key={caseId ?? "new"} language={language} phase={s.phase} messages={s.transcripts} />
-            : <ReceptionIntro language={language} />}
+          {!conversationScreen && <ReceptionIntro language={language} />}
           {!conversationScreen && <ReceptionOffice language={language} />}
           <section
             className="reception-voice"
@@ -223,6 +224,7 @@ export function ReceptionPageView({ language, preference, selectLanguage, live }
               </button>
             )}
           </section>
+          {conversationScreen && <ConversationTranscript key={caseId ?? "new"} language={language} phase={s.phase} messages={s.transcripts} />}
         </section>
         {!conversationScreen && hasConversation && <div className="conversation-return">
           <span>{active ? text("会話は継続中です。", "Your conversation is still active.") : text("会話履歴を読み返せます。", "Your conversation is available to read.")}</span>
