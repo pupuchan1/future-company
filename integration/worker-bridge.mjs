@@ -1,4 +1,5 @@
 import { WebSocket } from 'ws';
+import { randomUUID } from 'node:crypto';
 import { verifyBridgeProof } from '../src/backend/bridge-proof.ts';
 
 export class WorkerBridge {
@@ -120,7 +121,8 @@ export class WorkerBridge {
     const origin = request.origin;
     const valid = () => !state.closed && !state.handoffs.get(origin.handoffId)?.cancelled;
     const path = `/staff/cases/${state.id}/handoffs/${origin.handoffId}/delivery`;
-    await this.enqueue(state, () => this.command(state, path, `bridge-delivery-${origin.handoffId}-queued`, { status: 'queued' }));
+    const reservationId = `bridge-queued-${randomUUID()}`;
+    await this.enqueue(state, () => this.command(state, path, reservationId, { status: 'queued' }));
     if (!valid()) return;
     // Recheck durable cancellation after queue reservation and before the Agent receives data.
     const { case: latest } = await this.api(`/staff/cases/${state.id}`);

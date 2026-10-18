@@ -50,6 +50,7 @@ function fixture({ deliver = async () => ({ status: 'live_submitted' }), conflic
     } else if (path.endsWith('/delivery')) {
       const request = state.requests.find(r => path.includes(`/${r.origin.handoffId}/`));
       if (request.status !== 'answered') return error(409, 'answer_required');
+      if (body.status === 'queued' && request.delivery?.status !== 'pending') return error(409, 'delivery_in_progress');
       request.delivery = { status: body.status };
     } else throw new Error(`Unexpected external endpoint ${path}`);
     state.revision++;
@@ -57,7 +58,7 @@ function fixture({ deliver = async () => ({ status: 'live_submitted' }), conflic
     commands.set(`${id}:${body.commandId}`, { fingerprint, snapshot });
     return Response.json({ case: snapshot });
   };
-  const bridge = new WorkerBridge({ url: 'http://127.0.0.1:8787', token, fetcher,
+  const makeBridge = () => new WorkerBridge({ url: 'http://127.0.0.1:8787', token, fetcher,
     socketFactory: (url, options) => {
       assert.equal(url.protocol, 'ws:'); assert.equal(options.headers.Authorization, `Bearer ${token}`);
       const socket = new EventEmitter(); socket.readyState = 1; socket.close = () => { socket.closed = true; };
@@ -65,9 +66,10 @@ function fixture({ deliver = async () => ({ status: 'live_submitted' }), conflic
     }, deliver: async event => { deliveries.push(event); return deliver(event); },
     emit: event => { events.push(event); if (event.type === 'worker.delivery') receipts.splice(0).forEach(resolve => resolve(event)); },
   });
+  const bridge = makeBridge();
   const receipt = () => new Promise(resolve => receipts.push(resolve));
   const attach = async (id = 'case-one') => { const proof = await issueBridgeProof(id, token); await bridge.attachCase(id, proof); return proof; };
-  return { bridge, calls, events, deliveries, sockets, snapshots, receipt, attach };
+  return { bridge, makeBridge, calls, events, deliveries, sockets, snapshots, receipt, attach };
 }
 
 test('phone result is saved through claim/revision then forwarded once to its original route', async () => {
@@ -103,6 +105,23 @@ test('proof, unknown case and wrong snapshot cannot deliver another caller resul
   await nextTurn();
   assert.equal(f.deliveries.length, 0);
   f.bridge.close();
+});
+
+test('two Node consumers use distinct durable reservation IDs and dispatch only one result', async () => {
+  const f = fixture();
+  const proof = await f.attach();
+  const second = f.makeBridge();
+  await second.attachCase('case-one', proof);
+  await Promise.all([f.bridge.humanEvent(requested(), 'recruiting'), second.humanEvent(requested(), 'recruiting')]);
+  Object.assign(f.snapshots.get('case-one').requests[0], { status: 'answered', result, simulated: true, delivery: { status: 'pending' } });
+  const receipt = f.receipt();
+  await Promise.all([f.bridge.syncCase('case-one', proof), second.syncCase('case-one', proof)]);
+  await receipt;
+  await nextTurn();
+  assert.equal(f.deliveries.length, 1);
+  const reservations = f.calls.filter(c => c.path.endsWith('/delivery') && c.body.status === 'queued');
+  assert.equal(new Set(reservations.map(c => c.body.commandId)).size, 2);
+  f.bridge.close(); second.close();
 });
 
 test('cancel arriving during the first registration invalidates a late result', async () => {
