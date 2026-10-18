@@ -36,6 +36,6 @@ node --test frontend/tests/demo.test.ts
 - 人間の回答は原文で表示。自動翻訳は未接続です。
 - 黒電話の呼出しはデモ状態です。受話器応答や実音声接続の確認には使いません。
 - `/operator` は認証なしのローカル試作。正式な社員画面へ接続する際は認証・案件API・実イベントに置き換えてください。
-- 実音声アダプターは別担当の `features/live/` に分離する予定です。
+- 実音声アダプターは別担当の `features/live/` に分離し、「AI音声に接続」モードへ組み込み済みです。起動と接続範囲は [LIVE-INTEGRATION.md](LIVE-INTEGRATION.md) を参照してください。デモの文字・依頼は音声サーバーへ送信しません。
 
 主要UIは `src/App.tsx`、デモ状態と更新処理は `src/lib/demo.ts`、共通スタイルは `src/styles/global.css` です。秘密鍵はフロントに置かず、接続の際はサーバー側で扱います。
