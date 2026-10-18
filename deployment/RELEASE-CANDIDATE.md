@@ -41,6 +41,10 @@ Orbは同じ`backend.result`を再受信すると、音声応答終了後に`lis
 
 ## 本番への受渡し
 
+16:36 JSTの再確認でも#39は`6176125`、#76は`f0572a5`、#87は`d2f208b`。
+[#87のレビュー指摘](https://github.com/pupuchan1/future-company/pull/87#discussion_r4306171872)は未解決で、修正後の最終配備commitはまだ確定していない。
+候補と受入範囲は[PR #103](https://github.com/pupuchan1/future-company/pull/103)、Node・Workerの配備記録と切替は[PR #104](https://github.com/pupuchan1/future-company/pull/104)で扱う。
+
 配備担当はr74tech。Worker・Node・relayの版を一組として記録し、稼働中の通話を終了してからNodeを更新する。
 既存Node4350・relay4351、`jamie-journey-redhead-smart.trycloudflare.com`、stateDir・D1・CaseRoom・Access・secretを維持する。
 秘密値をPR・Issue・ビルド成果物へ転記しない。
