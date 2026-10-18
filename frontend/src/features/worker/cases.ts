@@ -1,6 +1,7 @@
 export type CaseLanguage = 'ja' | 'en'
 export type WorkerCase = { id: string; revision: number; kind: 'support' | 'sales' | 'recruitment'; locale: CaseLanguage }
 export type WorkerCaseState = { phase: 'idle' | 'creating' | 'ready' | 'error'; case: WorkerCase | null; error: string }
+export type WorkerVoiceAuthorization = { case: WorkerCase; bridgeToken: string }
 
 export class WorkerCaseError extends Error {
   readonly status: number
@@ -21,6 +22,8 @@ export class WorkerCaseClient {
   private listeners = new Set<(state: WorkerCaseState) => void>()
   private command: { commandId: string; expectedRevision: 0; kind: 'support'; locale: CaseLanguage } | null = null
   private pending: Promise<WorkerCase> | null = null
+  private voicePending: Promise<WorkerVoiceAuthorization> | null = null
+  private voiceGeneration = 0
   private controller: AbortController | null = null
   private generation = 0
   private readonly fetcher: typeof fetch
@@ -65,10 +68,59 @@ export class WorkerCaseClient {
     this.pending = operation
     return operation
   }
+  /** Issue #19: a case ID alone is not proof that the visitor owns it. */
+  prepareVoice(locale: CaseLanguage): Promise<WorkerVoiceAuthorization> {
+    if (this.voicePending) return this.voicePending
+    const generation = ++this.voiceGeneration
+    const operation = (async () => {
+      let controller: AbortController | null = null
+      try {
+        const known = await this.ensureCase(locale)
+        if (generation !== this.voiceGeneration) throw new DOMException('Cancelled', 'AbortError')
+        controller = new AbortController()
+        this.controller = controller
+        this.publish({ phase: 'creating', case: known, error: '' })
+        const response = await this.fetcher(`/api/v1/cases/${encodeURIComponent(known.id)}/bridge-token`, {
+          method: 'POST', credentials: 'same-origin', redirect: 'manual', cache: 'no-store',
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
+        })
+        if (controller.signal.aborted || generation !== this.voiceGeneration) throw new DOMException('Cancelled', 'AbortError')
+        if (response.type === 'opaqueredirect' || response.status === 0 || (response.status >= 300 && response.status < 400) || [401, 403].includes(response.status)) {
+          throw new WorkerCaseError('音声を開始するには案件の認証が必要です。 / Authenticate with the case server before starting voice.', response.status)
+        }
+        if (!response.ok) throw new WorkerCaseError(`音声接続の準備ができません。再試行してください。 / Could not authorize voice (HTTP ${response.status}).`, response.status)
+        if (!response.headers.get('content-type')?.includes('application/json')) throw new WorkerCaseError('音声接続の認証応答を確認できません。 / Invalid voice authorization response.')
+        const body = await response.json() as Record<string, unknown> | null
+        if (controller.signal.aborted || generation !== this.voiceGeneration) throw new DOMException('Cancelled', 'AbortError')
+        if (!body || body.caseId !== known.id || typeof body.bridgeToken !== 'string' || !body.bridgeToken.trim() || body.bridgeToken.length > 1000
+          || !Number.isSafeInteger(body.expiresIn) || Number(body.expiresIn) <= 0 || Number(body.expiresIn) > 900) {
+          throw new WorkerCaseError('音声接続の認証応答を確認できません。 / Invalid voice authorization response.')
+        }
+        this.publish({ phase: 'ready', case: known, error: '' })
+        // The short-lived proof stays in this start operation, never in a UI snapshot or storage.
+        return { case: known, bridgeToken: body.bridgeToken }
+      } catch (error) {
+        if (generation === this.voiceGeneration && !controller?.signal.aborted) {
+          this.publish({ phase: 'error', case: this.state.case, error: error instanceof WorkerCaseError ? error.message : '音声接続を準備できません。接続を確認して再試行してください。 / Could not authorize voice. Check the connection and retry.' })
+        }
+        throw error
+      } finally {
+        if (generation === this.voiceGeneration) {
+          this.voicePending = null
+          if (this.controller === controller) this.controller = null
+        }
+      }
+    })()
+    this.voicePending = operation
+    return operation
+  }
+
   cancel() {
     this.generation++
+    this.voiceGeneration++
     this.controller?.abort()
-    this.controller = null; this.pending = null
+    this.controller = null; this.pending = null; this.voicePending = null
     this.publish({ ...this.state, phase: this.state.case ? 'ready' : 'idle', error: '' })
   }
   reset() { this.cancel(); this.command = null; this.publish({ phase: 'idle', case: null, error: '' }) }

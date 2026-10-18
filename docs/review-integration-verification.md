@@ -24,3 +24,9 @@ npm run dev
 ## 残る確認
 
 実プロバイダー発話、実機電話、Issue #19のWorker人間回答と元Liveの往復は未確認。設定不足を実接続成功として扱わない。公開デプロイやmainへのマージは行っていない。
+
+## GitHub残件確認後のFE接続（Issue #40）
+
+#19で共有された所有者cookie付き `POST /api/v1/cases/:id/bridge-token` を共通受付から呼び、返却された案件限定証明をNode開始bodyの `bridge_token` へ渡す。新しいcaseのstatusを待ち、取得失敗・案件不一致・取消後の証明/status遅延でマイク・Liveを開始しない。再開時は証明を取り直し、UI snapshotやブラウザ保存へ証明を入れない。
+
+FE55テスト・FE本番build・lint（既存warning2件のみ）と、模擬API/模擬音声のブラウザー10項目で確認。#19のbackend実装はまだ別ブランチのため、API未取り込みの環境では証明取得404で開始を止める。Node検証・結果返却・本番relay・実プロバイダーの通しは未完了。[担当と作業順](github-status-20261018.md)を参照。

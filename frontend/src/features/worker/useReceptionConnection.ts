@@ -12,7 +12,7 @@ export function useReceptionConnection(language: LiveLanguage) {
   useEffect(() => { liveRef.current = live }, [live])
   const generation = useRef(0)
   const starting = useRef(false)
-  const queued = useRef<number | null>(null)
+  const queued = useRef<{ ticket: number; caseId: string; bridgeToken: string } | null>(null)
   const [preparing, setPreparing] = useState(false)
   const invalidate = useCallback(() => { generation.current++; queued.current = null; starting.current = false }, [])
   useEffect(() => {
@@ -20,10 +20,14 @@ export function useReceptionConnection(language: LiveLanguage) {
     return () => { invalidate(); unsubscribe(); worker.cancel() }
   }, [worker, invalidate])
   useEffect(() => {
-    if (queued.current === null || queued.current !== generation.current || workerState.phase !== 'ready' || !workerState.case || live.snapshot.caseId !== workerState.case.id) return
-    const ticket = queued.current
+    const authorization = queued.current
+    if (!authorization || authorization.ticket !== generation.current || workerState.phase !== 'ready' || !workerState.case || live.snapshot.caseId !== authorization.caseId || workerState.case.id !== authorization.caseId) return
+    // A new case creates a new LiveClient whose status fetch may finish after the proof.
+    if (live.snapshot.configured === null || live.snapshot.mcpConfigured === null) return
+    const { ticket, bridgeToken } = authorization
     queued.current = null
-    void Promise.resolve(live.start()).finally(() => { if (ticket === generation.current) { starting.current = false; setPreparing(false) } })
+    const operation = live.snapshot.configured && live.snapshot.mcpConfigured ? live.start(undefined, bridgeToken) : undefined
+    void Promise.resolve(operation).finally(() => { if (ticket === generation.current) { starting.current = false; setPreparing(false) } })
   }, [workerState, live])
   async function start() {
     const current = liveRef.current.snapshot
@@ -31,9 +35,9 @@ export function useReceptionConnection(language: LiveLanguage) {
     const ticket = ++generation.current
     starting.current = true; setPreparing(true)
     try {
-      await worker.ensureCase(language)
+      const authorization = await worker.prepareVoice(language)
       if (ticket !== generation.current) return
-      queued.current = ticket
+      queued.current = { ticket, caseId: authorization.case.id, bridgeToken: authorization.bridgeToken }
       // Ensure React commits the new case ID before its Live hook starts.
       setWorkerState({ ...worker.getSnapshot() })
     } catch {

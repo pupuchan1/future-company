@@ -32,7 +32,7 @@ export function useLiveConnection({ caseId, language }: { caseId: string; langua
   return {
     snapshot,
     voice,
-    start: (route?: LiveRoute) => client.current?.start(languageRef.current, route),
+    start: (route?: LiveRoute, bridgeToken?: string) => client.current?.start(languageRef.current, route, bridgeToken),
     switchDepartment: (route: LiveRoute) => client.current?.switchDepartment(route),
     stop: () => client.current?.stop(),
     toggleMuted: () => client.current?.setMuted(!client.current.getSnapshot().muted),

@@ -414,7 +414,7 @@ export class LiveClient {
     return sdp
   }
 
-  async start(language = this.state.language, route: LiveRoute = 'reception') {
+  async start(language = this.state.language, route: LiveRoute = 'reception', bridgeToken?: string) {
     if (this.disposed || this.connection || this.closing) return
     if (!this.state.configured || !this.state.mcpConfigured) {
       this.patch({ error: '音声サーバーの設定・接続を確認してください。 / Check voice server configuration.' })
@@ -440,7 +440,7 @@ export class LiveClient {
       const sdp = await this.offer(connection)
       if (!sdp || this.connection !== connection) return
       // Do not abort this request on Stop: a late response still needs DELETE.
-      const created = await this.api('/api/live/session', { method: 'POST', body: JSON.stringify({ sdp, language, case_id: this.state.caseId, ...(route === 'reception' ? {} : { route }) }) })
+      const created = await this.api('/api/live/session', { method: 'POST', body: JSON.stringify({ sdp, language, case_id: this.state.caseId, ...(bridgeToken ? { bridge_token: bridgeToken } : {}), ...(route === 'reception' ? {} : { route }) }) })
       const id = object(created.session).id ?? created.session_id
       if (typeof id === 'string') connection.sessionId = id
       if (this.connection !== connection) { await this.finalize(connection); return }
