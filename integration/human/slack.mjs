@@ -68,8 +68,9 @@ export function createSlackHumanTransport({ botToken = '', userToken = '', chann
         if (message.bot_id || message.app_id || message.subtype || !/^[UW][A-Z0-9]+$/.test(message.user || '')
           || message.thread_ts !== entry.ts || !(Number(message.ts) > Number(entry.sinceTs))) continue;
         const answer = /^(回答|answer)\s*[:：]\s*([\s\S]+)$/i.exec(String(message.text || '').trim());
-        if (!answer || !answer[2].trim() || answer[2].trim().length > 4000) continue;
-        entry.hooks.complete({ text: answer[2].trim(), language: answer[1] === '回答' ? 'ja' : 'en' },
+        const reply = answer?.[2]?.trim() || (entry.record.request_kind === 'work' ? String(message.text || '').trim() : '');
+        if (!reply || reply.length > 4000) continue;
+        entry.hooks.complete({ text: reply, language: answer ? (answer[1] === '回答' ? 'ja' : 'en') : entry.record.language },
           { result_source: 'slack_thread', slack_reply_ts: message.ts, slack_user_id: message.user });
         remove(entry);
         return;
@@ -148,17 +149,22 @@ export function createSlackHumanTransport({ botToken = '', userToken = '', chann
       pending.set(record.handoff_id, entry);
       void (async () => {
         try {
-          const sections = [`確認してほしいこと\n${record.task || record.summary}`,
+          const work = record.request_kind === 'work';
+          const title = work ? '仕事の依頼が届きました' : '採用担当への確認';
+          const sections = work ? [`依頼内容（お客様のお話）\n${record.summary || record.task}`,
+            `必要な担当・スキル\n${record.target_role || 'ご依頼の内容に対応できる方'}`,
+            `お願い\n${record.expected_result}`] : [`確認してほしいこと\n${record.task || record.summary}`,
             `相談者について（本人のお話）\n${record.applicant_summary || '氏名・経歴はまだ伺っていません。'}`,
             ...(record.summary && record.summary !== record.task ? [`補足\n${record.summary}`] : []),
             `回答してほしい内容\n${record.expected_result || '質問への回答をお願いします。未確認であれば、その旨をお知らせください。'}`];
-          const footer = 'このスレッドに「回答: 内容」で返信してください。AIが相談者へお伝えし、会話を続けます。英語は「answer: text」でも返信できます。';
-          const blocks = [{ type: 'header', text: { type: 'plain_text', text: '採用担当への確認', emoji: false } },
-            { type: 'context', elements: [{ type: 'plain_text', text: '採用担当の方、ご確認と返信をお願いします。', emoji: false }] },
+          const footer = work ? '対応可能な方は、このスレッドに「対応します」などと返信してください。AIがお客様へお伝えします。' : 'このスレッドに「回答: 内容」で返信してください。AIが相談者へお伝えし、会話を続けます。英語は「answer: text」でも返信できます。';
+          const blocks = [{ type: 'header', text: { type: 'plain_text', text: title, emoji: false } },
+            work ? { type: 'context', elements: [{ type: 'mrkdwn', text: '<!here> 作業担当の方、ご確認と返信をお願いします。' }] }
+              : { type: 'context', elements: [{ type: 'plain_text', text: '採用担当の方、ご確認と返信をお願いします。', emoji: false }] },
             ...sections.map(text => ({ type: 'section', text: { type: 'plain_text', text: text.slice(0, 2900), emoji: false } })),
             { type: 'context', elements: [{ type: 'plain_text', text: `${footer}\n案件: ${record.case_id} / 相談: ${record.handoff_id}`, emoji: false }] }];
-          const text = ['採用担当への確認', ...sections, footer].map(escapeText).join('\n').slice(0, 9000);
-          const { posted, root } = await postCase(record.case_id, { text, blocks, client_msg_id: record.handoff_id }, entry.controller.signal);
+          const text = [title, ...sections, footer].map(escapeText).join('\n').slice(0, 9000);
+          const { posted, root } = await postCase(record.case_id, { text, blocks, client_msg_id: record.handoff_id }, entry.controller.signal, work);
           if (!alive(entry)) return;
           if (posted.channel !== channelId || !/^\d+\.\d+$/.test(posted.ts || '')) throw Object.assign(new Error(), { safeCode: 'slack_delivery_unknown' });
           entry.ts = root;

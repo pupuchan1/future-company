@@ -6,6 +6,7 @@ import { initialSnapshot, LANGUAGE_CHANGE_ERROR, object } from './types.ts'
 import type { JsonObject, LiveLanguage, LiveLanguagePreference, LiveRoute, LiveSnapshot, LiveSpeaking } from './types.ts'
 import { createEventTransport } from './event-transport.ts'
 import { createRtcMeter } from './rtc-meter.ts'
+import { callsRecruiter } from './spoken-department.ts'
 import type { LiveEventTransport } from './event-transport.ts'
 import type { LiveMediaObserver } from '../recording/types.ts'
 
@@ -243,6 +244,9 @@ export class LiveClient {
   private languageConnection: Connection | null = null
   private languageGeneration = 0
   private conversation = new ConversationActivity()
+  private spokenDepartmentTimer?: ReturnType<typeof setTimeout>
+  private spokenInput?: { connection: Connection; id: string; text: string }
+  private spokenDepartment?: { connection: Connection; id: string; text: string; waiting: boolean; attempts: number }
 
   constructor(caseId: string, language: LiveLanguage, runtime = browserRuntime(), options: LiveClientOptions = {}) {
     const prefix = options.apiPrefix
@@ -267,6 +271,29 @@ export class LiveClient {
     this.listeners.forEach(listener => listener(next))
   }
   private patch(next: Partial<LiveSnapshot>) { this.publish({ ...this.state, ...next }) }
+
+  private scheduleSpokenDepartment() {
+    clearTimeout(this.spokenDepartmentTimer)
+    const request = this.spokenDepartment
+    if (!request) return
+    this.spokenDepartmentTimer = setTimeout(() => {
+      if (this.spokenDepartment !== request || this.connection !== request.connection
+        || this.disposed || this.closing || this.state.phase !== 'connected' || this.state.voiceRoute !== 'reception') return
+      // A native delegation already owns the interview. Let its existing
+      // voice handoff finish rather than starting another interview turn.
+      if (this.automaticHandoff?.route === 'recruiting') { this.spokenDepartment = undefined; return }
+      if (this.state.backend === 'running') { request.waiting = true; return }
+      request.attempts++
+      void this.switchDepartment('recruiting').then(result => {
+        if (this.spokenDepartment !== request) return
+        if (result === 'busy' && request.attempts < 2) {
+          request.waiting = true
+          if (this.state.backend !== 'running') this.scheduleSpokenDepartment()
+        }
+        else this.spokenDepartment = undefined
+      })
+    }, 700)
+  }
 
   private cancelAutomaticHandoff() {
     clearTimeout(this.automaticTimer)
@@ -516,6 +543,17 @@ export class LiveClient {
     if (activeVoice && eventAccepted) {
       const inputText = typeof body.delta === 'string' ? body.delta : object(body.delta).text ?? object(body.delta).transcript
       if (newTranscript && type === 'session.input_transcript.delta' && typeof inputText === 'string' && inputText.trim()) this.conversation.acceptInput()
+      if (newTranscript && type === 'session.output_transcript.delta') this.spokenInput = undefined
+      if (newTranscript && type === 'session.input_transcript.delta' && typeof inputText === 'string' && this.state.voiceRoute === 'reception') {
+        const latest = this.state.transcripts.findLast(item => item.role === 'user')
+        const previous = this.spokenInput
+        this.spokenInput = latest ? { connection: this.connection!, id: latest.id,
+          text: (previous?.connection === this.connection && previous.id === latest.id ? previous.text : '') + inputText } : undefined
+        this.spokenDepartment = this.spokenInput && callsRecruiter(this.spokenInput.text)
+          ? { ...this.spokenInput, waiting: false, attempts: 0 } : undefined
+        this.scheduleSpokenDepartment()
+      }
+      if ((type === 'backend.result' || type === 'backend.error') && this.spokenDepartment?.waiting) this.scheduleSpokenDepartment()
       if (type === 'backend.started' || type === 'backend.result') this.conversation.awaitResponse()
       if (type === 'backend.error' || type === 'error') this.conversation.fail()
       const audio = this.connection?.audio
@@ -855,7 +893,7 @@ export class LiveClient {
       this.patch({ phase: previous.peer?.connectionState === 'disconnected' ? 'reconnecting' : 'connected', muted: attempt.muted, error: `担当の声を切り替えられませんでした。元の声で続けます。 / Voice unchanged. ${microphoneError(error)}` })
       if (previous.audio) previous.audio.autoplay = true
       await this.playAudio()
-      if (automatic && error instanceof LiveApiError && error.status === 409 && error.code === 'busy') return 'busy'
+      if (error instanceof LiveApiError && error.status === 409 && ['busy', 'handoff_in_progress'].includes(error.code ?? '')) return 'busy'
     }
   }
 
@@ -975,6 +1013,9 @@ export class LiveClient {
   }
 
   async stop(error = '', keepalive = false) {
+    clearTimeout(this.spokenDepartmentTimer)
+    this.spokenInput = undefined
+    this.spokenDepartment = undefined
     this.cancelAutomaticHandoff()
     if (this.closing) return this.closing
     const connection = this.connection

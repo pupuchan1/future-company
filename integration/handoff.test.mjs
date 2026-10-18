@@ -596,3 +596,67 @@ test('interview report requires latest caller end request and sends only once th
   assert.equal((await report()).error, 'interview_end_not_requested');
   assert.equal(posts.length, 1);
 });
+
+test('an explicit recruiting selection introduces the new voice before the interview result', async t => {
+  const f = await fixture(t);
+  const started = await f.start();
+  const pending = deferred();
+  f.app.backend.run = async (input) => { f.runs.push(input); return pending.promise; };
+  const prepared = await f.api(`/api/live/session/${started.body.session.id}/handoff`, { sdp: 'v=0\r\n', route: 'recruiting' });
+  assert.equal((await f.activate(prepared)).status, 200);
+  const next = f.sockets.get(prepared.body.session.id);
+  const introductions = () => next.sent.filter(event => event.type === 'session.commentary.append');
+  assert.equal(introductions().length, 1);
+  assert.match(introductions()[0].content, /採用担当|recruitment assistant/);
+  next.receive({ type: 'session.delegation.created', delegation: { id: 'greeting-delegation', target: 'client' } });
+  assert.equal((await f.activate(prepared)).status, 200);
+  assert.equal(introductions().length, 1, 'Retry must not repeat the introduction');
+  pending.resolve('Please describe your experience.');
+  await until(() => introductions().length === 2);
+  assert.equal(f.runs.length, 1);
+});
+
+
+test('work requests notify Slack before classification or Agent work and speak the receipt once', async t => {
+  const posts = [];
+  const f = await fixture(t, { extraEnv: { SLACK_BOT_TOKEN: 'test-only', SLACK_CHANNEL_ID: 'C123' },
+    slackFetch: async (url, options) => {
+      posts.push(JSON.parse(options.body));
+      return Response.json({ ok: true, channel: 'C123', ts: '123.000001' });
+    } });
+  let classifications = 0;
+  f.app.backend.classify = async () => { classifications++; throw new Error('must not classify the work intake'); };
+  const created = await f.start();
+  const socket = f.sockets.get(created.body.session.id);
+  const text = 'こんにちは。御社に仕事の依頼をしたいんですけど、ハンダ付けやデバイスが得意な人はいませんか？';
+  const input = { type: 'session.input_transcript.delta', event_id: 'work-input', delta: text };
+  const start = Date.now();
+  socket.receive(input); socket.receive(input);
+  await until(() => posts.length === 1);
+  assert.ok(Date.now() - start < 1500, 'Slack submission starts without a model round trip');
+  await until(() => socket.sent.some(event => event.type === 'session.commentary.append' && event.content.includes('Slack')));
+  socket.receive({ type: 'session.delegation.created', delegation: { id: 'late-work-delegation', target: 'client' } });
+  await pause(20);
+  assert.equal(classifications, 0); assert.equal(f.runs.length, 0); assert.equal(posts.length, 1);
+  assert.equal(posts[0].blocks[0].text.text, '仕事の依頼が届きました');
+  assert.ok(posts[0].blocks.some(block => block.text?.text?.includes(text)));
+  assert.ok(posts[0].blocks.some(block => block.text?.text?.includes('ハンダ付け、デバイス・ハードウェア')));
+  const record = f.app.gateway.service.listRequests()[0];
+  assert.equal(record.transport, 'slack'); assert.equal(record.notification_status, 'sent');
+  assert.equal(record.request_kind, 'work'); assert.equal(record.audio_connected, false);
+  assert.equal(socket.sent.filter(event => event.type === 'session.commentary.append' && event.content.includes('Slack')).length, 1);
+});
+
+test('stopping or retracting a pending work request prevents notification', async t => {
+  const posts = [];
+  const f = await fixture(t, { extraEnv: { SLACK_BOT_TOKEN: 'test-only', SLACK_CHANNEL_ID: 'C123' },
+    slackFetch: async (_url, options) => { posts.push(options); return Response.json({ ok: true, channel: 'C123', ts: '123.000001' }); } });
+  const created = await f.start(); const socket = f.sockets.get(created.body.session.id);
+  socket.receive({ type: 'session.input_transcript.delta', event_id: 'work-start', delta: '仕事を依頼したい' });
+  socket.receive({ type: 'session.input_transcript.delta', event_id: 'work-retraction', delta: 'と思ったけれど、依頼しません。' });
+  await pause(400); assert.equal(posts.length, 0);
+  socket.receive({ type: 'session.output_transcript.delta', event_id: 'ack', delta: '承知しました。' });
+  socket.receive({ type: 'session.input_transcript.delta', event_id: 'new-work', delta: 'ハンダ付けをお願いしたい。' });
+  await f.api(`/api/live/session/${created.body.session.id}`, undefined, 'DELETE');
+  await pause(400); assert.equal(posts.length, 0);
+});
