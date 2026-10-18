@@ -1,0 +1,26 @@
+{
+  "name": "future-company",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "$npm_execpath run build && vite preview",
+    "deploy": "$npm_execpath run build && wrangler deploy",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "typecheck": "bun run cf-typegen && tsc --noEmit",
+    "test": "node --experimental-strip-types --test src/backend/backend.test.ts src/backend/api.test.ts src/backend/persistence.test.ts src/backend/persistence.integration.test.ts && bun test src/backend/auth.test.ts src/backend/mcp-events.test.ts src/backend/openai.test.ts",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local"
+  },
+  "dependencies": {
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.44.0",
+    "@types/bun": "^1.4.3",
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.4",
+    "vite-ssr-components": "^0.8.0",
+    "wrangler": "^4.110.0"
+  }
+}
