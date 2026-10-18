@@ -87,3 +87,24 @@ aiortcで同じケースの一般受付→採用→HaaSを試験した。入力�
 - 人間イベントで検索や依頼を再実行せず、元のAgentで結果を照合した。終了時はAgents削除済み、`cleanup_pending=[]`。
 
 局所テストはMCP/ネットワーク10件成功。証跡は私有の`moj/work/quality-1792304972588.json`、実行スクリプトは`agents-quality-probe.mjs`。これは1シナリオの実接続確認であり、全タスクの品質や実機動作を保証する評価ではない。発話へMarkdownリンクが混ざったため、資料URLは依頼summaryに保持し音声には含めない指示を追加した。この最後の文面調整は別の実API試験をまだ行っていない。
+
+## 2026-10-18 15:42以降: 実ブラウザー・Worker回答・公開入口
+
+- 本物の`LiveClient`と`WorkerCaseClient`をブラウザーで動かし、合成音声から実GPT Live/HaaS Agents/MCPへ接続。Workerに保存された模擬人間回答が、元のAgents sessionで処理され、Liveの音声・字幕へ戻った。66.796秒時点でWebRTC/ICEはconnected、`marin`、非無音の音量サンプル259、同一handoffのcompleted/revision 5を確認。76秒時点まで回答音声の字幕が続いた。実マイク・黒電話の実機を使った試験ではない。
+- 証跡は私有の`moj/work/browser-live-harness/evidence/browser-1792305753649.json`。この試験はローカルWorker/DO/D1と公開Node relayを通す。正式なCloudflare本番D1とは分けて扱う。
+- 続く手動のHaaS→採用切替は、新しい`harema`接続まで成功したが、30秒後にexpiredと`context_injection_incomplete`が発生。原因切り分け中で、切替後の音声成功とは扱わない。証跡`browser-1792305821579.json`。
+- 認証付き公開gatewayからpupu最新の画面を表示し、実ブラウザーでフォームログイン成功。秘密はサーバー側だけに保存。gatewayの認証・Origin・cookie・WebSocket中継13テスト、フロント70テストとbuild成功。
+- 15:45に、共有されたCloudflare Access設定で既存本番Workerのcompany APIは認証あり200 JSON／なし302を確認。現行本番は`haas`案件400、既存`support`案件201、案件証明とvoice/statusは404、手元の社員トークンは401。統合版の配置と社員認証の一致をIssue #33とSlackでr74techへ依頼済み。
+- 15:47のSlack更新で、共有Accessトークンは2026-10-19 00:00 JSTまでと確認。ID・Secretは変更なし。値はサーバー専用ファイルに保存し、Gitやブラウザには含めない。
+- 2回目の実ブラウザー試験では受付`shida`のままHaaSへ業務委譲し、同一case/handoffのWorker保存回答revision 5と英語の最終音声を確認。135秒時点でWebRTC接続とRTP送信が継続し、一度のICE切断からも復帰した。一方、status取得失敗後に声切替の可否が復旧せず、手動切替が拒否される不具合を確認。`browser-1792306151301.json`を根拠に #35 で修正する。
+
+
+## 2026-10-18 15:58–16:06 JST: 同じ案件で受付から採用音声へ切替
+
+継続した合成無音クロックを送る実ブラウザー試験で、受付 `shida` から採用 `harema` への手動切替が7.919秒で成功した。同じcaseと採用Agents sessionを維持し、切替後70.171秒まで接続を継続。追加の非無音サンプル178、候補側RTP 3,606 packets / 125,576 bytesを確認した。新しいLiveは `close_requested` でfinalized、業務Agentは削除済み。旧Liveの終了要求は送信済みだがfinalization応答がなく、新Liveの終了成功と分けて扱う。
+
+以前の30秒expiryはこの試行では再現していない。入力クロック変更だけが原因だと確定した試験ではなく、自動ルーティングや三担当の連続切替、実機電話までを確認したものではない。証跡は私有の `moj/work/browser-live-harness/evidence/p1-browser-manual-correlated.json`。
+
+- 一時的なstatus取得失敗で既知の声切替機能が無効になる問題を修正。403では無効化し、タイムアウト/5xxでは直前の機能情報を維持する。関連29テスト成功。
+- 自動切替はDecisionsの確定ルート、業務応答、発話後の静かな区間を待つ。声だけの変更から業務Agentを再実行せず、409時の再試行は最大3回。関連70テストと型検査成功。自動切替自体の新たな実ブラウザー確認は未完了。
+- r74techが16:01に既存本番Workerへ `7439949` を配置。version `8213ab20-f524-4ca9-8662-7f3b2fc57bc2`。16:06の独立確認でcompany/案件取得200、voice/status 503 (`voice_relay_unconfigured`)、社員認証401。本番にNodeと同一の2つのサーバーsecretを設定し、Nodeの `WORKER_API_URL` を本番へ向ける作業に進む。15:45時点の400/404は現在の状態ではない。
