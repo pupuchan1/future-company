@@ -2,6 +2,14 @@
 
 音声の入口を一つにまとめ、発話の内容をAIが判定して採用AgentまたはHaaS Agentへ渡します。Reactは会話・担当・ツールや人への依頼状況を表示します。
 
+## 本番の起動と復帰
+
+公開本番の入口はhttps://future-company-voice-node.r74.workers.dev/です。音声NodeはCloudflare Containersで動きます。Sitesは予備入口です。
+既存の本人限定APIはhttps://future-company-demo.r74.workers.dev/を維持します。
+本番では案件所有者を確認した`/api/v1/cases/:caseId/voice/*`を使い、Node4350と認証付きrelay4351へ接続します。
+配備版と接続先は[配備記録](docs/demo-deployment.md)、起動、接続先更新と復帰は[本番運用手順](deployment/PRODUCTION.md)を参照してください。
+NodeとWorkerを同じ固定commitへ揃え、既存のstateDir、D1、CaseRoomとAccessを維持して更新します。
+
 ## ローカル起動
 
 Node.js 24.14以上の24系を使用します。
