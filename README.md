@@ -11,3 +11,5 @@ Update: PR87 motion and response-waiting state retained; HaaS teal #00757D / min
 Follow-up user instruction in the integration chat: mix soft navy #8198B8 with mint #9ACFC2 inside the sphere, preserving the HaaS teal outline and PR87 motion. Full source commit is retained in exports/haas-team-preview.json.
 
 Update 3e036ab: remove the conversation heading focus outline only. Orb motion and palette unchanged.
+
+2026-10-28: Re-published the existing static snapshot for product discussion. Added a persistent bilingual preview notice; no backend connection, AI integration, candidate workflow, or existing app functionality was added. Existing public audience preserved.
