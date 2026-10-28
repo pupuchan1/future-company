@@ -2,5 +2,10 @@
   "name": "haas-team-preview",
   "private": true,
   "version": "1.0.0",
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check dist/experience/model.js && node --check dist/experience/app.js"
+  }
 }
