@@ -40,3 +40,11 @@ Manual walkthrough: candidate → cafe → use fictional sample at each of five 
 
 - 11 automated tests passed; both JavaScript modules passed syntax checks.
 - Local in-app browser navigation timed out. Native Chrome automation approval timed out without executing the intended tab interaction. Desktop/mobile browser rendering and physical phone behavior were not yet verified at this point; do not describe them as verified solely from responsive CSS or render tests.
+
+## Follow-up corrections after v6 browser feedback
+
+- Independent reproduction confirmed that v6 could change an agenda's source version without requiring its wording to change. Agenda revision now starts a separate saved draft. The source version stays unchanged, and proposing remains blocked until the recruiter edits the wording, confirms the latest question, and explicitly saves. A before/after summary records the human-authored change. Legacy v6 agendas already relabeled to a corrected version also require this review before sending again.
+- Company answers shared a counter with proposals in v6. Proposal display numbers now count only actual proposals within that experience; legacy proposal record IDs are retained, with sequential display numbers derived from their sent order.
+- New experiences now preserve the current experience, including its correction draft, submissions, company answers, agenda and immutable proposals. Candidate and recruiter can switch experiences. Recruiter choices include only submitted titles, never candidate draft titles. Direct `#candidate/new` opens the explicit experience picker; it no longer silently returns to a submitted version.
+- Storage-event rendering no longer writes the received state back, preventing repeated cross-tab updates between candidate and recruiter views.
+- All data remains browser-local and fictional; no external API, secret, identity or permission integration was added.

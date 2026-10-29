@@ -6,8 +6,8 @@ function element(selector) { if (!elements.has(selector)) elements.set(selector,
 globalThis.document = { querySelector: element, querySelectorAll: () => [], addEventListener: (name, fn) => documentEvents[name] = fn };
 globalThis.window = { addEventListener: (name, fn) => windowEvents[name] = fn, scrollTo(){} };
 globalThis.location = { hash: '#candidate/welcome' };
-let saved = null;
-globalThis.localStorage = { getItem: () => saved, setItem: (key, value) => { saved = value; } };
+let saved = null, writes = 0;
+globalThis.localStorage = { getItem: () => saved, setItem: (key, value) => { saved = value; writes++; } };
 await import('../dist/experience/app.js');
 function load(state, hash) { saved = JSON.stringify(state); location.hash = hash; windowEvents.storage({ key: STORAGE_KEY, newValue: saved }); return element('#app').innerHTML; }
 function click(action, extra = {}) { documentEvents.click({ target: { closest: () => ({ dataset: { action, ...extra }, disabled: false }) } }); }
@@ -21,7 +21,7 @@ test('stale recruiter renders disabled send, source version and differences; can
   const state = createState(); state.draft.content = { ...SAMPLE }; submit(state); createAgenda(state); state.agenda.notes = 'RECRUITER-PRIVATE-NOTE'; propose(state);
   startCorrection(state); state.draft.content.question = 'NEW-QUESTION'; submit(state);
   const html = load(state, '#recruiter');
-  assert.match(html, /data-action="request-proposal" disabled/); assert.match(html, /提出版が更新/); assert.match(html, /NEW-QUESTION/);
+  assert.match(html, /data-action="request-proposal" disabled/); assert.match(html, /議題の文面を見直すまで提案できません/); assert.match(html, /NEW-QUESTION/);
   const candidate = load(state, '#candidate/submitted'); assert.equal(candidate.includes('RECRUITER-PRIVATE-NOTE'), false); assert.equal(candidate.includes('訂正前の議題'), true);
 });
 test('submission cancel keeps draft and single confirmation records one version despite double clicks', () => {
@@ -35,4 +35,27 @@ test('back navigation preserves interview answers; entered HTML is rendered as t
   const state = createState(); state.draft.content = { ...SAMPLE, situation: '<script>bad()</script>' }; state.screen = 'interview'; state.interviewIndex = 2;
   load(state, '#candidate/interview/2'); location.hash = '#candidate/interview/0'; windowEvents.hashchange();
   assert.equal(JSON.parse(saved).draft.content.situation, '<script>bad()</script>'); assert.match(element('#app').innerHTML, /&lt;script&gt;bad\(\)&lt;\/script&gt;/);
+});
+test('agenda revision UI retains old source until actual wording is edited and confirmed', () => {
+  const state=createState(); state.draft.content={...SAMPLE}; submit(state); createAgenda(state); state.agenda.notes='NOTE TO KEEP';
+  startCorrection(state); state.draft.content.action='訂正した行動'; submit(state); load(state,'#recruiter');
+  click('update-agenda'); assert.equal(JSON.parse(saved).agenda.sourceVersion,1); assert.match(element('#app').innerHTML,/agenda-revision-focus/);
+  documentEvents.change({target:{id:'changes-reviewed',checked:true,dataset:{}}}); click('commit-agenda');
+  assert.equal(JSON.parse(saved).agenda.sourceVersion,1);
+  documentEvents.input({target:{dataset:{agendaDraft:'focus'},value:'訂正後の行動について確認する新しい議題'}});
+  click('commit-agenda'); const updated=JSON.parse(saved);
+  assert.equal(updated.agenda.sourceVersion,2); assert.equal(updated.agenda.focus,'訂正後の行動について確認する新しい議題');
+  assert.equal(updated.agenda.notes,'NOTE TO KEEP'); assert.match(element('#app').innerHTML,/人事が見直して更新した内容/);
+});
+test('new experience URL and entry preserve the submitted experience rather than silently redirecting', () => {
+  const state=createState(); state.draft.content={...SAMPLE}; submit(state); createAgenda(state); propose(state);
+  load(state,'#candidate/new'); assert.match(element('#app').innerHTML,/data-choice="own"/);
+  click('choose',{choice:'own'}); const added=JSON.parse(saved);
+  assert.equal(added.experienceId,'experience-2'); assert.equal(added.submissions.length,0); assert.equal(added.otherExperiences[0].submissions.length,1);
+  click('select-experience',{id:'experience-1'}); windowEvents.hashchange(); const selected=JSON.parse(saved);
+  assert.equal(selected.experienceId,'experience-1'); assert.equal(selected.proposals.length,1); assert.equal(selected.otherExperiences[0].experienceId,'experience-2');
+});
+test('storage event rendering does not write back and create a cross-tab update loop', () => {
+  const state=createState(); state.draft.content={...SAMPLE}; submit(state);
+  writes=0; load(state,'#recruiter'); assert.equal(writes,0);
 });

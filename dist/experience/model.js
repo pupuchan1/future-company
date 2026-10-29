@@ -5,11 +5,33 @@ export const SCENARIO = 'ジュニア CS：困っているお客さまの話を�
 export const SAMPLE = Object.freeze({ title: 'カフェで、注文と違うドリンクをお渡ししたとき', situation: '土曜の昼、混雑したカフェで、注文と違うドリンクを受け取ったお客さまから声をかけられました。私はアルバイトを始めて3か月でした。', action: 'まず注文内容と急いでいるかを確認しました。レシートを見て店長に状況を伝え、作り直しの時間を確かめてお客さまに説明しました。', result: 'お客さまは5分なら待てると言い、作り直したドリンクを受け取られました。店長と、受け渡し時に注文名を読み上げることを決めました。待ち時間は記憶に基づく目安です。', confirmNext: 'カフェでの対応を CS の問い合わせ対応にどう生かせるか。判断に迷う場合、どこまで自分で決めてよいか。', question: '入社後、判断に迷った問い合わせは、どのように先輩に相談できますか？' });
 const copy = value => JSON.parse(JSON.stringify(value));
 export const emptyContent = () => Object.fromEntries(FIELDS.map(key => [key, '']));
-export function createState() { return { schema: 1, screen: 'welcome', interviewIndex: 0, draft: { content: emptyContent(), baseVersion: 0 }, submissions: [], agenda: null, proposals: [], nextId: 1, answers: [], answerDraft: null, decision: null }; }
+export function createState() { return { schema: 1, experienceId: 'experience-1', nextExperienceId: 2, otherExperiences: [], screen: 'welcome', interviewIndex: 0, draft: { content: emptyContent(), baseVersion: 0 }, submissions: [], agenda: null, agendaDraft: null, agendaReview: null, proposals: [], nextId: 1, answers: [], answerDraft: null, decision: null }; }
+function experienceSnapshot(state) { const { otherExperiences, nextExperienceId, ...experience } = state; return copy(experience); }
+export function experienceList(state, submittedOnly = false) {
+  return [state, ...(state.otherExperiences ?? [])].filter(e => !submittedOnly || latest(e)).map(e => ({ id: e.experienceId, title: (submittedOnly ? latest(e)?.content.title : e.draft?.content.title || latest(e)?.content.title) || 'まだ選んでいない経験', version: latest(e)?.version ?? 0, isActive: e.experienceId === state.experienceId }));
+}
+export function addExperience(state, title = '') {
+  const id = state.nextExperienceId ?? 2;
+  const others = [...(state.otherExperiences ?? []), experienceSnapshot(state)];
+  Object.assign(state, createState(), { experienceId: `experience-${id}`, nextExperienceId: id + 1, otherExperiences: others });
+  state.draft.content.title = title;
+  state.screen = title ? 'interview' : 'welcome';
+  return state.experienceId;
+}
+export function selectExperience(state, id) {
+  if (id === state.experienceId) return true;
+  const selected = (state.otherExperiences ?? []).find(e => e.experienceId === id);
+  if (!selected) return false;
+  const others = state.otherExperiences.filter(e => e.experienceId !== id);
+  others.push(experienceSnapshot(state));
+  const nextExperienceId = state.nextExperienceId;
+  Object.assign(state, createState(), copy(selected), { otherExperiences: others, nextExperienceId });
+  return true;
+}
 export function latest(state) { return state.submissions.at(-1) ?? null; }
 export function validContent(content) { return FIELDS.every(key => typeof content?.[key] === 'string' && content[key].trim().length > 0 && content[key].length <= 4000); }
 export function sameContent(a, b) { return FIELDS.every(key => a?.[key]?.trim() === b?.[key]?.trim()); }
-export function isStale(state) { return !!state.agenda && state.agenda.sourceVersion !== latest(state)?.version; }
+export function isStale(state) { const version=latest(state)?.version; return !!state.agenda && (state.agenda.sourceVersion !== version || (version > 1 && state.agenda.reviewedVersion !== version)); }
 export function differences(a, b) { return FIELDS.filter(key => a?.[key] !== b?.[key]).map(key => ({ key, label: LABELS[key], before: a?.[key] ?? '', after: b?.[key] ?? '' })); }
 export function submit(state, now = new Date().toISOString()) {
   if (!state.draft || !validContent(state.draft.content)) return { ok: false, reason: '送付物のすべての項目を確認してください。' };
@@ -38,8 +60,25 @@ export function cancelCorrection(state) {
 }
 export function createAgenda(state, confirmedChanges = false) {
   const entry = latest(state);
-  if (!entry || (isStale(state) && !confirmedChanges)) return false;
-  state.agenda = { sourceVersion: entry.version, focus: `「${entry.content.title}」について、話を整理した手順と引き継ぎの判断を一緒に振り返る`, candidateQuestion: entry.content.question, confirmNext: entry.content.confirmNext, notes: state.agenda?.notes ?? '' };
+  if (!entry || isStale(state)) return false;
+  state.agenda = { sourceVersion: entry.version, reviewedVersion: entry.version, focus: `「${entry.content.title}」について、話を整理した手順と引き継ぎの判断を一緒に振り返る`, candidateQuestion: entry.content.question, confirmNext: entry.content.confirmNext, notes: state.agenda?.notes ?? '' };
+  return true;
+}
+export function beginAgendaRevision(state) {
+  if (!isStale(state)) return false;
+  const entry = latest(state);
+  if (state.agendaDraft?.sourceVersion !== entry.version) state.agendaDraft = { sourceVersion: entry.version, focus: state.agenda.focus };
+  return true;
+}
+export function canCommitAgendaRevision(state, reviewed = false) {
+  return !!(reviewed && isStale(state) && state.agendaDraft?.sourceVersion === latest(state)?.version && state.agendaDraft.focus.trim() && state.agendaDraft.focus.length <= 4000 && state.agendaDraft.focus.trim() !== state.agenda.focus.trim());
+}
+export function commitAgendaRevision(state, reviewed = false) {
+  if (!canCommitAgendaRevision(state, reviewed)) return false;
+  const previous = copy(state.agenda), entry = latest(state);
+  state.agenda = { sourceVersion: entry.version, reviewedVersion: entry.version, focus: state.agendaDraft.focus.trim(), candidateQuestion: entry.content.question, confirmNext: entry.content.confirmNext, notes: previous.notes };
+  state.agendaReview = { fromVersion: previous.sourceVersion, toVersion: entry.version, before: previous.focus, after: state.agenda.focus };
+  state.agendaDraft = null;
   return true;
 }
 export function propose(state, now = new Date().toISOString()) {
@@ -47,7 +86,7 @@ export function propose(state, now = new Date().toISOString()) {
   const agenda = publicAgenda(state.agenda);
   const same = state.proposals.some(p => JSON.stringify(p.agenda) === JSON.stringify(agenda));
   if (same) return { ok: false, reason: '同じ議題はすでに提案済みです。' };
-  const proposal = { id: state.nextId++, createdAt: now, agenda, response: 'pending' };
+  const proposal = { id: Math.max(0, ...state.proposals.map(p => p.id)) + 1, sequence: state.proposals.length + 1, createdAt: now, agenda, response: 'pending' };
   state.proposals.push(proposal);
   return { ok: true, proposal: copy(proposal) };
 }
@@ -96,6 +135,19 @@ export function restore(raw) {
     if (data.answerDraft && (!Number.isInteger(data.answerDraft.sourceVersion) || !Object.keys(ANSWER_STATUSES).includes(data.answerDraft.status) || !['text','reason','eta'].every(k => typeof data.answerDraft[k] === 'string'))) return createState();
     if (data.decision && (!Number.isInteger(data.decision.sourceVersion) || !['wait','proceed','pause'].includes(data.decision.choice))) return createState();
     if (!data.draft && !data.submissions.length) return createState();
+    data.experienceId ??= 'experience-1'; data.nextExperienceId ??= 2; data.otherExperiences ??= []; data.agendaDraft ??= null; data.agendaReview ??= null;
+    if (typeof data.experienceId !== 'string' || !Number.isInteger(data.nextExperienceId) || !Array.isArray(data.otherExperiences) || data.otherExperiences.length > 100) return createState();
+    if (data.agendaDraft && (!Number.isInteger(data.agendaDraft.sourceVersion) || typeof data.agendaDraft.focus !== 'string' || data.agendaDraft.focus.length > 4000)) return createState();
+    if (data.agendaReview && (!Number.isInteger(data.agendaReview.fromVersion) || !Number.isInteger(data.agendaReview.toVersion) || typeof data.agendaReview.before !== 'string' || typeof data.agendaReview.after !== 'string')) return createState();
+    const ids = new Set([data.experienceId]);
+    data.otherExperiences = data.otherExperiences.map(item => {
+      if (!item || typeof item.experienceId !== 'string' || ids.has(item.experienceId)) throw new Error('Invalid experience');
+      ids.add(item.experienceId);
+      const experience = restore(JSON.stringify({ ...item, otherExperiences: [], nextExperienceId: data.nextExperienceId }));
+      if (experience.experienceId !== item.experienceId || experience.submissions.length !== item.submissions?.length) throw new Error('Invalid experience');
+      return experienceSnapshot(experience);
+    });
+    data.proposals.forEach((p, index) => { p.sequence = index + 1; });
     return data;
   } catch { return createState(); }
 }
