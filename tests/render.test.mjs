@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createState, SAMPLE, STORAGE_KEY, submit, startCorrection, createAgenda, propose } from '../dist/experience/model.js';
+import { setJobField,saveJobDraft,previewJob,publishJob,saveFieldProposal } from '../dist/experience/job-settings.js';
 const documentEvents = {}, windowEvents = {}, elements = new Map();
 function element(selector) { if (!elements.has(selector)) elements.set(selector, { innerHTML: '', textContent: '', open: false, disabled: false, classList: { add(){}, remove(){}, toggle(){} }, focus(){}, addEventListener(name, fn){ this[name] = fn; }, showModal(){ this.open = true; }, close(){ this.open = false; } }); return elements.get(selector); }
 globalThis.document = { querySelector: element, querySelectorAll: () => [], addEventListener: (name, fn) => documentEvents[name] = fn };
@@ -11,6 +12,19 @@ globalThis.localStorage = { getItem: () => saved, setItem: (key, value) => { sav
 await import('../dist/experience/app.js');
 function load(state, hash) { saved = JSON.stringify(state); location.hash = hash; windowEvents.storage({ key: STORAGE_KEY, newValue: saved }); return element('#app').innerHTML; }
 function click(action, extra = {}) { documentEvents.click({ target: { closest: () => ({ dataset: { action, ...extra }, disabled: false }) } }); }
+
+test('company publication UI requires saved preview and explicit confirmation; cancel leaves candidate display unchanged',()=>{
+ const s=createState();s.draft.content={...SAMPLE};submit(s);setJobField(s,'title','REVIEWED-NEW-JOB');setJobField(s,'changeReason','PUBLIC-REASON');
+ load(s,'#company/recruiter');click('save-job-draft');let stored=JSON.parse(saved);assert.equal(stored.companyJob.published.length,1);
+ const candidateBefore=load(stored,'#candidate/submitted');assert.equal(candidateBefore.includes('REVIEWED-NEW-JOB'),false);
+ load(stored,'#company/recruiter');click('preview-job');assert.equal(element('#confirmation').open,true);assert.match(element('#modal-body').innerHTML,/REVIEWED-NEW-JOB/);assert.match(element('#modal-confirm').textContent,/候補者へ公開/);element('#modal-cancel').click();assert.equal(JSON.parse(saved).companyJob.published.length,1);
+ click('preview-job');element('#modal-confirm').click();element('#modal-confirm').click();stored=JSON.parse(saved);assert.equal(stored.companyJob.published.length,2);const html=load(stored,'#candidate/submitted');assert.match(html,/REVIEWED-NEW-JOB/);assert.match(html,/提出時と現在の違い/);assert.match(html,/data-action="job-response" data-choice="question"/);assert.equal(stored.submissionJobSnapshots[1].version,1);
+});
+test('field-role internal proposal never appears in candidate render before B explicitly publishes',()=>{
+ const s=createState();s.companyJob.fieldEditor={reason:'FIELD-PRIVATE-REASON',question:'FIELD-PRIVATE-QUESTION'};saveFieldProposal(s);
+ assert.match(load(s,'#company/field'),/FIELD-PRIVATE-QUESTION/);assert.match(load(s,'#company/recruiter'),/FIELD-PRIVATE-QUESTION/);
+ assert.equal(load(s,'#candidate/welcome').includes('FIELD-PRIVATE'),false);assert.equal(load(s,'#recruiter').includes('FIELD-PRIVATE'),false);
+});
 test('recruiter render never contains private candidate draft or private correction', () => {
   const state = createState(); state.draft.content = { ...SAMPLE, action: 'PRIVATE-DRAFT-UNSENT' };
   assert.equal(load(state, '#recruiter').includes('PRIVATE-DRAFT-UNSENT'), false);

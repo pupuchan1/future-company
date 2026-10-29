@@ -62,3 +62,9 @@ This checks process and matching text only. It does not verify that the rational
 ## Batch 1: scenes and question tracker
 Three company work scenes and an equal no-scene option preserve candidate choice without scoring. Multiple questions have experience-scoped IDs. Private question drafts are shared explicitly. Internal checker/notes use separate save paths from public answers. Answers require a sanitized preview followed by explicit publication. v8 data migrates without rewriting submissions, legacy answers or proposals. All storage is browser-local demo data, not production authorization. Validation: 35 model/render/projection tests.
 
+
+## Batch 2: published job expectations
+The single fictional company's job settings are shared across experiences. B edits title, three work scenes, next step and answer contact; save does not publish. A saved candidate preview must be explicitly published, with stale preview and duplicate confirmation guards. C can save a private reason/question proposal; B explicitly copies, edits and previews it before publication. This is role-switching within one browser, not access control.
+Each new submission captures an immutable job-description snapshot. Current vs submitted descriptions show differences, while experiences and prior answers remain untouched. Optional continue/add/question responses are independent of wait/proceed/pause and never signal a deficit. Pre-feature storage has no complete job snapshot: migration labels that limitation and retains the exact scenario already saved in each submission rather than claiming to reconstruct missing fields.
+Validation: 45 model, render and projection tests. Visual/browser QA was attempted but CUA initialization failed before a tab could be opened (kernel assets path missing); no claim of completed mobile screenshots.
+

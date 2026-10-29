@@ -1,3 +1,5 @@
+import { currentJob,setJobField,saveJobDraft,previewJob,publishJob,saveFieldProposal,applyFieldProposal,chooseJobResponse } from './job-settings.js';
+import { candidateJobView,companySettingsView,submittedJobView,jobDescriptionView,jobDiffView } from './job-views.js';
 import { WORK_SCENES } from './work-scenes.js';
 import { candidateQuestionProjection, createQuestionDraft, shareQuestion, cancelQuestionDraft, questionSummary, questionAnswerToken, setQuestionAnswerDraft, setQuestionInternalDraft, saveQuestionInternal, previewQuestionAnswer, publishQuestionAnswer } from './question-tracker.js';
 import { candidateQuestionsView, companyQuestionsView, answerPreviewView } from './question-views.js';
@@ -9,6 +11,7 @@ let state;
 try { state = restore(localStorage.getItem(STORAGE_KEY)); } catch { state = createState(); memoryOnly = true; }
 let changesReviewed = false;
 let confirmAction = null;
+let focusQuestion = false;
 const questions = [
   ['situation', 'そのとき、何が起きましたか？', 'いつ、どこで、誰が困っていたか。あなたの立場も教えてください。'],
   ['action', 'あなたは、具体的に何をしましたか？', '最初に聞いたこと、伝えたこと、誰に引き継いだか。自分の行動を一つずつ。'],
@@ -22,7 +25,7 @@ function toast(message) { $('#toast').textContent = message; $('#toast').classLi
 function navigate(path) { if (location.hash === `#${path}`) render(); else location.hash = path; }
 function candidatePath() { return state.screen === 'interview' ? `candidate/interview/${state.interviewIndex}` : `candidate/${state.screen}`; }
 function field(key, value, rows = 4) { return `<label class="field" for="${key}"><span>${LABELS[key]}</span><textarea id="${key}" data-field="${key}" maxlength="4000" rows="${rows}">${esc(value)}</textarea></label>`; }
-function documentView(entry, heading = '候補者が内容を確認') { return `<div class="document-meta"><span class="pill">提出 v${entry.version}</span><span>${heading} · 自己申告</span></div>${sceneMarkup(entry.scenario,entry.sceneId)}<p class="small">本人の経験（自己申告）。数字や勤務先名は必須ではありません。</p>${FIELDS.map(key => `<section class="document-section"><h3>${LABELS[key]}</h3><p>${esc(entry.content[key])}</p></section>`).join('')}`; }
+function documentView(entry, heading = '候補者が内容を確認') { return `<div class="document-meta"><span class="pill">提出 v${entry.version}</span><span>${heading} · 自己申告</span></div>${sceneMarkup(entry.scenario,entry.sceneId)}${submittedJobView(state,entry)}<p class="small">本人の経験（自己申告）。数字や勤務先名は必須ではありません。</p>${FIELDS.map(key => `<section class="document-section"><h3>${LABELS[key]}</h3><p>${esc(entry.content[key])}</p></section>`).join('')}`; }
 function agendaView(agenda) { return `<div class="agenda-content"><span class="eyebrow">提出 v${agenda.sourceVersion} をもとにした議題</span><h3>${esc(agenda.focus)}</h3><div class="agenda-item"><span>一緒に確認すること</span><p>${esc(agenda.confirmNext)}</p></div><div class="agenda-item"><span>候補者から企業への質問</span><p>${esc(agenda.candidateQuestion)}</p></div></div>`; }
 function proposalStatus(p) { if (p.agenda.sourceVersion !== latest(state)?.version) return '訂正前の議題'; if(proposalIsStale(state,p)) return '質問追加前の議題'; return '議題を提案済み'; }
 const CHOICES = { wait: '回答を待つ', proceed: 'この内容で話を進める', pause: '今は進めない' };
@@ -33,8 +36,8 @@ function candidateAnswer() {
 }
 function recruiterAnswer() { const decision=state.decision?.sourceVersion===latest(state)?.version?state.decision:null;return companyQuestionsView(state)+(decision?'<section class="card"><div class="decision-status">候補者の選択：'+CHOICES[decision.choice]+(decision.questionAnswerToken!==questionAnswerToken(state)?'（前の質問・回答時点の選択）':'')+'</div><p class="small">待つ選択は辞退ではありません。デモ内の意思表示で、実際の送信や予約はありません。</p></section>':''); }
 function sceneMarkup(description,id) { return '<div class="scenario"><span class="eyebrow">'+(id===null?'本人の場面選択':'企業が示す仕事の説明（架空の灯りワークス）')+'</span><p>'+esc(description)+'</p><p class="small">経験との結び付けは本人の選択です。適性スコアや能力判定は行いません。</p></div>'; }
-function sceneDraftSelect() { const id=state.draft?.sceneId===undefined?'legacy':state.draft.sceneId;return '<label class="field scene-select" for="draft-scene"><span>経験と結び付ける場面（本人が選択）</span><select id="draft-scene">'+(id==='legacy'?'<option value="legacy" selected>旧提出時の仕事の説明を保つ</option>':'')+WORK_SCENES.map(s=>'<option value="'+s.id+'" '+(id===s.id?'selected':'')+'>'+esc(s.title)+'</option>').join('')+'<option value="none" '+(state.draft.sceneId===null?'selected':'')+'>場面を選ばずに経験を書く</option></select></label>'; }
-function welcomeLanding() { return '<section class="guide-intro"><span class="eyebrow">灯りワークス / ジュニア CS の仕事を知る</span><h1>仕事の場面から、経験のひとコマへ。</h1><p class="lead">接客などの経験を、自分の言葉で。数字や勤務先名は不要です。話せない部分は「非公開」として、架空データで試せます。</p></section><section class="scene-guide"><span class="scene-source">企業が提示する仕事内容の説明です。本人の経験の自己申告とは分けて表示します。</span><div class="scene-cards">'+WORK_SCENES.map(scene=>'<article class="scene-card"><span class="eyebrow">仕事の場面ガイド</span><h2>'+esc(scene.title)+'</h2><p>'+esc(scene.description)+'</p><button class="button" data-action="choose-scene" data-scene-id="'+scene.id+'">この場面の経験を書く →</button></article>').join('')+'<article class="scene-card"><span class="eyebrow">結び付けは自由</span><h2>場面を選ばずに書く</h2><p>今はどの場面に近いか分からなくても構いません。経験を伝えてから、次の会話で仕事とのつながりを確認できます。</p><button class="button" data-action="choose-scene" data-scene-id="none">場面を選ばずに経験を書く →</button></article></div><p class="small">選択は適性や能力の判定には使いません。数字や成果の大きさは必須ではありません。実在する人の個人情報や勤務先の秘密を入力しないでください。</p><div class="sample-shortcut"><button class="text-link" data-action="choose" data-choice="cafe">カフェの架空例から試す</button><button class="text-link" data-action="choose" data-choice="own">別の架空の経験から試す</button></div></section>'; }
+function sceneDraftSelect() { const id=state.draft?.sceneId===undefined?'legacy':state.draft.sceneId;return '<label class="field scene-select" for="draft-scene"><span>経験と結び付ける場面（本人が選択）</span><select id="draft-scene">'+(id==='legacy'?'<option value="legacy" selected>旧提出時の仕事の説明を保つ</option>':'')+currentJob(state).content.scenes.map(s=>'<option value="'+s.id+'" '+(id===s.id?'selected':'')+'>'+esc(s.title)+'</option>').join('')+'<option value="none" '+(state.draft.sceneId===null?'selected':'')+'>場面を選ばずに経験を書く</option></select></label>'; }
+function welcomeLanding() { return '<section class="guide-intro"><span class="eyebrow">灯りワークス / ' + esc(currentJob(state).content.title) + ' の仕事を知る</span><h1>仕事の場面から、経験のひとコマへ。</h1><p class="lead">接客などの経験を、自分の言葉で。数字や勤務先名は不要です。話せない部分は「非公開」として、架空データで試せます。</p></section><section class="scene-guide"><span class="scene-source">企業が提示する仕事内容の説明です。本人の経験の自己申告とは分けて表示します。</span><div class="scene-cards">'+currentJob(state).content.scenes.map(scene=>'<article class="scene-card"><span class="eyebrow">仕事の場面ガイド</span><h2>'+esc(scene.title)+'</h2><p>'+esc(scene.description)+'</p><button class="button" data-action="choose-scene" data-scene-id="'+scene.id+'">この場面の経験を書く →</button></article>').join('')+'<article class="scene-card"><span class="eyebrow">結び付けは自由</span><h2>場面を選ばずに書く</h2><p>今はどの場面に近いか分からなくても構いません。経験を伝えてから、次の会話で仕事とのつながりを確認できます。</p><button class="button" data-action="choose-scene" data-scene-id="none">場面を選ばずに経験を書く →</button></article></div><p class="small">選択は適性や能力の判定には使いません。数字や成果の大きさは必須ではありません。実在する人の個人情報や勤務先の秘密を入力しないでください。</p><div class="sample-shortcut"><button class="text-link" data-action="choose" data-choice="cafe">カフェの架空例から試す</button><button class="text-link" data-action="choose" data-choice="own">別の架空の経験から試す</button></div></section>'; }
 
 function hasExperience() { return !!(latest(state) || state.draft?.content.title || state.otherExperiences?.length); }
 function experienceToolbar(role) {
@@ -112,10 +115,11 @@ function recruiter() {
 function about() { return `<section class="page-heading"><span class="eyebrow">ABOUT THIS DEMO</span><h1>「次に、何を話すか」まで。</h1><p>経験の一場面と、候補者が確かめた送付物、双方が持つ会話の議題をつなぎます。</p></section><section class="card about-card"><h2>このデモでできること</h2><p>候補者が架空の経験を具体化し、企業に見える内容を編集・確認して提出できます。人事は提出された具体例と候補者の質問から議題を作れます。訂正版が提出されると、古い議題は更新が必要になり、差分の確認後に改めて提案できます。</p><h2>保存と表示の範囲</h2><p>このブラウザの localStorage を使った、役割切り替え式の操作デモです。候補者・人事は同じブラウザ内のデータを見ています。別のブラウザや端末とは共有しません。下書きを人事 UI に表示しない設計ですが、本番用の認証・権限分離ではありません。同じ端末の利用者や開発者ツールからは保存データを閲覧できます。</p><h2>未接続のもの</h2><p>AI、音声、メール、カレンダー、企業システムは接続していません。文字対話は決まった質問を順に表示します。「提出」「提案」「話したい」はデモ内の状態変更です。実在する候補者・顧客の個人情報や機微情報を入力しないでください。</p><h2>確認の意味</h2><p>「候補者が内容を確認」は、送付内容を候補者自身が確認する操作を示します。身元認証や経験の事実確認を示すものではありません。自動採点・性格推定は行いません。</p><div class="actions"><button class="button" data-action="to-candidate">体験に戻る →</button><a class="button secondary" href="/reception/">以前の総合受付を見る</a></div></section>`; }
 function render(persist = true) {
   const parts = location.hash.replace(/^#/, '').split('/');
-  const role = parts[0] === 'recruiter' ? 'recruiter' : 'candidate';
+  const role = ['recruiter','company'].includes(parts[0]) ? 'recruiter' : 'candidate';
   document.querySelectorAll('[data-role]').forEach(el => { const active = el.dataset.role === role; el.classList.toggle('active', active); el.setAttribute('aria-pressed', String(active)); });
   let content;
   if (parts[0] === 'about') content = about();
+  else if (parts[0] === 'company') content = companySettingsView(state,parts[1]==='field'?'field':'recruiter');
   else if (role === 'recruiter') content = recruiter();
   else {
     let screen = parts[1] || state.screen;
@@ -129,9 +133,10 @@ function render(persist = true) {
     else if (screen === 'submitted') { state.screen = screen; content = submitted(); }
     else content = welcome();
   }
-  $('#app').innerHTML = (parts[0] === 'about' ? '' : experienceToolbar(role)) + content;
+  $('#app').innerHTML = (['about','company'].includes(parts[0]) ? '' : experienceToolbar(role)) + (parts[0]!=='about' && role==='candidate'?candidateJobView(state):'') + content;
   if (persist) save(); else storageLabel();
   $('#app').focus({ preventScroll: true });
+  if(focusQuestion && role==='candidate' && parts[1]==='submitted'){$('#new-question')?.focus();focusQuestion=false;}
 }
 function modal(title, body, label, action) {
   $('#modal-title').textContent = title; $('#modal-body').innerHTML = body; $('#modal-confirm').textContent = label;
@@ -142,12 +147,14 @@ function requestSubmit() {
   if (missing) { toast(`${LABELS[missing]}を入力してください。`); $(`#${missing}`).focus(); return; }
   if (draftMatchesLatest(state)) { toast('前回から変更がありません。'); return; }
   const entry = { version: (latest(state)?.version ?? 0) + 1, scenario: draftSceneText(state), sceneId: state.draft.sceneId===undefined?'legacy':state.draft.sceneId, content: state.draft.content };
-  modal('この内容をデモ内で提出します', `<p>以下が人事画面に表示される内容です。候補者が内容を確認した送付物として保存します。</p><div class="modal-document">${documentView(entry, '提出前の最終確認')}</div><p class="small">外部への送信はありません。実在する人の個人情報が含まれていないことを確認してください。</p>`, '内容を確認して、デモとして提出', () => {
+  modal('この内容をデモ内で提出します', `<p>以下が人事画面に表示される内容です。候補者が内容を確認した送付物として保存します。</p><div class="modal-document">${jobDescriptionView(currentJob(state))}${documentView(entry, '提出前の最終確認')}</div><p class="small">外部への送信はありません。実在する人の個人情報が含まれていないことを確認してください。</p>`, '内容を確認して、デモとして提出', () => {
     const result = submit(state); if (!result.ok) { toast(result.reason); return; } changesReviewed = false; save(); navigate('candidate/submitted'); toast(`提出 v${result.entry.version} を保存しました`);
   });
 }
 document.addEventListener('input', event => {
   const el = event.target;
+  if(el.dataset.jobField){setJobField(state,el.dataset.jobField,el.value,el.dataset.jobScene);save();}
+  if(el.dataset.fieldProposal){state.companyJob.fieldEditor[el.dataset.fieldProposal]=el.value;save();}
   if (el.dataset.questionComposer) { state.questionComposer=el.value; save(); }
   if (el.dataset.qAnswer) { setQuestionAnswerDraft(state,el.dataset.questionId,{[el.dataset.qAnswer]:el.value}); save(); }
   if (el.dataset.qInternal) { setQuestionInternalDraft(state,el.dataset.questionId,{[el.dataset.qInternal]:el.value}); save(); }
@@ -166,6 +173,12 @@ document.addEventListener('change', event => {
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-action]'); if (!button || button.disabled) return;
   const action = button.dataset.action;
+  if(action==='company-settings')navigate('company/recruiter');
+  if(action==='save-job-draft'){const r=saveJobDraft(state);if(r.ok){save();render();toast('下書きを保存しました。候補者の表示は変わっていません。');}else toast(r.reason);}
+  if(action==='preview-job'){const r=previewJob(state);if(!r.ok){toast(r.reason);return;}const preview=r.preview;modal('候補者に見える求人説明を確認',jobDescriptionView(preview)+'<details open><summary>公開中の説明との差分</summary>'+jobDiffView(currentJob(state),preview)+'</details><p>この公開で経験・旧提出物・旧回答は書き換えません。実通知は送りません。</p>','この仕事の説明を候補者へ公開（デモ）',()=>{const r=publishJob(state,preview);if(r.ok){save();render();toast('求人説明 v'+r.entry.version+' を公開しました。候補者に差分を表示します。');}else toast(r.reason);});}
+  if(action==='save-field-proposal'){if(saveFieldProposal(state)){save();render();toast('内部提案を保存しました。候補者には公開していません。');}else toast('変更理由と追加で聞きたい1問を入力してください。');}
+  if(action==='apply-field-proposal'){if(applyFieldProposal(state)){save();render();toast('公開用下書きへ取り込みました。保存・プレビュー後に公開できます。');}}
+  if(action==='job-response'){if(chooseJobResponse(state,button.dataset.choice)){save();if(button.dataset.choice==='add')navigate('candidate/new');else if(button.dataset.choice==='question'){focusQuestion=true;navigate('candidate/submitted');}else render();}} 
   if(action==='choose-scene'){if(hasExperience())addExperience(state);state.draft.content.title='伝えたい経験（架空）';state.draft.sceneId=button.dataset.sceneId==='none'?null:button.dataset.sceneId;state.screen='interview';state.interviewIndex=0;save();navigate('candidate/interview/0');}
   if(action==='add-question-draft'){const r=createQuestionDraft(state,state.questionComposer);if(r.ok){save();render();toast('質問を下書きに保存しました。会社にはまだ共有していません。');}else toast(r.reason);}
   if(action==='share-question'){const q=candidateQuestionProjection(state).find(q=>q.questionId===button.dataset.questionId);if(q?.visibility==='draft')modal('会社へ共有する質問を確認', '<blockquote>'+esc(q.text)+'</blockquote><p class="small">この経験の質問として会社のデモ画面に表示します。実際の送信や通知はありません。</p>', 'この質問を会社へ共有（デモ）',()=>{if(shareQuestion(state,q.questionId)){save();render();toast('質問を会社のデモ画面へ共有しました。既存の議題は最新の質問との照合が必要です。');}});}

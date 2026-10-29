@@ -1,5 +1,6 @@
 import { emptyQuestionTracker, syncSubmissionQuestion, questionSummary, questionAnswerToken, mirrorLegacyAnswer, migrateQuestionTracker, validQuestionTracker } from './question-tracker.js';
 import { sceneText, sceneById } from './work-scenes.js';
+import { createCompanyJob,currentJob,captureSubmissionJob,migrateJobSettings,validJobSettings } from './job-settings.js';
 export const STORAGE_KEY = 'haas-experience-v1';
 export const FIELDS = ['title', 'situation', 'action', 'result', 'confirmNext', 'question'];
 export const LABELS = { title: '選んだ経験', situation: 'どんな場面だったか', action: '自分がしたこと', result: 'その後どうなったか', confirmNext: '次の会話で確認したいこと', question: '候補者から企業への質問' };
@@ -7,15 +8,16 @@ export const SCENARIO = 'ジュニア CS：困っているお客さまの話を�
 export const SAMPLE = Object.freeze({ title: 'カフェで、注文と違うドリンクをお渡ししたとき', situation: '土曜の昼、混雑したカフェで、注文と違うドリンクを受け取ったお客さまから声をかけられました。私はアルバイトを始めて3か月でした。', action: 'まず注文内容と急いでいるかを確認しました。レシートを見て店長に状況を伝え、作り直しの時間を確かめてお客さまに説明しました。', result: 'お客さまは5分なら待てると言い、作り直したドリンクを受け取られました。店長と、受け渡し時に注文名を読み上げることを決めました。待ち時間は記憶に基づく目安です。', confirmNext: 'カフェでの対応を CS の問い合わせ対応にどう生かせるか。判断に迷う場合、どこまで自分で決めてよいか。', question: '入社後、判断に迷った問い合わせは、どのように先輩に相談できますか？' });
 const copy = value => JSON.parse(JSON.stringify(value));
 export const emptyContent = () => Object.fromEntries(FIELDS.map(key => [key, '']));
-export function createState() { return { schema: 1, experienceId: 'experience-1', nextExperienceId: 2, otherExperiences: [], screen: 'welcome', interviewIndex: 0, draft: { content: emptyContent(), baseVersion: 0 }, submissions: [], agenda: null, agendaDraft: null, agendaReview: null, proposals: [], nextId: 1, answers: [], answerDraft: null, decision: null, ...emptyQuestionTracker() }; }
-function experienceSnapshot(state) { const { otherExperiences, nextExperienceId, ...experience } = state; return copy(experience); }
+export function createState() { return { schema: 1, experienceId: 'experience-1', nextExperienceId: 2, otherExperiences: [], screen: 'welcome', interviewIndex: 0, draft: { content: emptyContent(), baseVersion: 0 }, submissions: [], agenda: null, agendaDraft: null, agendaReview: null, proposals: [], nextId: 1, answers: [], answerDraft: null, decision: null, ...emptyQuestionTracker(),companyJob:createCompanyJob(),submissionJobSnapshots:{},jobResponses:{} }; }
+function experienceSnapshot(state) { const { otherExperiences, nextExperienceId, companyJob, ...experience } = state; return copy(experience); }
 export function experienceList(state, submittedOnly = false) {
   return [state, ...(state.otherExperiences ?? [])].filter(e => !submittedOnly || latest(e)).map(e => ({ id: e.experienceId, title: (submittedOnly ? latest(e)?.content.title : e.draft?.content.title || latest(e)?.content.title) || 'まだ選んでいない経験', version: latest(e)?.version ?? 0, isActive: e.experienceId === state.experienceId }));
 }
 export function addExperience(state, title = '') {
   const id = state.nextExperienceId ?? 2;
+  const companyJob=state.companyJob;
   const others = [...(state.otherExperiences ?? []), experienceSnapshot(state)];
-  Object.assign(state, createState(), { experienceId: `experience-${id}`, nextExperienceId: id + 1, otherExperiences: others });
+  Object.assign(state, createState(), { experienceId: `experience-${id}`, nextExperienceId: id + 1, otherExperiences: others,companyJob });
   state.draft.content.title = title;
   state.screen = title ? 'interview' : 'welcome';
   return state.experienceId;
@@ -27,14 +29,15 @@ export function selectExperience(state, id) {
   const others = state.otherExperiences.filter(e => e.experienceId !== id);
   others.push(experienceSnapshot(state));
   const nextExperienceId = state.nextExperienceId;
-  Object.assign(state, createState(), copy(selected), { otherExperiences: others, nextExperienceId });
+  const companyJob=state.companyJob;
+  Object.assign(state, createState(), copy(selected), { otherExperiences: others, nextExperienceId,companyJob });
   return true;
 }
 export function latest(state) { return state.submissions.at(-1) ?? null; }
 export function validContent(content) { return FIELDS.every(key => typeof content?.[key] === 'string' && content[key].trim().length > 0 && content[key].length <= 4000); }
 export function sameContent(a, b) { return FIELDS.every(key => a?.[key]?.trim() === b?.[key]?.trim()); }
 export function draftMatchesLatest(state) { const old=latest(state);return !!(old&&state.draft&&sameContent(old.content,state.draft.content)&&(old.sceneId===undefined?'legacy':old.sceneId)===(state.draft.sceneId===undefined?'legacy':state.draft.sceneId)); }
-export function draftSceneText(state) { return sceneText(state.draft?.sceneId,state.draft?.legacyScenario||latest(state)?.scenario||SCENARIO); }
+export function draftSceneText(state) { const id=state.draft?.sceneId,scene=currentJob(state).content.scenes.find(s=>s.id===id);return scene?scene.title+'：'+scene.description:sceneText(id,state.draft?.legacyScenario||latest(state)?.scenario||SCENARIO); }
 export function submissionDifferences(a,b) { const list=differences(a?.content,b?.content);if(a?.scenario!==b?.scenario)list.push({key:'scene',label:'本人が選んだ仕事の場面',before:a?.scenario??'',after:b?.scenario??''});return list; }
 export function agendaQuestionsChanged(state) { return !!state.agenda && state.agenda.candidateQuestion!==questionSummary(state); }
 export function proposalIsStale(state,p) { return p.agenda.sourceVersion!==latest(state)?.version || p.agenda.candidateQuestion!==questionSummary(state); }
@@ -50,7 +53,8 @@ export function submit(state, now = new Date().toISOString()) {
   if (previous && state.draft.baseVersion !== previous.version) return { ok: false, reason: '提出版が変わりました。最新の版から訂正してください。' };
   if (previous && draftMatchesLatest(state)) return { ok: false, reason: '前回から変更がありません。' };
   const content = Object.fromEntries(FIELDS.map(key => [key, state.draft.content[key].trim()]));
-  const entry = { version: (previous?.version ?? 0) + 1, submittedAt: now, candidateConfirmed: true, scenario: draftSceneText(state), sceneId: state.draft.sceneId===undefined?'legacy':state.draft.sceneId, companyScene: sceneById(state.draft.sceneId) ? copy(sceneById(state.draft.sceneId)) : null, content: copy(content) };
+  const entry = { version: (previous?.version ?? 0) + 1, submittedAt: now, candidateConfirmed: true, scenario: draftSceneText(state), sceneId: state.draft.sceneId===undefined?'legacy':state.draft.sceneId, companyScene: sceneById(state.draft.sceneId) ? copy(currentJob(state).content.scenes.find(s=>s.id===state.draft.sceneId)) : null, content: copy(content) };
+  captureSubmissionJob(state,entry.version);
   state.submissions.push(entry);
   syncSubmissionQuestion(state,entry);
   state.draft = null;
@@ -162,6 +166,8 @@ export function restore(raw) {
     if (data.decision && (!Number.isInteger(data.decision.sourceVersion) || !['wait','proceed','pause'].includes(data.decision.choice))) return createState();
     if (!data.draft && !data.submissions.length) return createState();
     data.experienceId ??= 'experience-1'; data.nextExperienceId ??= 2; data.otherExperiences ??= []; data.agendaDraft ??= null; data.agendaReview ??= null;
+    migrateJobSettings(data);
+    if(!validJobSettings(data))return createState();
     migrateQuestionTracker(data);
     if(!validQuestionTracker(data))return createState();
     if(data.agendaDraft)data.agendaDraft.questionSnapshot??=questionSummary(data);
