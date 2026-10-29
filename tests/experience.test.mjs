@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createState, SAMPLE, submit, startCorrection, cancelCorrection, createAgenda, propose, respond, isStale, restore, latest, answerDraft, publishAnswer, latestAnswer, decide, beginAgendaRevision, canCommitAgendaRevision, commitAgendaRevision, addExperience, selectExperience, experienceList } from '../dist/experience/model.js';
+import { createState, SAMPLE, submit, startCorrection, cancelCorrection, createAgenda, propose, respond, isStale, restore, latest, answerDraft, publishAnswer, latestAnswer, decide, beginAgendaRevision, canCommitAgendaRevision, commitAgendaRevision, addExperience, selectExperience, experienceList, agendaReuseMatches } from '../dist/experience/model.js';
 const ready = () => { const state = createState(); state.draft.content = { ...SAMPLE }; return state; };
 test('draft stays private; explicit submission freezes a copy and rejects repeat clicks', () => {
   const state = ready(); assert.equal(state.submissions.length, 0); assert.equal(createAgenda(state), false);
@@ -50,7 +50,7 @@ test('answers have explicit publication, status/reason, and version scope; waiti
   startCorrection(state); state.draft.content.question = '別の質問'; submit(state); assert.equal(latestAnswer(state), null);
   assert.equal(answerDraft(state).status, 'unanswered'); assert.equal(state.answers.length, 2);
 });
-test('a changed version cannot be relabeled as reviewed without editing the actual agenda', () => {
+test('a changed version cannot be relabeled without a recorded consistency review', () => {
   const state = ready(); submit(state); createAgenda(state); const focus = state.agenda.focus;
   startCorrection(state); state.draft.content.action = '店長ではなく勤務リーダーと代替品を相談した'; submit(state);
   beginAgendaRevision(state); assert.equal(state.agenda.sourceVersion, 1); assert.equal(propose(state).ok,false);
@@ -102,4 +102,49 @@ test('legacy agenda already relabeled to the latest version still requires a wor
   const restored=restore(JSON.stringify(state)); assert.equal(isStale(restored),true); assert.equal(propose(restored).ok,false);
   beginAgendaRevision(restored); assert.equal(commitAgendaRevision(restored,true),false);
   restored.agendaDraft.focus='訂正した行動について確認する議題'; assert.equal(commitAgendaRevision(restored,true),true); assert.equal(isStale(restored),false);
+});
+test('returning to an older proposal requires a recorded reuse rationale and explicit consistency checks', () => {
+  const state=ready(); submit(state); createAgenda(state); const oldFocus=state.agenda.focus; propose(state);
+  startCorrection(state); state.draft.content.action='訂正した行動'; submit(state); beginAgendaRevision(state);
+  state.agendaDraft.focus='訂正した行動を前提に確認する'; commitAgendaRevision(state,true); propose(state);
+  const immutable=structuredClone(state.proposals);
+  startCorrection(state); state.draft.content.question='訂正した質問'; submit(state); beginAgendaRevision(state);
+  state.agendaDraft.focus=oldFocus; assert.deepEqual(agendaReuseMatches(state),['提案 1（v1）']);
+  assert.equal(commitAgendaRevision(state,true),false);
+  state.agendaDraft.consistencyNote='訂正した行動と質問を照合し、対応判断を聞く議題として同じ本文を使う理由を人事が記録';
+  assert.equal(commitAgendaRevision(state,true),false); state.agendaDraft.reuseConfirmed=true;
+  assert.equal(commitAgendaRevision(state,false),false); assert.equal(commitAgendaRevision(state,true),true);
+  assert.deepEqual(state.proposals,immutable); assert.equal(state.agendaReview.reuseMatches[0],'提案 1（v1）');
+  assert.match(state.agendaReview.reuseRationale,/人事が記録/); assert.equal(propose(state).proposal.sequence,3);
+  assert.equal(JSON.stringify(state.proposals.at(-1)).includes('人事が記録'),false);
+});
+test('unchanged text can be deliberately reused without arbitrary character changes after human review', () => {
+  const state=ready(); submit(state); createAgenda(state); const focus=state.agenda.focus;
+  startCorrection(state); state.draft.content.question='確認する質問だけを訂正'; submit(state); beginAgendaRevision(state);
+  assert.equal(canCommitAgendaRevision(state,true),false);
+  state.agendaDraft.consistencyNote='質問の訂正は反映され、議題の範囲には変更がないと確認したため同じ本文を使う';
+  state.agendaDraft.reuseConfirmed=true; assert.equal(commitAgendaRevision(state,true),true);
+  assert.equal(state.agenda.focus,focus); assert.equal(state.agenda.sourceVersion,2);
+});
+test('whitespace and width-only differences still match previously used agenda text', () => {
+  const state=ready(); submit(state); createAgenda(state); propose(state);
+  startCorrection(state); state.draft.content.action+='訂正'; submit(state); beginAgendaRevision(state);
+  state.agendaDraft.focus=' \n'+state.agenda.focus+'　'; assert.equal(agendaReuseMatches(state).length,2);
+  assert.equal(canCommitAgendaRevision(state,true),false);
+});
+test('reuse review cannot be committed against a newer submission than the reviewed draft', () => {
+  const state=ready(); submit(state); createAgenda(state); startCorrection(state); state.draft.content.question='質問2'; submit(state); beginAgendaRevision(state);
+  state.agendaDraft.consistencyNote='今回の訂正と整合する理由'; state.agendaDraft.reuseConfirmed=true;
+  assert.equal(canCommitAgendaRevision(state,true),true);
+  startCorrection(state); state.draft.content.question='質問3'; submit(state);
+  assert.equal(commitAgendaRevision(state,true),false); beginAgendaRevision(state);
+  assert.equal(state.agendaDraft.reuseConfirmed,false); assert.equal(state.agendaDraft.consistencyNote,'');
+});
+test('a legacy v7 agenda already saved using an older proposal requires the new reuse review', () => {
+  const state=ready(); submit(state); createAgenda(state); propose(state);
+  startCorrection(state); state.draft.content.question='訂正した質問'; submit(state);
+  state.agenda.sourceVersion=2; state.agenda.reviewedVersion=2; delete state.agenda.reusePolicy;
+  const restored=restore(JSON.stringify(state)); assert.equal(isStale(restored),true); assert.equal(propose(restored).ok,false);
+  beginAgendaRevision(restored); restored.agendaDraft.consistencyNote='今回の訂正と同じ議題の整合を改めて確認した理由'; restored.agendaDraft.reuseConfirmed=true;
+  assert.equal(commitAgendaRevision(restored,true),true); assert.equal(isStale(restored),false);
 });

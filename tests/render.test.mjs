@@ -43,9 +43,10 @@ test('agenda revision UI retains old source until actual wording is edited and c
   documentEvents.change({target:{id:'changes-reviewed',checked:true,dataset:{}}}); click('commit-agenda');
   assert.equal(JSON.parse(saved).agenda.sourceVersion,1);
   documentEvents.input({target:{dataset:{agendaDraft:'focus'},value:'訂正後の行動について確認する新しい議題'}});
+  documentEvents.change({target:{id:'changes-reviewed',checked:true,dataset:{}}});
   click('commit-agenda'); const updated=JSON.parse(saved);
   assert.equal(updated.agenda.sourceVersion,2); assert.equal(updated.agenda.focus,'訂正後の行動について確認する新しい議題');
-  assert.equal(updated.agenda.notes,'NOTE TO KEEP'); assert.match(element('#app').innerHTML,/人事が見直して更新した内容/);
+  assert.equal(updated.agenda.notes,'NOTE TO KEEP'); assert.match(element('#app').innerHTML,/人事が照合して保存した内容/);
 });
 test('new experience URL and entry preserve the submitted experience rather than silently redirecting', () => {
   const state=createState(); state.draft.content={...SAMPLE}; submit(state); createAgenda(state); propose(state);
@@ -58,4 +59,32 @@ test('new experience URL and entry preserve the submitted experience rather than
 test('storage event rendering does not write back and create a cross-tab update loop', () => {
   const state=createState(); state.draft.content={...SAMPLE}; submit(state);
   writes=0; load(state,'#recruiter'); assert.equal(writes,0);
+});
+test('save guidance tracks readiness and never retains the obsolete unchanged-text prohibition', () => {
+  const state=createState(); state.draft.content={...SAMPLE}; submit(state); createAgenda(state);
+  startCorrection(state); state.draft.content.question='最新の質問'; submit(state); load(state,'#recruiter'); click('update-agenda');
+  assert.equal(element('#app').innerHTML.includes('以前と同じ議題文のままでは保存できません'),false);
+  documentEvents.input({target:{dataset:{agendaDraft:'focus'},value:'新しい訂正内容を確認する議題'}});
+  assert.equal(element('[data-action="commit-agenda"]').disabled,true);
+  documentEvents.change({target:{id:'changes-reviewed',checked:true,dataset:{}}});
+  assert.equal(element('[data-action="commit-agenda"]').disabled,false); assert.match(element('#agenda-revision-status').textContent,/保存できます/);
+  documentEvents.input({target:{dataset:{agendaDraft:'focus'},value:state.agenda.focus}});
+  assert.equal(element('[data-action="commit-agenda"]').disabled,true); assert.match(element('#agenda-reuse-feedback').innerHTML,/過去に使った本文と一致/);
+  assert.match(element('#agenda-revision-status').textContent,/理由の記入と再利用の確認/);
+});
+test('reuse confirmation UI requires rationale and both checks and resets them after text edits', () => {
+  const state=createState(); state.draft.content={...SAMPLE}; submit(state); createAgenda(state); propose(state);
+  startCorrection(state); state.draft.content.question='今回の訂正'; submit(state); load(state,'#recruiter'); click('update-agenda');
+  documentEvents.input({target:{dataset:{agendaDraft:'consistencyNote'},value:'今回の訂正を照合し、議題の範囲は同じと確認した理由'}});
+  documentEvents.change({target:{id:'reuse-confirmed',checked:true,dataset:{}}});
+  assert.equal(element('[data-action="commit-agenda"]').disabled,true);
+  documentEvents.change({target:{id:'changes-reviewed',checked:true,dataset:{}}});
+  assert.equal(element('[data-action="commit-agenda"]').disabled,false);
+  documentEvents.input({target:{dataset:{agendaDraft:'focus'},value:state.agenda.focus+' '}});
+  assert.equal(element('[data-action="commit-agenda"]').disabled,true); assert.equal(element('#changes-reviewed').checked,false); assert.equal(element('#reuse-confirmed').checked,false);
+  documentEvents.change({target:{id:'reuse-confirmed',checked:true,dataset:{}}}); documentEvents.change({target:{id:'changes-reviewed',checked:true,dataset:{}}}); click('commit-agenda');
+  assert.match(element('#app').innerHTML,/同じ本文を使う整合確認の記録/);
+  assert.match(element('#app').innerHTML,/今回の訂正を照合し、議題の範囲は同じと確認した理由/);
+  const savedState=JSON.parse(saved); const candidate=load(savedState,'#candidate/submitted');
+  assert.equal(candidate.includes('今回の訂正を照合し、議題の範囲は同じと確認した理由'),false);
 });

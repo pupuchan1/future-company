@@ -1,4 +1,4 @@
-import { STORAGE_KEY, FIELDS, LABELS, SAMPLE, SCENARIO, createState, latest, sameContent, submit, startCorrection, cancelCorrection, differences, createAgenda, isStale, propose, restore, alreadyProposed, ANSWER_STATUSES, latestAnswer, answerDraft, publishAnswer, decide, beginAgendaRevision, canCommitAgendaRevision, commitAgendaRevision, experienceList, addExperience, selectExperience } from './model.js';
+import { STORAGE_KEY, FIELDS, LABELS, SAMPLE, SCENARIO, createState, latest, sameContent, submit, startCorrection, cancelCorrection, differences, createAgenda, isStale, propose, restore, alreadyProposed, ANSWER_STATUSES, latestAnswer, answerDraft, publishAnswer, decide, beginAgendaRevision, canCommitAgendaRevision, commitAgendaRevision, agendaReuseMatches, experienceList, addExperience, selectExperience } from './model.js';
 const $ = selector => document.querySelector(selector);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let memoryOnly = false;
@@ -62,18 +62,40 @@ function submitted() {
   const proposals = state.proposals.slice().reverse();
   return `<section class="page-heading success-heading"><span class="eyebrow">STEP 03 / 次の会話へ</span><h1>経験を届けました。</h1><p>提出 v${entry.version} はこのブラウザの人事デモ画面で確認できます。外部の企業には送信されていません。</p></section><div class="submitted-grid"><section><div class="card document-card">${documentView(entry)}</div>${entry.version > 1 ? `<details class="card history"><summary>以前の提出版を見る（${entry.version - 1} 件）</summary>${state.submissions.slice(0,-1).reverse().map(e => `<div class="history-version">${documentView(e)}</div>`).join('')}</details>` : ''}</section><aside><section class="card next-card"><span class="eyebrow">次にできること</span><h2>同じ議題で、<br>会話をはじめる。</h2><p>人事画面で具体例を確認し、話したい議題を提案すると、ここに届きます。</p><button class="button full" data-action="to-recruiter">人事の視点で見る →</button><button class="button secondary full" data-action="correct">${state.draft ? '訂正下書きを続ける' : '内容を訂正・追記する'}</button></section>${candidateAnswer()}<section class="card proposal-card"><span class="eyebrow">企業からの会話提案</span>${proposals.length ? proposals.map(p => `<article class="proposal"><div class="document-meta"><span class="pill ${p.agenda.sourceVersion !== entry.version ? 'warning' : ''}">${proposalStatus(p)}</span><span>提案 ${p.sequence}</span></div>${agendaView(p.agenda)}${p.agenda.sourceVersion !== entry.version ? '<p class="warning-text">この提案は訂正前の内容をもとにしています。人事が最新の議題を提案し直すまで返答できません。</p>' : '<p class="small">この議題と企業の回答を見て、「あなたからの質問、その返事」のカードから次の進み方を選べます。</p>'}</article>`).join('') : '<p>まだ提案はありません。人事画面から、議題付きの会話を提案できます。</p>'}</section></aside></div>`;
 }
+function agendaRevisionFeedback() {
+  const matches=agendaReuseMatches(state), draft=state.agendaDraft;
+  if (!matches.length) return '<p class="small">更新前の議題・過去の提案と同じ本文の一致は検出されていません。本文の意味は自動判定しません。今回の訂正と照合してください。</p>';
+  return '<div class="stale-banner"><strong>過去に使った本文と一致しています</strong><p>' + matches.map(esc).join('、') + ' と同じ本文です（空白・全半角の違いを除く）。</p><p>文字を変えること自体は目的ではありません。同じ本文を使う場合は、今回の訂正との整合を確認して記録してください。意味の妥当性は自動判定しません。</p></div><label class="field" for="agenda-consistency-note"><span>同じ本文を使っても今回の訂正と整合する理由</span><textarea id="agenda-consistency-note" data-agenda-draft="consistencyNote" rows="4" maxlength="2000">' + esc(draft?.consistencyNote ?? '') + '</textarea></label><label class="check"><input type="checkbox" id="reuse-confirmed" ' + (draft?.reuseConfirmed ? 'checked' : '') + '>過去の本文を使う理由と、今回の訂正との整合を確認した</label>';
+}
+function agendaRevisionStatus() {
+  if (!state.agendaDraft?.focus.trim()) return '議題文を入力してください。';
+  if (canCommitAgendaRevision(state,changesReviewed)) return '保存できます。整合確認の記録を残します。保存だけでは提案は送られません。';
+  if (agendaReuseMatches(state).length && (!state.agendaDraft.consistencyNote?.trim() || !state.agendaDraft.reuseConfirmed)) return '過去と同じ本文を使う場合は、理由の記入と再利用の確認が必要です。';
+  return '表示中の議題文・今回の訂正・最新の質問を照合し、確認チェックを入れてください。';
+}
+function refreshAgendaRevisionUI(redrawFeedback=false) {
+  if (redrawFeedback && $('#agenda-reuse-feedback')) $('#agenda-reuse-feedback').innerHTML=agendaRevisionFeedback();
+  if ($('#changes-reviewed')) $('#changes-reviewed').checked=changesReviewed;
+  if ($('#reuse-confirmed')) $('#reuse-confirmed').checked=state.agendaDraft?.reuseConfirmed===true;
+  if ($('[data-action="commit-agenda"]')) $('[data-action="commit-agenda"]').disabled=!canCommitAgendaRevision(state,changesReviewed);
+  if ($('#agenda-revision-status')) $('#agenda-revision-status').textContent=agendaRevisionStatus();
+}
+function agendaRevisionEditor(entry,draft) {
+  return '<div class="agenda-revision"><span class="pill warning">未保存：v' + entry.version + ' 向けの見直し</span><p class="small">下の文面を今回の訂正と照合し、必要があれば修正してください。同じ本文を使う場合は、その理由と整合確認を記録します。意味の妥当性は自動判定しません。</p><label class="field" for="agenda-revision-focus"><span>今回の訂正と照合する議題文</span><textarea id="agenda-revision-focus" data-agenda-draft="focus" rows="6" maxlength="4000">' + esc(draft.focus) + '</textarea></label><div id="agenda-reuse-feedback">' + agendaRevisionFeedback() + '</div><div class="agenda-item"><span>保存時に反映する最新の確認点</span><p>' + esc(entry.content.confirmNext) + '</p></div><div class="agenda-item"><span>保存時に反映する最新の候補者の質問</span><p>' + esc(entry.content.question) + '</p></div><label class="check"><input type="checkbox" id="changes-reviewed" ' + (changesReviewed ? 'checked' : '') + '>表示中の議題文・今回の訂正・最新の質問を照合した</label><button class="button full" data-action="commit-agenda" ' + (canCommitAgendaRevision(state,changesReviewed) ? '' : 'disabled') + '>整合確認を記録して議題を保存</button><p id="agenda-revision-status" class="small" role="status">' + agendaRevisionStatus() + '</p></div>';
+}
+
 function recruiterAgenda(entry, agendaDiff) {
   const agenda = state.agenda, stale = isStale(state), draft = state.agendaDraft;
   if (!agenda) return '<section class="card"><span class="eyebrow">会話の準備</span><h2>この具体例について、話す会を提案する。</h2><p>決まった形式の下書きから、人事が議題を編集します。AI による生成ではありません。</p><button class="button full" data-action="create-agenda">議題の下書きを作る →</button></section>';
   const diffs = agendaDiff.map(d => '<section class="diff"><h3>' + d.label + '</h3><div><span>議題の元の版</span><p>' + esc(d.before) + '</p></div><div class="after"><span>最新 v' + entry.version + '</span><p>' + esc(d.after) + '</p></div></section>').join('');
   let content = '<section class="card"><span class="eyebrow">会話の準備</span><h2>具体例を確かめて、議題にする。</h2>';
   if (stale) {
-    content += '<div class="stale-banner"><strong>議題の文面を見直すまで提案できません</strong><p>' + (agenda.sourceVersion === entry.version ? '旧デモで保存された議題は、文面の見直しが未確認です。提出 v' + entry.version + ' に沿って、人事が文面を編集・確認してください。' : '現在の議題は v' + agenda.sourceVersion + ' のままです。最新 v' + entry.version + ' との差分を踏まえて議題文を編集し、確認して保存してください。') + '参照版だけの切り替えは行いません。</p></div><div class="stale-diff">' + (diffs || '<p class="small">表示中の最新の送付物と照合し、議題に古い前提が残っていないか確認してください。</p>') + '</div>';
+    content += '<div class="stale-banner"><strong>議題の文面を見直すまで提案できません</strong><p>' + (agenda.sourceVersion === entry.version ? '旧デモで保存された議題は、文面の見直しが未確認です。提出 v' + entry.version + ' に沿って、人事が文面と今回の訂正を照合・確認してください。' : '現在の議題は v' + agenda.sourceVersion + ' のままです。最新 v' + entry.version + ' との差分を踏まえて議題文を照合し、確認して保存してください。') + '参照版だけの切り替えは行いません。</p></div><div class="stale-diff">' + (diffs || '<p class="small">表示中の最新の送付物と照合し、議題に古い前提が残っていないか確認してください。</p>') + '</div>';
     if (!draft || draft.sourceVersion !== entry.version) content += '<button class="button full" data-action="update-agenda">差分を見ながら議題文を編集 →</button>';
-    else content += '<div class="agenda-revision"><span class="pill warning">未保存：v' + entry.version + ' 向けの見直し</span><p class="small">下の文面は従来の議題です。訂正内容に合うよう、人事が書き直してください。自動で見直し済みとは扱いません。</p><label class="field" for="agenda-revision-focus"><span>訂正内容を踏まえた新しい議題文</span><textarea id="agenda-revision-focus" data-agenda-draft="focus" rows="6" maxlength="4000">' + esc(draft.focus) + '</textarea></label><div class="agenda-item"><span>保存時に反映する最新の確認点</span><p>' + esc(entry.content.confirmNext) + '</p></div><div class="agenda-item"><span>保存時に反映する最新の候補者の質問</span><p>' + esc(entry.content.question) + '</p></div><label class="check"><input type="checkbox" id="changes-reviewed" ' + (changesReviewed ? 'checked' : '') + '>書き直した議題文と最新の質問を確認した</label><button class="button full" data-action="commit-agenda" ' + (canCommitAgendaRevision(state,changesReviewed) ? '' : 'disabled') + '>文面の変更を確認して議題を保存</button><p class="small">以前と同じ議題文のままでは保存できません。保存だけでは提案は送られません。</p></div>';
+    else content += agendaRevisionEditor(entry,draft);
     content += '<details class="old-agenda"><summary>更新前の議題（v' + agenda.sourceVersion + '）を見る</summary>' + agendaView(agenda) + '</details>';
   } else {
-    if (state.agendaReview?.toVersion === entry.version) content += '<details class="agenda-review-result" open><summary>人事が見直して更新した内容：v' + state.agendaReview.fromVersion + ' → v' + entry.version + '</summary><div class="diff"><div><span>以前の議題文</span><p>' + esc(state.agendaReview.before) + '</p></div><div class="after"><span>人事が保存した議題文</span><p>' + esc(state.agendaReview.after) + '</p></div></div><p class="small">下記の確認点と候補者の質問も最新の提出版へ反映しました。</p></details>';
+    if (state.agendaReview?.toVersion === entry.version) content += '<details class="agenda-review-result" open><summary>人事が照合して保存した内容：' + (state.agendaReview.fromVersion === entry.version ? '提出 v' + entry.version : 'v' + state.agendaReview.fromVersion + ' → v' + entry.version) + '</summary><div class="diff"><div><span>以前の議題文</span><p>' + esc(state.agendaReview.before) + '</p></div><div class="after"><span>人事が保存した議題文</span><p>' + esc(state.agendaReview.after) + '</p></div></div>' + (state.agendaReview.reuseRationale ? '<div class="reuse-audit"><strong>同じ本文を使う整合確認の記録</strong><p>' + esc(state.agendaReview.reuseRationale) + '</p></div>' : '') + '<p class="small">下記の確認点と候補者の質問も最新の提出版へ反映しました。</p></details>';
     content += '<div class="agenda-editor"><span class="pill quiet">元の提出版：v' + agenda.sourceVersion + '</span><label class="field" for="agenda-focus"><span>一緒に話したい議題（人事が編集）</span><textarea id="agenda-focus" data-agenda="focus" rows="4" maxlength="4000">' + esc(agenda.focus) + '</textarea></label><div class="agenda-item"><span>候補者が確かめたいこと</span><p>' + esc(agenda.confirmNext) + '</p></div><div class="agenda-item"><span>候補者から企業への質問</span><p>' + esc(agenda.candidateQuestion) + '</p></div></div>';
   }
   content += '<label class="field private-note" for="agenda-notes"><span>人事の準備メモ（候補者には表示しません）</span><textarea id="agenda-notes" data-agenda="notes" rows="3" maxlength="4000">' + esc(agenda.notes) + '</textarea></label><p class="small">メモは議題の見直し後も保持します。提案には含めません。</p><button class="button full" data-action="request-proposal" ' + (stale || alreadyProposed(state) || !agenda.focus.trim() ? 'disabled' : '') + '>' + (!stale && alreadyProposed(state) ? 'この議題は提案済みです' : 'この議題で会話を提案する') + ' →</button><p class="small">' + (stale ? '議題文の見直しと保存が完了するまで提案できません。' : '外部送信・日程予約は行いません。候補者と同じ議題を確認して提案します。') + '</p></section>';
@@ -127,12 +149,13 @@ function requestSubmit() {
 document.addEventListener('input', event => {
   const el = event.target;
   if (el.dataset.field && state.draft) { state.draft.content[el.dataset.field] = el.value; save(); }
-  if (el.dataset.agendaDraft && state.agendaDraft) { state.agendaDraft[el.dataset.agendaDraft] = el.value; const commit = $('[data-action="commit-agenda"]'); if (commit) commit.disabled = !canCommitAgendaRevision(state, changesReviewed); save(); }
+  if (el.dataset.agendaDraft && state.agendaDraft) { state.agendaDraft[el.dataset.agendaDraft] = el.value; state.agendaDraft.reuseConfirmed = false; changesReviewed = false; refreshAgendaRevisionUI(el.dataset.agendaDraft === 'focus'); save(); }
   if (el.dataset.agenda && state.agenda) { state.agenda[el.dataset.agenda] = el.value; save(); }
   if (el.dataset.answer && latest(state)) { answerDraft(state)[el.dataset.answer] = el.value; save(); }
 });
 document.addEventListener('change', event => {
-  if (event.target.id === 'changes-reviewed') { changesReviewed = event.target.checked; const button = $('[data-action="commit-agenda"]'); if (button) button.disabled = !canCommitAgendaRevision(state, changesReviewed); }
+  if (event.target.id === 'changes-reviewed') { changesReviewed = event.target.checked; refreshAgendaRevisionUI(); }
+  if (event.target.id === 'reuse-confirmed' && state.agendaDraft) { state.agendaDraft.reuseConfirmed = event.target.checked; refreshAgendaRevisionUI(); save(); }
   if (event.target.id === 'experience-select') { selectExperience(state,event.target.value); changesReviewed = false; save(); navigate(location.hash.startsWith('#recruiter') ? 'recruiter' : candidatePath()); }
   if (event.target.dataset.agenda) render();
 });
@@ -164,7 +187,7 @@ document.addEventListener('click', event => {
   if (action === 'cancel-correction') modal('訂正下書きを取り消しますか？', '<p>まだ提出していない訂正だけを削除します。提出済みの送付物と会話提案は残ります。</p>', '訂正下書きを取り消す', () => { cancelCorrection(state); save(); navigate('candidate/submitted'); });
   if (action === 'create-agenda') { createAgenda(state); save(); render(); }
   if (action === 'update-agenda') { beginAgendaRevision(state); changesReviewed = false; save(); render(); $('#agenda-revision-focus')?.focus(); }
-  if (action === 'commit-agenda') { if (commitAgendaRevision(state,changesReviewed)) { changesReviewed = false; save(); render(); toast('人事が見直した議題文を保存しました。まだ提案は送られていません。'); } }
+  if (action === 'commit-agenda') { if (commitAgendaRevision(state,changesReviewed)) { changesReviewed = false; save(); render(); toast('議題と今回の訂正の整合確認を記録しました。まだ提案は送られていません。'); } }
   if (action === 'request-proposal') {
     if (isStale(state)) return;
     modal('この議題を候補者に提案します', `${agendaView(state.agenda)}<p class="small">準備メモは含みません。デモ内に表示するだけで、メール送信・日程予約は行いません。</p>`, 'デモとして会話を提案', () => { const result = propose(state); save(); render(); toast(result.ok ? '候補者の画面に会話提案を表示しました' : result.reason); });

@@ -48,3 +48,13 @@ Manual walkthrough: candidate → cafe → use fictional sample at each of five 
 - New experiences now preserve the current experience, including its correction draft, submissions, company answers, agenda and immutable proposals. Candidate and recruiter can switch experiences. Recruiter choices include only submitted titles, never candidate draft titles. Direct `#candidate/new` opens the explicit experience picker; it no longer silently returns to a submitted version.
 - Storage-event rendering no longer writes the received state back, preventing repeated cross-tab updates between candidate and recruiter views.
 - All data remains browser-local and fictional; no external API, secret, identity or permission integration was added.
+
+## Follow-up after v7: deliberate reuse instead of arbitrary text changes
+
+Independent browser reproduction confirmed that v7 accepted a return to a still-older proposal's wording and allowed another demo proposal. It also retained an unchanged-text prohibition after saving became enabled.
+
+Revision review now compares the proposed wording with both the current agenda and every sent proposal in the selected experience. The comparison normalizes whitespace and Unicode width, not meaning. A match displays the exact previous references and requires a written reason, an explicit reuse-consistency check, and the final check against the current correction and candidate question. Unchanged wording can be retained after this human review; arbitrary character changes are not required. Editing wording or the reason clears the checks. The readiness message updates with the actual save condition, and the review record retains the rationale without exposing that internal rationale to the candidate.
+
+Legacy v7 agendas already saved with wording matching a proposal from an older submission also require the new reuse review before another proposal; existing sent records are not overwritten.
+
+This checks process and matching text only. It does not verify that the rationale is true or that differently worded text is semantically compatible with the correction. A human recruiter remains responsible for that judgment. Experience/answer/decision/note/proposal isolation remains covered by the regression tests.

@@ -31,7 +31,11 @@ export function selectExperience(state, id) {
 export function latest(state) { return state.submissions.at(-1) ?? null; }
 export function validContent(content) { return FIELDS.every(key => typeof content?.[key] === 'string' && content[key].trim().length > 0 && content[key].length <= 4000); }
 export function sameContent(a, b) { return FIELDS.every(key => a?.[key]?.trim() === b?.[key]?.trim()); }
-export function isStale(state) { const version=latest(state)?.version; return !!state.agenda && (state.agenda.sourceVersion !== version || (version > 1 && state.agenda.reviewedVersion !== version)); }
+export function isStale(state) {
+  const version=latest(state)?.version;
+  const legacyReuse=state.agenda && state.agenda.reusePolicy!==2 && state.proposals.some(p=>p.agenda.sourceVersion<version && normalizedAgendaText(p.agenda.focus)===normalizedAgendaText(state.agenda.focus));
+  return !!state.agenda && (state.agenda.sourceVersion !== version || (version > 1 && state.agenda.reviewedVersion !== version) || legacyReuse);
+}
 export function differences(a, b) { return FIELDS.filter(key => a?.[key] !== b?.[key]).map(key => ({ key, label: LABELS[key], before: a?.[key] ?? '', after: b?.[key] ?? '' })); }
 export function submit(state, now = new Date().toISOString()) {
   if (!state.draft || !validContent(state.draft.content)) return { ok: false, reason: '送付物のすべての項目を確認してください。' };
@@ -61,23 +65,36 @@ export function cancelCorrection(state) {
 export function createAgenda(state, confirmedChanges = false) {
   const entry = latest(state);
   if (!entry || isStale(state)) return false;
-  state.agenda = { sourceVersion: entry.version, reviewedVersion: entry.version, focus: `「${entry.content.title}」について、話を整理した手順と引き継ぎの判断を一緒に振り返る`, candidateQuestion: entry.content.question, confirmNext: entry.content.confirmNext, notes: state.agenda?.notes ?? '' };
+  state.agenda = { sourceVersion: entry.version, reviewedVersion: entry.version, reusePolicy: 2, focus: `「${entry.content.title}」について、話を整理した手順と引き継ぎの判断を一緒に振り返る`, candidateQuestion: entry.content.question, confirmNext: entry.content.confirmNext, notes: state.agenda?.notes ?? '' };
   return true;
 }
 export function beginAgendaRevision(state) {
   if (!isStale(state)) return false;
   const entry = latest(state);
-  if (state.agendaDraft?.sourceVersion !== entry.version) state.agendaDraft = { sourceVersion: entry.version, focus: state.agenda.focus };
+  if (state.agendaDraft?.sourceVersion !== entry.version) state.agendaDraft = { sourceVersion: entry.version, focus: state.agenda.focus, consistencyNote: '', reuseConfirmed: false };
+  state.agendaDraft.consistencyNote ??= ''; state.agendaDraft.reuseConfirmed ??= false;
   return true;
 }
+const normalizedAgendaText = text => String(text ?? '').normalize('NFKC').replace(/\s+/gu,' ').trim();
+export function agendaReuseMatches(state) {
+  const focus=normalizedAgendaText(state.agendaDraft?.focus);
+  if (!focus) return [];
+  const matches=[];
+  if (focus===normalizedAgendaText(state.agenda?.focus)) matches.push(`更新前の議題（v${state.agenda.sourceVersion}）`);
+  state.proposals.forEach((p,index)=>{ if (focus===normalizedAgendaText(p.agenda.focus)) matches.push(`提案 ${p.sequence ?? index+1}（v${p.agenda.sourceVersion}）`); });
+  return matches;
+}
 export function canCommitAgendaRevision(state, reviewed = false) {
-  return !!(reviewed && isStale(state) && state.agendaDraft?.sourceVersion === latest(state)?.version && state.agendaDraft.focus.trim() && state.agendaDraft.focus.length <= 4000 && state.agendaDraft.focus.trim() !== state.agenda.focus.trim());
+  const draft=state.agendaDraft;
+  const reusable=agendaReuseMatches(state).length===0 || (draft?.reuseConfirmed===true && typeof draft.consistencyNote==='string' && draft.consistencyNote.trim().length>0 && draft.consistencyNote.length<=2000);
+  return !!(reviewed && isStale(state) && draft?.sourceVersion === latest(state)?.version && draft.focus.trim() && draft.focus.length <= 4000 && reusable);
 }
 export function commitAgendaRevision(state, reviewed = false) {
   if (!canCommitAgendaRevision(state, reviewed)) return false;
   const previous = copy(state.agenda), entry = latest(state);
-  state.agenda = { sourceVersion: entry.version, reviewedVersion: entry.version, focus: state.agendaDraft.focus.trim(), candidateQuestion: entry.content.question, confirmNext: entry.content.confirmNext, notes: previous.notes };
-  state.agendaReview = { fromVersion: previous.sourceVersion, toVersion: entry.version, before: previous.focus, after: state.agenda.focus };
+  state.agenda = { sourceVersion: entry.version, reviewedVersion: entry.version, reusePolicy: 2, focus: state.agendaDraft.focus.trim(), candidateQuestion: entry.content.question, confirmNext: entry.content.confirmNext, notes: previous.notes };
+  const reuseMatches=agendaReuseMatches({ ...state, agenda: previous });
+  state.agendaReview = { fromVersion: previous.sourceVersion, toVersion: entry.version, before: previous.focus, after: state.agenda.focus, reuseMatches, reuseRationale: reuseMatches.length ? state.agendaDraft.consistencyNote.trim() : '' };
   state.agendaDraft = null;
   return true;
 }
@@ -137,7 +154,7 @@ export function restore(raw) {
     if (!data.draft && !data.submissions.length) return createState();
     data.experienceId ??= 'experience-1'; data.nextExperienceId ??= 2; data.otherExperiences ??= []; data.agendaDraft ??= null; data.agendaReview ??= null;
     if (typeof data.experienceId !== 'string' || !Number.isInteger(data.nextExperienceId) || !Array.isArray(data.otherExperiences) || data.otherExperiences.length > 100) return createState();
-    if (data.agendaDraft && (!Number.isInteger(data.agendaDraft.sourceVersion) || typeof data.agendaDraft.focus !== 'string' || data.agendaDraft.focus.length > 4000)) return createState();
+    if (data.agendaDraft && (!Number.isInteger(data.agendaDraft.sourceVersion) || typeof data.agendaDraft.focus !== 'string' || data.agendaDraft.focus.length > 4000 || (data.agendaDraft.consistencyNote !== undefined && (typeof data.agendaDraft.consistencyNote !== 'string' || data.agendaDraft.consistencyNote.length>2000)) || (data.agendaDraft.reuseConfirmed !== undefined && typeof data.agendaDraft.reuseConfirmed !== 'boolean'))) return createState();
     if (data.agendaReview && (!Number.isInteger(data.agendaReview.fromVersion) || !Number.isInteger(data.agendaReview.toVersion) || typeof data.agendaReview.before !== 'string' || typeof data.agendaReview.after !== 'string')) return createState();
     const ids = new Set([data.experienceId]);
     data.otherExperiences = data.otherExperiences.map(item => {
