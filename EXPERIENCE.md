@@ -58,3 +58,7 @@ Revision review now compares the proposed wording with both the current agenda a
 Legacy v7 agendas already saved with wording matching a proposal from an older submission also require the new reuse review before another proposal; existing sent records are not overwritten.
 
 This checks process and matching text only. It does not verify that the rationale is true or that differently worded text is semantically compatible with the correction. A human recruiter remains responsible for that judgment. Experience/answer/decision/note/proposal isolation remains covered by the regression tests.
+
+## Batch 1: scenes and question tracker
+Three company work scenes and an equal no-scene option preserve candidate choice without scoring. Multiple questions have experience-scoped IDs. Private question drafts are shared explicitly. Internal checker/notes use separate save paths from public answers. Answers require a sanitized preview followed by explicit publication. v8 data migrates without rewriting submissions, legacy answers or proposals. All storage is browser-local demo data, not production authorization. Validation: 35 model/render/projection tests.
+

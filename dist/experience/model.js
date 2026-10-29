@@ -1,3 +1,5 @@
+import { emptyQuestionTracker, syncSubmissionQuestion, questionSummary, questionAnswerToken, mirrorLegacyAnswer, migrateQuestionTracker, validQuestionTracker } from './question-tracker.js';
+import { sceneText, sceneById } from './work-scenes.js';
 export const STORAGE_KEY = 'haas-experience-v1';
 export const FIELDS = ['title', 'situation', 'action', 'result', 'confirmNext', 'question'];
 export const LABELS = { title: '選んだ経験', situation: 'どんな場面だったか', action: '自分がしたこと', result: 'その後どうなったか', confirmNext: '次の会話で確認したいこと', question: '候補者から企業への質問' };
@@ -5,7 +7,7 @@ export const SCENARIO = 'ジュニア CS：困っているお客さまの話を�
 export const SAMPLE = Object.freeze({ title: 'カフェで、注文と違うドリンクをお渡ししたとき', situation: '土曜の昼、混雑したカフェで、注文と違うドリンクを受け取ったお客さまから声をかけられました。私はアルバイトを始めて3か月でした。', action: 'まず注文内容と急いでいるかを確認しました。レシートを見て店長に状況を伝え、作り直しの時間を確かめてお客さまに説明しました。', result: 'お客さまは5分なら待てると言い、作り直したドリンクを受け取られました。店長と、受け渡し時に注文名を読み上げることを決めました。待ち時間は記憶に基づく目安です。', confirmNext: 'カフェでの対応を CS の問い合わせ対応にどう生かせるか。判断に迷う場合、どこまで自分で決めてよいか。', question: '入社後、判断に迷った問い合わせは、どのように先輩に相談できますか？' });
 const copy = value => JSON.parse(JSON.stringify(value));
 export const emptyContent = () => Object.fromEntries(FIELDS.map(key => [key, '']));
-export function createState() { return { schema: 1, experienceId: 'experience-1', nextExperienceId: 2, otherExperiences: [], screen: 'welcome', interviewIndex: 0, draft: { content: emptyContent(), baseVersion: 0 }, submissions: [], agenda: null, agendaDraft: null, agendaReview: null, proposals: [], nextId: 1, answers: [], answerDraft: null, decision: null }; }
+export function createState() { return { schema: 1, experienceId: 'experience-1', nextExperienceId: 2, otherExperiences: [], screen: 'welcome', interviewIndex: 0, draft: { content: emptyContent(), baseVersion: 0 }, submissions: [], agenda: null, agendaDraft: null, agendaReview: null, proposals: [], nextId: 1, answers: [], answerDraft: null, decision: null, ...emptyQuestionTracker() }; }
 function experienceSnapshot(state) { const { otherExperiences, nextExperienceId, ...experience } = state; return copy(experience); }
 export function experienceList(state, submittedOnly = false) {
   return [state, ...(state.otherExperiences ?? [])].filter(e => !submittedOnly || latest(e)).map(e => ({ id: e.experienceId, title: (submittedOnly ? latest(e)?.content.title : e.draft?.content.title || latest(e)?.content.title) || 'まだ選んでいない経験', version: latest(e)?.version ?? 0, isActive: e.experienceId === state.experienceId }));
@@ -31,20 +33,26 @@ export function selectExperience(state, id) {
 export function latest(state) { return state.submissions.at(-1) ?? null; }
 export function validContent(content) { return FIELDS.every(key => typeof content?.[key] === 'string' && content[key].trim().length > 0 && content[key].length <= 4000); }
 export function sameContent(a, b) { return FIELDS.every(key => a?.[key]?.trim() === b?.[key]?.trim()); }
+export function draftMatchesLatest(state) { const old=latest(state);return !!(old&&state.draft&&sameContent(old.content,state.draft.content)&&(old.sceneId===undefined?'legacy':old.sceneId)===(state.draft.sceneId===undefined?'legacy':state.draft.sceneId)); }
+export function draftSceneText(state) { return sceneText(state.draft?.sceneId,state.draft?.legacyScenario||latest(state)?.scenario||SCENARIO); }
+export function submissionDifferences(a,b) { const list=differences(a?.content,b?.content);if(a?.scenario!==b?.scenario)list.push({key:'scene',label:'本人が選んだ仕事の場面',before:a?.scenario??'',after:b?.scenario??''});return list; }
+export function agendaQuestionsChanged(state) { return !!state.agenda && state.agenda.candidateQuestion!==questionSummary(state); }
+export function proposalIsStale(state,p) { return p.agenda.sourceVersion!==latest(state)?.version || p.agenda.candidateQuestion!==questionSummary(state); }
 export function isStale(state) {
   const version=latest(state)?.version;
   const legacyReuse=state.agenda && state.agenda.reusePolicy!==2 && state.proposals.some(p=>p.agenda.sourceVersion<version && normalizedAgendaText(p.agenda.focus)===normalizedAgendaText(state.agenda.focus));
-  return !!state.agenda && (state.agenda.sourceVersion !== version || (version > 1 && state.agenda.reviewedVersion !== version) || legacyReuse);
+  return !!state.agenda && (state.agenda.sourceVersion !== version || (version > 1 && state.agenda.reviewedVersion !== version) || legacyReuse || agendaQuestionsChanged(state));
 }
 export function differences(a, b) { return FIELDS.filter(key => a?.[key] !== b?.[key]).map(key => ({ key, label: LABELS[key], before: a?.[key] ?? '', after: b?.[key] ?? '' })); }
 export function submit(state, now = new Date().toISOString()) {
   if (!state.draft || !validContent(state.draft.content)) return { ok: false, reason: '送付物のすべての項目を確認してください。' };
   const previous = latest(state);
   if (previous && state.draft.baseVersion !== previous.version) return { ok: false, reason: '提出版が変わりました。最新の版から訂正してください。' };
-  if (previous && sameContent(previous.content, state.draft.content)) return { ok: false, reason: '前回から変更がありません。' };
+  if (previous && draftMatchesLatest(state)) return { ok: false, reason: '前回から変更がありません。' };
   const content = Object.fromEntries(FIELDS.map(key => [key, state.draft.content[key].trim()]));
-  const entry = { version: (previous?.version ?? 0) + 1, submittedAt: now, candidateConfirmed: true, scenario: SCENARIO, content: copy(content) };
+  const entry = { version: (previous?.version ?? 0) + 1, submittedAt: now, candidateConfirmed: true, scenario: draftSceneText(state), sceneId: state.draft.sceneId===undefined?'legacy':state.draft.sceneId, companyScene: sceneById(state.draft.sceneId) ? copy(sceneById(state.draft.sceneId)) : null, content: copy(content) };
   state.submissions.push(entry);
+  syncSubmissionQuestion(state,entry);
   state.draft = null;
   state.screen = 'submitted';
   return { ok: true, entry: copy(entry) };
@@ -52,7 +60,7 @@ export function submit(state, now = new Date().toISOString()) {
 export function startCorrection(state) {
   const entry = latest(state);
   if (!entry) return false;
-  if (!state.draft) state.draft = { content: copy(entry.content), baseVersion: entry.version };
+  if (!state.draft) state.draft = { content: copy(entry.content), baseVersion: entry.version, sceneId:entry.sceneId===undefined?'legacy':entry.sceneId,legacyScenario:entry.scenario };
   state.screen = 'review';
   return true;
 }
@@ -65,13 +73,13 @@ export function cancelCorrection(state) {
 export function createAgenda(state, confirmedChanges = false) {
   const entry = latest(state);
   if (!entry || isStale(state)) return false;
-  state.agenda = { sourceVersion: entry.version, reviewedVersion: entry.version, reusePolicy: 2, focus: `「${entry.content.title}」について、話を整理した手順と引き継ぎの判断を一緒に振り返る`, candidateQuestion: entry.content.question, confirmNext: entry.content.confirmNext, notes: state.agenda?.notes ?? '' };
+  state.agenda = { sourceVersion: entry.version, reviewedVersion: entry.version, reusePolicy: 2, focus: `「${entry.content.title}」について、話を整理した手順と引き継ぎの判断を一緒に振り返る`, candidateQuestion: questionSummary(state), confirmNext: entry.content.confirmNext, notes: state.agenda?.notes ?? '' };
   return true;
 }
 export function beginAgendaRevision(state) {
   if (!isStale(state)) return false;
   const entry = latest(state);
-  if (state.agendaDraft?.sourceVersion !== entry.version) state.agendaDraft = { sourceVersion: entry.version, focus: state.agenda.focus, consistencyNote: '', reuseConfirmed: false };
+  if (state.agendaDraft?.sourceVersion !== entry.version || state.agendaDraft?.questionSnapshot!==questionSummary(state)) state.agendaDraft = { sourceVersion: entry.version, questionSnapshot:questionSummary(state), focus: state.agenda.focus, consistencyNote: '', reuseConfirmed: false };
   state.agendaDraft.consistencyNote ??= ''; state.agendaDraft.reuseConfirmed ??= false;
   return true;
 }
@@ -87,12 +95,12 @@ export function agendaReuseMatches(state) {
 export function canCommitAgendaRevision(state, reviewed = false) {
   const draft=state.agendaDraft;
   const reusable=agendaReuseMatches(state).length===0 || (draft?.reuseConfirmed===true && typeof draft.consistencyNote==='string' && draft.consistencyNote.trim().length>0 && draft.consistencyNote.length<=2000);
-  return !!(reviewed && isStale(state) && draft?.sourceVersion === latest(state)?.version && draft.focus.trim() && draft.focus.length <= 4000 && reusable);
+  return !!(reviewed && isStale(state) && draft?.sourceVersion === latest(state)?.version && draft.questionSnapshot===questionSummary(state) && draft.focus.trim() && draft.focus.length <= 4000 && reusable);
 }
 export function commitAgendaRevision(state, reviewed = false) {
   if (!canCommitAgendaRevision(state, reviewed)) return false;
   const previous = copy(state.agenda), entry = latest(state);
-  state.agenda = { sourceVersion: entry.version, reviewedVersion: entry.version, reusePolicy: 2, focus: state.agendaDraft.focus.trim(), candidateQuestion: entry.content.question, confirmNext: entry.content.confirmNext, notes: previous.notes };
+  state.agenda = { sourceVersion: entry.version, reviewedVersion: entry.version, reusePolicy: 2, focus: state.agendaDraft.focus.trim(), candidateQuestion: questionSummary(state), confirmNext: entry.content.confirmNext, notes: previous.notes };
   const reuseMatches=agendaReuseMatches({ ...state, agenda: previous });
   state.agendaReview = { fromVersion: previous.sourceVersion, toVersion: entry.version, before: previous.focus, after: state.agenda.focus, reuseMatches, reuseRationale: reuseMatches.length ? state.agendaDraft.consistencyNote.trim() : '' };
   state.agendaDraft = null;
@@ -125,16 +133,17 @@ export function publishAnswer(state) {
   const previous = latestAnswer(state);
   if (previous && ['status', 'text', 'reason', 'eta'].every(k => previous[k] === draft[k])) return false;
   state.answers.push({ sourceVersion: draft.sourceVersion, status: draft.status, text: draft.text.trim(), reason: draft.reason.trim(), eta: draft.eta, id: state.nextId++ });
+  mirrorLegacyAnswer(state,state.answers.at(-1));
   return true;
 }
 export function decide(state, choice) {
   if (!latest(state) || !['wait', 'proceed', 'pause'].includes(choice)) return false;
-  state.decision = { sourceVersion: latest(state).version, answerId: latestAnswer(state)?.id ?? null, choice };
+  state.decision = { sourceVersion: latest(state).version, answerId: latestAnswer(state)?.id ?? null, questionAnswerToken:questionAnswerToken(state), choice };
   return true;
 }
 export function respond(state, id, response) {
   const proposal = state.proposals.find(p => p.id === id);
-  if (!proposal || proposal.response !== 'pending' || !['accepted', 'declined'].includes(response) || proposal.agenda.sourceVersion !== latest(state)?.version) return false;
+  if (!proposal || proposal.response !== 'pending' || !['accepted', 'declined'].includes(response) || proposalIsStale(state,proposal)) return false;
   proposal.response = response;
   return true;
 }
@@ -153,6 +162,9 @@ export function restore(raw) {
     if (data.decision && (!Number.isInteger(data.decision.sourceVersion) || !['wait','proceed','pause'].includes(data.decision.choice))) return createState();
     if (!data.draft && !data.submissions.length) return createState();
     data.experienceId ??= 'experience-1'; data.nextExperienceId ??= 2; data.otherExperiences ??= []; data.agendaDraft ??= null; data.agendaReview ??= null;
+    migrateQuestionTracker(data);
+    if(!validQuestionTracker(data))return createState();
+    if(data.agendaDraft)data.agendaDraft.questionSnapshot??=questionSummary(data);
     if (typeof data.experienceId !== 'string' || !Number.isInteger(data.nextExperienceId) || !Array.isArray(data.otherExperiences) || data.otherExperiences.length > 100) return createState();
     if (data.agendaDraft && (!Number.isInteger(data.agendaDraft.sourceVersion) || typeof data.agendaDraft.focus !== 'string' || data.agendaDraft.focus.length > 4000 || (data.agendaDraft.consistencyNote !== undefined && (typeof data.agendaDraft.consistencyNote !== 'string' || data.agendaDraft.consistencyNote.length>2000)) || (data.agendaDraft.reuseConfirmed !== undefined && typeof data.agendaDraft.reuseConfirmed !== 'boolean'))) return createState();
     if (data.agendaReview && (!Number.isInteger(data.agendaReview.fromVersion) || !Number.isInteger(data.agendaReview.toVersion) || typeof data.agendaReview.before !== 'string' || typeof data.agendaReview.after !== 'string')) return createState();
