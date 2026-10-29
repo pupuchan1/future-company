@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createState, SAMPLE, STORAGE_KEY, submit, startCorrection, createAgenda, propose } from '../dist/experience/model.js';
 import { setJobField,saveJobDraft,previewJob,publishJob,saveFieldProposal } from '../dist/experience/job-settings.js';
+import { setQuestionAnswerDraft,previewQuestionAnswer,publishQuestionAnswer } from '../dist/experience/question-tracker.js';
 const documentEvents = {}, windowEvents = {}, elements = new Map();
 function element(selector) { if (!elements.has(selector)) elements.set(selector, { innerHTML: '', textContent: '', open: false, disabled: false, classList: { add(){}, remove(){}, toggle(){} }, focus(){}, addEventListener(name, fn){ this[name] = fn; }, showModal(){ this.open = true; }, close(){ this.open = false; } }); return elements.get(selector); }
 globalThis.document = { querySelector: element, querySelectorAll: () => [], addEventListener: (name, fn) => documentEvents[name] = fn };
@@ -24,6 +25,21 @@ test('field-role internal proposal never appears in candidate render before B ex
  const s=createState();s.companyJob.fieldEditor={reason:'FIELD-PRIVATE-REASON',question:'FIELD-PRIVATE-QUESTION'};saveFieldProposal(s);
  assert.match(load(s,'#company/field'),/FIELD-PRIVATE-QUESTION/);assert.match(load(s,'#company/recruiter'),/FIELD-PRIVATE-QUESTION/);
  assert.equal(load(s,'#candidate/welcome').includes('FIELD-PRIVATE'),false);assert.equal(load(s,'#recruiter').includes('FIELD-PRIVATE'),false);
+});
+test('publication rechecks storage before the storage event arrives and retains the conflicting answer for explicit recovery',()=>{
+ const s=createState();s.draft.content={...SAMPLE};submit(s);s.decision={sourceVersion:1,choice:'pause'};const id=s.submissionQuestionId;setQuestionAnswerDraft(s,id,{status:'answered',text:'LOCAL-PREVIEW-INPUT'});
+ load(s,'#recruiter');click('preview-question-answer',{questionId:id});assert.equal(element('#confirmation').open,true);
+ const remote=JSON.parse(saved);setQuestionAnswerDraft(remote,id,{text:'REMOTE-PUBLISHED-ANSWER'});publishQuestionAnswer(remote,previewQuestionAnswer(remote,id).preview);saved=JSON.stringify(remote);
+ element('#modal-confirm').click();assert.equal(JSON.parse(saved).questionPublications.length,1);assert.match(element('#toast').textContent,/再プレビュー/);assert.match(element('#app').innerHTML,/LOCAL-PREVIEW-INPUT/);assert.match(element('#app').innerHTML,/data-action="recover-question-answer"/);
+ click('recover-question-answer',{questionId:id});assert.equal(JSON.parse(saved).questionAnswerDrafts[id].text,'LOCAL-PREVIEW-INPUT');assert.equal(JSON.parse(saved).decision.choice,'pause');click('preview-question-answer',{questionId:id});element('#modal-confirm').click();assert.equal(JSON.parse(saved).questionPublications.length,2);assert.equal(JSON.parse(saved).decision.choice,'pause');
+});
+test('storage updates close an obsolete job confirmation, retain private edits, and require another preview',()=>{
+ const s=createState();setJobField(s,'title','LOCAL-JOB-INPUT');setJobField(s,'changeReason','LOCAL-REASON');saveJobDraft(s);load(s,'#company/recruiter');click('preview-job');
+ const remote=JSON.parse(saved);setJobField(remote,'title','REMOTE-JOB-PUBLISHED');saveJobDraft(remote);publishJob(remote,previewJob(remote).preview);saved=JSON.stringify(remote);windowEvents.storage({key:STORAGE_KEY,newValue:saved});assert.equal(element('#confirmation').open,false);element('#modal-confirm').click();assert.equal(JSON.parse(saved).companyJob.published.length,2);assert.match(element('#app').innerHTML,/LOCAL-JOB-INPUT/);assert.match(element('#app').innerHTML,/保管した入力/);
+ click('recover-job-draft');assert.equal(JSON.parse(saved).companyJob.editor.content.title,'LOCAL-JOB-INPUT');assert.equal(JSON.parse(saved).companyJob.editor.baseVersion,2);click('preview-job');assert.equal(element('#confirmation').open,false);click('save-job-draft');click('preview-job');assert.equal(element('#confirmation').open,true);element('#modal-confirm').click();assert.equal(JSON.parse(saved).companyJob.published.at(-1).content.title,'LOCAL-JOB-INPUT');
+});
+test('an unsubmitted scene-free interview uses draft wording without claiming submission',()=>{
+ const s=createState();s.draft.sceneId=null;const html=load(s,'#candidate/interview/0');assert.match(html,/仕事の場面との結び付けは選んでいません/);assert.equal(html.includes('結び付けを選ばずに提出しています'),false);assert.equal(JSON.parse(saved).submissions.length,0);
 });
 test('recruiter render never contains private candidate draft or private correction', () => {
   const state = createState(); state.draft.content = { ...SAMPLE, action: 'PRIVATE-DRAFT-UNSENT' };

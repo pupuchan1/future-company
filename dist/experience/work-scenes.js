@@ -7,5 +7,5 @@ export function sceneById(id) { return WORK_SCENES.find(s => s.id === id) ?? nul
 export function sceneText(id, legacyText = '') {
   if (id === undefined || id === 'legacy') return legacyText || 'ジュニア CS：困っているお客さまの話を整理し、解決に必要な人へ引き継ぐ場面';
   const scene=sceneById(id);
-  return scene ? `${scene.title}：${scene.description}` : '本人は仕事の場面との結び付けを選ばずに提出しています。';
+  return scene ? `${scene.title}：${scene.description}` : '仕事の場面との結び付けは選んでいません。';
 }

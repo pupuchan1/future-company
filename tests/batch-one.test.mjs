@@ -11,7 +11,7 @@ test('three company scene descriptions and an explicit no-scene choice preserve 
  const s=ready();s.draft.sceneId=WORK_SCENES[2].id;s.draft.content.result='数字は非公開です。相手へ確認状況を伝えました。';submit(s);createAgenda(s);
  const original=structuredClone(s.submissions[0]);assert.equal(original.companyScene.title,'自分では答えられない時');
  startCorrection(s);s.draft.sceneId=null;assert.equal(draftMatchesLatest(s),false);assert.equal(submit(s).ok,true);
- assert.deepEqual(s.submissions[0],original);assert.equal(s.submissions[1].sceneId,null);assert.match(s.submissions[1].scenario,/結び付けを選ばず/);assert.equal(isStale(s),true);
+ assert.deepEqual(s.submissions[0],original);assert.equal(s.submissions[1].sceneId,null);assert.match(s.submissions[1].scenario,/結び付けは選んでいません/);assert.equal(isStale(s),true);
  assert.equal(submissionDifferences(original,s.submissions[1]).some(d=>d.key==='scene'),true);
 });
 test('additional question drafts stay out of company projection until explicit sharing, with experience-scoped IDs',()=>{

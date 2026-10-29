@@ -1,4 +1,5 @@
-import { currentJob,setJobField,saveJobDraft,previewJob,publishJob,saveFieldProposal,applyFieldProposal,chooseJobResponse } from './job-settings.js';
+import { retainPreviewInputs } from './preview-sync.js';
+import { currentJob,setJobField,saveJobDraft,previewJob,publishJob,saveFieldProposal,applyFieldProposal,chooseJobResponse,recoverJobDraft } from './job-settings.js';
 import { candidateJobView,companySettingsView,submittedJobView,jobDescriptionView,jobDiffView } from './job-views.js';
 import { WORK_SCENES } from './work-scenes.js';
 import { candidateQuestionProjection, createQuestionDraft, shareQuestion, cancelQuestionDraft, questionSummary, questionAnswerToken, setQuestionAnswerDraft, setQuestionInternalDraft, saveQuestionInternal, previewQuestionAnswer, publishQuestionAnswer } from './question-tracker.js';
@@ -8,7 +9,8 @@ const $ = selector => document.querySelector(selector);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let memoryOnly = false;
 let state;
-try { state = restore(localStorage.getItem(STORAGE_KEY)); } catch { state = createState(); memoryOnly = true; }
+let lastStorageRaw=null;
+try { lastStorageRaw=localStorage.getItem(STORAGE_KEY);state = restore(lastStorageRaw); } catch { state = createState(); memoryOnly = true; }
 let changesReviewed = false;
 let confirmAction = null;
 let focusQuestion = false;
@@ -19,7 +21,8 @@ const questions = [
   ['confirmNext', '次の会話では、何を確かめたいですか？', 'この経験と仕事がどうつながるか。まだ分からないことも、議題にできます。'],
   ['question', 'あなたから、企業に聞きたいことは？', '働き方、相談のしやすさ、入社後の支援など。あなたが判断するための質問です。']
 ];
-function save() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { memoryOnly = true; } storageLabel(); }
+function save() { try { const raw=JSON.stringify(state);localStorage.setItem(STORAGE_KEY, raw);lastStorageRaw=raw; } catch { memoryOnly = true; } storageLabel(); }
+function refreshPublicationState(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw!==lastStorageRaw){state=retainPreviewInputs(state,restore(raw));lastStorageRaw=raw;render(false);}}catch{memoryOnly=true;}}
 function storageLabel() { $('#storage-status').textContent = memoryOnly ? '保存できないため、このタブを閉じると消えます' : '入力はこのブラウザ内に保存されます'; }
 function toast(message) { $('#toast').textContent = message; $('#toast').classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => $('#toast').classList.remove('show'), 4200); }
 function navigate(path) { if (location.hash === `#${path}`) render(); else location.hash = path; }
@@ -173,19 +176,21 @@ document.addEventListener('change', event => {
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-action]'); if (!button || button.disabled) return;
   const action = button.dataset.action;
+  if(action==='recover-job-draft'){if(recoverJobDraft(state)){save();render();toast('入力を編集下書きへ戻しました。公開版との違いを確認し、保存と再プレビューをしてください。');}}
+  if(action==='recover-question-answer'){const id=button.dataset.questionId,draft=state.questionAnswerRecoveries?.[id];if(draft&&setQuestionAnswerDraft(state,id,draft)){delete state.questionAnswerRecoveries[id];state.openQuestionId=id;save();render();toast('入力を回答下書きへ戻しました。現在の質問と公開回答を確認し、再プレビューしてください。');}}
   if(action==='company-settings')navigate('company/recruiter');
   if(action==='save-job-draft'){const r=saveJobDraft(state);if(r.ok){save();render();toast('下書きを保存しました。候補者の表示は変わっていません。');}else toast(r.reason);}
-  if(action==='preview-job'){const r=previewJob(state);if(!r.ok){toast(r.reason);return;}const preview=r.preview;modal('候補者に見える求人説明を確認',jobDescriptionView(preview)+'<details open><summary>公開中の説明との差分</summary>'+jobDiffView(currentJob(state),preview)+'</details><p>この公開で経験・旧提出物・旧回答は書き換えません。実通知は送りません。</p>','この仕事の説明を候補者へ公開（デモ）',()=>{const r=publishJob(state,preview);if(r.ok){save();render();toast('求人説明 v'+r.entry.version+' を公開しました。候補者に差分を表示します。');}else toast(r.reason);});}
+  if(action==='preview-job'){const r=previewJob(state);if(!r.ok){toast(r.reason);return;}const preview=r.preview;modal('候補者に見える求人説明を確認',jobDescriptionView(preview)+'<details open><summary>公開中の説明との差分</summary>'+jobDiffView(currentJob(state),preview)+'</details><p>この公開で経験・旧提出物・旧回答は書き換えません。実通知は送りません。</p>','この仕事の説明を候補者へ公開（デモ）',()=>{refreshPublicationState();const r=publishJob(state,preview);if(r.ok){save();render();toast('求人説明 v'+r.entry.version+' を公開しました。候補者に差分を表示します。');}else {render(false);toast(r.reason);}});}
   if(action==='save-field-proposal'){if(saveFieldProposal(state)){save();render();toast('内部提案を保存しました。候補者には公開していません。');}else toast('変更理由と追加で聞きたい1問を入力してください。');}
   if(action==='apply-field-proposal'){if(applyFieldProposal(state)){save();render();toast('公開用下書きへ取り込みました。保存・プレビュー後に公開できます。');}}
-  if(action==='job-response'){if(chooseJobResponse(state,button.dataset.choice)){save();if(button.dataset.choice==='add')navigate('candidate/new');else if(button.dataset.choice==='question'){focusQuestion=true;navigate('candidate/submitted');}else render();}} 
+  if(action==='job-response'){if(chooseJobResponse(state,button.dataset.choice)){save();if(button.dataset.choice==='add')navigate('candidate/new');else if(button.dataset.choice==='question'){focusQuestion=true;navigate('candidate/submitted');}else render();}}
   if(action==='choose-scene'){if(hasExperience())addExperience(state);state.draft.content.title='伝えたい経験（架空）';state.draft.sceneId=button.dataset.sceneId==='none'?null:button.dataset.sceneId;state.screen='interview';state.interviewIndex=0;save();navigate('candidate/interview/0');}
   if(action==='add-question-draft'){const r=createQuestionDraft(state,state.questionComposer);if(r.ok){save();render();toast('質問を下書きに保存しました。会社にはまだ共有していません。');}else toast(r.reason);}
   if(action==='share-question'){const q=candidateQuestionProjection(state).find(q=>q.questionId===button.dataset.questionId);if(q?.visibility==='draft')modal('会社へ共有する質問を確認', '<blockquote>'+esc(q.text)+'</blockquote><p class="small">この経験の質問として会社のデモ画面に表示します。実際の送信や通知はありません。</p>', 'この質問を会社へ共有（デモ）',()=>{if(shareQuestion(state,q.questionId)){save();render();toast('質問を会社のデモ画面へ共有しました。既存の議題は最新の質問との照合が必要です。');}});}
   if(action==='cancel-question-draft')modal('未共有の質問下書きを取り消す', '<p>会社へ共有していない質問だけを削除します。</p>', '質問下書きを取り消す',()=>{if(cancelQuestionDraft(state,button.dataset.questionId)){save();render();}});
   if(action==='save-question-internal'){state.openQuestionId=button.dataset.questionId;if(saveQuestionInternal(state,button.dataset.questionId)){save();render();toast('内部メモを保存しました。候補者向けの公開内容は変わりません。');}}
   if(action==='question-answer-sample'){state.openQuestionId=button.dataset.questionId;setQuestionAnswerDraft(state,button.dataset.questionId,{status:'answered',text:'最初の1か月は先輩と問い合わせを振り返り、判断に迷うときは担当リーダーへ相談できます。（架空の企業回答）',reason:'',eta:''});save();render();}
-  if(action==='preview-question-answer'){state.openQuestionId=button.dataset.questionId;const r=previewQuestionAnswer(state,button.dataset.questionId);if(!r.ok){toast(r.reason);return;}const preview=r.preview;modal('候補者に見える回答のプレビュー',answerPreviewView(preview),'この回答を候補者へ公開（デモ）',()=>{const published=publishQuestionAnswer(state,preview);if(published.ok){save();render();toast('この質問への回答を候補者のデモ画面へ公開しました。');}else toast(published.reason);});}
+  if(action==='preview-question-answer'){state.openQuestionId=button.dataset.questionId;const r=previewQuestionAnswer(state,button.dataset.questionId);if(!r.ok){toast(r.reason);return;}const preview=r.preview;modal('候補者に見える回答のプレビュー',answerPreviewView(preview),'この回答を候補者へ公開（デモ）',()=>{refreshPublicationState();const published=publishQuestionAnswer(state,preview);if(published.ok){save();render();toast('この質問への回答を候補者のデモ画面へ公開しました。');}else {render(false);toast(published.reason);}});}
 
   if (action === 'decide') { decide(state, button.dataset.choice); save(); render(); toast(`「${CHOICES[button.dataset.choice]}」を記録しました`); }
   if (action === 'new-experience') navigate('candidate/new');
@@ -222,5 +227,5 @@ $('#modal-cancel').addEventListener('click', () => { confirmAction = null; $('#c
 $('#modal-confirm').addEventListener('click', () => { const action = confirmAction; confirmAction = null; $('#confirmation').close(); action?.(); });
 $('#confirmation').addEventListener('cancel', () => { confirmAction = null; });
 window.addEventListener('hashchange', () => { if ($('#confirmation').open) { confirmAction = null; $('#confirmation').close(); } render(); window.scrollTo(0, 0); });
-window.addEventListener('storage', event => { if (event.key === STORAGE_KEY) { state = restore(event.newValue); changesReviewed = false; if ($('#confirmation').open) { confirmAction = null; $('#confirmation').close(); } render(false); toast('別タブで更新された内容を読み込みました'); } });
+window.addEventListener('storage', event => { if (event.key === STORAGE_KEY) { state = retainPreviewInputs(state,restore(event.newValue));lastStorageRaw=event.newValue; changesReviewed = false; if ($('#confirmation').open) { confirmAction = null; $('#confirmation').close(); } render(false); toast('別タブの更新を読み込みました。異なる編集入力はこのタブに保管しています。公開前に内容を確認し、再プレビューしてください。'); } });
 render();

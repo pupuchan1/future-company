@@ -2,7 +2,7 @@ export const QUESTION_ANSWER_STATUSES = { unanswered: '未回答', answered: '�
 const clone = value => JSON.parse(JSON.stringify(value));
 const latest = state => state.submissions.at(-1) ?? null;
 const clean = value => typeof value === 'string' ? value.trim() : '';
-export function emptyQuestionTracker() { return { questionTrackerVersion: 1, questions: [], submissionQuestionId: null, nextQuestionId: 1, questionComposer: '', questionInternals: {}, questionInternalDrafts: {}, questionAnswerDrafts: {}, questionPublications: [] }; }
+export function emptyQuestionTracker() { return { questionTrackerVersion: 1, questions: [], submissionQuestionId: null, nextQuestionId: 1, questionComposer: '', questionInternals: {}, questionInternalDrafts: {}, questionAnswerDrafts: {}, questionPublications: [],questionAnswerRecoveries:{} }; }
 function findQuestion(state,id) { return state.questions.find(q=>q.questionId===id && q.experienceId===state.experienceId); }
 function makeQuestion(state,text,visibility,kind='additional',sourceVersion=latest(state)?.version) {
   const q={questionId:`${state.experienceId}-question-${state.nextQuestionId++}`,experienceId:state.experienceId,text:clean(text),visibility,kind,sourceVersion,revision:1,history:[]};
@@ -23,6 +23,7 @@ export function cancelQuestionDraft(state,id) { const q=findQuestion(state,id);i
 export function questionSummary(state) { const shared=state.questions.filter(q=>q.visibility==='shared_with_company');return shared.length===1?shared[0].text:shared.map((q,i)=>`質問${i+1}：${q.text}`).join('\n\n'); }
 export function currentQuestionAnswer(state,q) { return state.questionPublications.filter(a=>a.questionId===q.questionId && a.experienceId===state.experienceId && a.sourceVersion===q.sourceVersion && a.questionRevision===q.revision).at(-1)??null; }
 function publicAnswer(a) { return a ? clone({publicationId:a.publicationId,questionId:a.questionId,experienceId:a.experienceId,sourceVersion:a.sourceVersion,questionRevision:a.questionRevision,questionText:a.questionText,status:a.status,text:a.text,reason:a.reason,eta:a.eta,publishedAt:a.publishedAt}) : null; }
+export function answerDraftFields(draft) { return draft ? Object.fromEntries(['sourceVersion','questionRevision','status','text','reason','eta'].map(key=>[key,draft[key]])) : null; }
 export function candidateQuestionProjection(state) {
   return state.questions.filter(q=>q.experienceId===state.experienceId).map(q=>{
     const answer=currentQuestionAnswer(state,q);
@@ -35,7 +36,7 @@ export function questionAnswerToken(state) { return JSON.stringify(companyQuesti
 export function questionAnswerDraft(state,id) {
   const q=findQuestion(state,id);if(!q||q.visibility!=='shared_with_company')return null;
   let draft=state.questionAnswerDrafts[id];
-  if(!draft||draft.sourceVersion!==q.sourceVersion||draft.questionRevision!==q.revision){const pub=currentQuestionAnswer(state,q);draft={sourceVersion:q.sourceVersion,questionRevision:q.revision,status:pub?.status??'unanswered',text:pub?.text??'',reason:pub?.reason??'',eta:pub?.eta??''};state.questionAnswerDrafts[id]=draft;}
+  if(!draft||draft.sourceVersion!==q.sourceVersion||draft.questionRevision!==q.revision){if(draft){state.questionAnswerRecoveries??={};state.questionAnswerRecoveries[id]=answerDraftFields(draft);}const pub=currentQuestionAnswer(state,q);draft={sourceVersion:q.sourceVersion,questionRevision:q.revision,status:pub?.status??'unanswered',text:pub?.text??'',reason:pub?.reason??'',eta:pub?.eta??''};state.questionAnswerDrafts[id]=draft;}
   return draft;
 }
 export function setQuestionAnswerDraft(state,id,patch) { const draft=questionAnswerDraft(state,id);if(!draft)return false;for(const key of ['status','text','reason','eta'])if(typeof patch[key]==='string')draft[key]=patch[key];return true; }
@@ -52,14 +53,17 @@ export function previewQuestionAnswer(state,id) {
   const q=findQuestion(state,id),draft=questionAnswerDraft(state,id);
   if(!q||!draft||q.visibility!=='shared_with_company'||!Object.hasOwn(QUESTION_ANSWER_STATUSES,draft.status))return {ok:false,reason:'共有された質問と回答の状態を確認してください。'};
   if([draft.text,draft.reason].some(v=>typeof v!=='string'||v.length>4000)||(!clean(draft.text)&&draft.status==='answered')||(!clean(draft.reason)&&draft.status!=='answered')||(draft.eta && !/^\d{4}-\d{2}-\d{2}$/.test(draft.eta)))return {ok:false,reason:'回答ありの場合は回答本文、それ以外は状況・理由を入力してください。目安は未定のままで構いません。'};
-  return {ok:true,preview:{questionId:q.questionId,experienceId:q.experienceId,sourceVersion:q.sourceVersion,questionRevision:q.revision,questionText:q.text,status:draft.status,text:clean(draft.text),reason:clean(draft.reason),eta:draft.status==='checking'?draft.eta:''}};
+  return {ok:true,preview:{questionId:q.questionId,experienceId:q.experienceId,sourceVersion:q.sourceVersion,questionRevision:q.revision,questionText:q.text,basePublicationId:currentQuestionAnswer(state,q)?.publicationId??null,status:draft.status,text:clean(draft.text),reason:clean(draft.reason),eta:draft.status==='checking'?draft.eta:''}};
 }
 export function publishQuestionAnswer(state,preview,now=new Date().toISOString()) {
+  const target=findQuestion(state,preview?.questionId);
+  if(!target||preview.experienceId!==state.experienceId||preview.sourceVersion!==target.sourceVersion||preview.questionRevision!==target.revision||preview.questionText!==target.text||preview.basePublicationId!==(currentQuestionAnswer(state,target)?.publicationId??null))return {ok:false,reason:'プレビュー後に経験・質問・公開回答が変わりました。入力を残したまま、最新の内容で再プレビューしてください。'};
   const current=previewQuestionAnswer(state,preview?.questionId);
   if(!current.ok||JSON.stringify(current.preview)!==JSON.stringify(preview))return {ok:false,reason:'プレビュー後に質問・提出版・回答が変わりました。もう一度プレビューしてください。'};
   const q=findQuestion(state,preview.questionId),old=currentQuestionAnswer(state,q);
   if(old&&['status','text','reason','eta'].every(k=>old[k]===preview[k]))return {ok:false,reason:'同じ回答はすでに公開済みです。'};
-  const publication={...clone(current.preview),publicationId:`${q.questionId}-answer-${state.questionPublications.filter(a=>a.questionId===q.questionId).length+1}`,publishedAt:now};
+  const {basePublicationId,...publicFields}=current.preview;
+  const publication={...clone(publicFields),publicationId:`${q.questionId}-answer-${state.questionPublications.filter(a=>a.questionId===q.questionId).length+1}`,publishedAt:now};
   state.questionPublications.push(publication);return {ok:true,publication:publicAnswer(publication)};
 }
 export function mirrorLegacyAnswer(state,answer) {
@@ -70,6 +74,7 @@ export function mirrorLegacyAnswer(state,answer) {
   state.questionPublications.push({publicationId,questionId:q.questionId,experienceId:q.experienceId,sourceVersion:answer.sourceVersion,questionRevision:history.revision,questionText:history.text,status:answer.status,text:answer.text,reason:answer.reason,eta:answer.eta??'',publishedAt:answer.publishedAt??''});
 }
 export function migrateQuestionTracker(state) {
+  state.questionAnswerRecoveries??={};
   if(state.questionTrackerVersion===1)return;
   Object.assign(state,emptyQuestionTracker());
   for(const entry of state.submissions)syncSubmissionQuestion(state,entry);
@@ -80,12 +85,12 @@ export function migrateQuestionTracker(state) {
 }
 export function validQuestionTracker(state) {
   if(state.questionTrackerVersion!==1||!Array.isArray(state.questions)||!Array.isArray(state.questionPublications)||!Number.isInteger(state.nextQuestionId)||typeof state.questionComposer!=='string')return false;
-  if(!['questionInternals','questionInternalDrafts','questionAnswerDrafts'].every(k=>state[k]&&typeof state[k]==='object'&&!Array.isArray(state[k])))return false;
+  if(!['questionInternals','questionInternalDrafts','questionAnswerDrafts','questionAnswerRecoveries'].every(k=>state[k]&&typeof state[k]==='object'&&!Array.isArray(state[k])))return false;
   const ids=new Set();
   for(const q of state.questions){if(!q||typeof q.questionId!=='string'||!/^experience-\d+-question-\d+$/.test(q.questionId)||ids.has(q.questionId)||q.experienceId!==state.experienceId||typeof q.text!=='string'||!q.text.trim()||q.text.length>4000||!['draft','shared_with_company'].includes(q.visibility)||!Number.isInteger(q.sourceVersion)||!Number.isInteger(q.revision)||!Array.isArray(q.history)||!q.history.every(h=>Number.isInteger(h.sourceVersion)&&Number.isInteger(h.revision)&&typeof h.text==='string'&&h.text.length<=4000))return false;ids.add(q.questionId);}
   if(state.questionComposer.length>4000)return false;
   for(const key of ['questionInternals','questionInternalDrafts'])for(const [id,draft] of Object.entries(state[key]))if(!ids.has(id)||!draft||typeof draft.checkWith!=='string'||draft.checkWith.length>120||typeof draft.internalNote!=='string'||draft.internalNote.length>4000||(key==='questionInternals'&&(!Number.isInteger(draft.sourceVersion)||typeof draft.savedAt!=='string')))return false;
-  for(const [id,draft] of Object.entries(state.questionAnswerDrafts))if(!ids.has(id)||!draft||!Number.isInteger(draft.sourceVersion)||!Number.isInteger(draft.questionRevision)||!Object.hasOwn(QUESTION_ANSWER_STATUSES,draft.status)||!['text','reason','eta'].every(k=>typeof draft[k]==='string'&&draft[k].length<=4000))return false;
+  for(const [id,draft] of [...Object.entries(state.questionAnswerDrafts),...Object.entries(state.questionAnswerRecoveries)])if(!ids.has(id)||!draft||!Number.isInteger(draft.sourceVersion)||!Number.isInteger(draft.questionRevision)||!Object.hasOwn(QUESTION_ANSWER_STATUSES,draft.status)||!['text','reason','eta'].every(k=>typeof draft[k]==='string'&&draft[k].length<=4000))return false;
   if(!state.questionPublications.every(a=>ids.has(a.questionId)&&a.experienceId===state.experienceId&&Number.isInteger(a.sourceVersion)&&Number.isInteger(a.questionRevision)&&Object.hasOwn(QUESTION_ANSWER_STATUSES,a.status)&&['publicationId','questionText','text','reason','eta','publishedAt'].every(k=>typeof a[k]==='string')))return false;
   return true;
 }
