@@ -41,6 +41,11 @@ test('storage updates close an obsolete job confirmation, retain private edits, 
 test('an unsubmitted scene-free interview uses draft wording without claiming submission',()=>{
  const s=createState();s.draft.sceneId=null;const html=load(s,'#candidate/interview/0');assert.match(html,/仕事の場面との結び付けは選んでいません/);assert.equal(html.includes('結び付けを選ばずに提出しています'),false);assert.equal(JSON.parse(saved).submissions.length,0);
 });
+test('both roles open the same read-only preparation route without saving or exposing private editors',()=>{
+ const s=createState();s.draft.content={...SAMPLE};submit(s);createAgenda(s);propose(s);s.agenda.focus='PRIVATE-UNSENT-FOCUS';s.agenda.notes='PRIVATE-COMPANY-NOTE';setQuestionAnswerDraft(s,s.submissionQuestionId,{status:'answered',text:'PRIVATE-ANSWER-DRAFT'});
+ load(s,'#candidate/submitted');click('preparation');assert.equal(location.hash.replace(/^#/,''),'preparation');let before=writes;windowEvents.hashchange();assert.equal(writes,before);const candidate=element('#app').innerHTML;assert.equal(candidate.includes('PRIVATE'),false);assert.equal(candidate.includes('experience-select'),false);assert.match(candidate,/明示提案 1/);assert.doesNotMatch(candidate,/<(?:input|textarea|select)\b/);
+ load(s,'#recruiter');click('preparation');before=writes;windowEvents.hashchange();assert.equal(writes,before);assert.equal(element('#app').innerHTML,candidate);
+});
 test('recruiter render never contains private candidate draft or private correction', () => {
   const state = createState(); state.draft.content = { ...SAMPLE, action: 'PRIVATE-DRAFT-UNSENT' };
   assert.equal(load(state, '#recruiter').includes('PRIVATE-DRAFT-UNSENT'), false);

@@ -1,3 +1,4 @@
+import { preparationView } from './preparation.js';
 import { retainPreviewInputs } from './preview-sync.js';
 import { currentJob,setJobField,saveJobDraft,previewJob,publishJob,saveFieldProposal,applyFieldProposal,chooseJobResponse,recoverJobDraft } from './job-settings.js';
 import { candidateJobView,companySettingsView,submittedJobView,jobDescriptionView,jobDiffView } from './job-views.js';
@@ -118,10 +119,11 @@ function recruiter() {
 function about() { return `<section class="page-heading"><span class="eyebrow">ABOUT THIS DEMO</span><h1>「次に、何を話すか」まで。</h1><p>経験の一場面と、候補者が確かめた送付物、双方が持つ会話の議題をつなぎます。</p></section><section class="card about-card"><h2>このデモでできること</h2><p>候補者が架空の経験を具体化し、企業に見える内容を編集・確認して提出できます。人事は提出された具体例と候補者の質問から議題を作れます。訂正版が提出されると、古い議題は更新が必要になり、差分の確認後に改めて提案できます。</p><h2>保存と表示の範囲</h2><p>このブラウザの localStorage を使った、役割切り替え式の操作デモです。候補者・人事は同じブラウザ内のデータを見ています。別のブラウザや端末とは共有しません。下書きを人事 UI に表示しない設計ですが、本番用の認証・権限分離ではありません。同じ端末の利用者や開発者ツールからは保存データを閲覧できます。</p><h2>未接続のもの</h2><p>AI、音声、メール、カレンダー、企業システムは接続していません。文字対話は決まった質問を順に表示します。「提出」「提案」「話したい」はデモ内の状態変更です。実在する候補者・顧客の個人情報や機微情報を入力しないでください。</p><h2>確認の意味</h2><p>「候補者が内容を確認」は、送付内容を候補者自身が確認する操作を示します。身元認証や経験の事実確認を示すものではありません。自動採点・性格推定は行いません。</p><div class="actions"><button class="button" data-action="to-candidate">体験に戻る →</button><a class="button secondary" href="/reception/">以前の総合受付を見る</a></div></section>`; }
 function render(persist = true) {
   const parts = location.hash.replace(/^#/, '').split('/');
-  const role = ['recruiter','company'].includes(parts[0]) ? 'recruiter' : 'candidate';
+  const role = parts[0]==='preparation'?'shared':['recruiter','company'].includes(parts[0]) ? 'recruiter' : 'candidate';
   document.querySelectorAll('[data-role]').forEach(el => { const active = el.dataset.role === role; el.classList.toggle('active', active); el.setAttribute('aria-pressed', String(active)); });
   let content;
-  if (parts[0] === 'about') content = about();
+  if (parts[0] === 'preparation') content = preparationView(state);
+  else if (parts[0] === 'about') content = about();
   else if (parts[0] === 'company') content = companySettingsView(state,parts[1]==='field'?'field':'recruiter');
   else if (role === 'recruiter') content = recruiter();
   else {
@@ -136,8 +138,8 @@ function render(persist = true) {
     else if (screen === 'submitted') { state.screen = screen; content = submitted(); }
     else content = welcome();
   }
-  $('#app').innerHTML = (['about','company'].includes(parts[0]) ? '' : experienceToolbar(role)) + (parts[0]!=='about' && role==='candidate'?candidateJobView(state):'') + content;
-  if (persist) save(); else storageLabel();
+  $('#app').innerHTML = (['about','company','preparation'].includes(parts[0]) ? '' : experienceToolbar(role)) + (parts[0]!=='about' && role==='candidate'?candidateJobView(state):'') + content;
+  if (persist && parts[0]!=='preparation') save(); else storageLabel();
   $('#app').focus({ preventScroll: true });
   if(focusQuestion && role==='candidate' && parts[1]==='submitted'){$('#new-question')?.focus();focusQuestion=false;}
 }
@@ -178,6 +180,7 @@ document.addEventListener('click', event => {
   const action = button.dataset.action;
   if(action==='recover-job-draft'){if(recoverJobDraft(state)){save();render();toast('入力を編集下書きへ戻しました。公開版との違いを確認し、保存と再プレビューをしてください。');}}
   if(action==='recover-question-answer'){const id=button.dataset.questionId,draft=state.questionAnswerRecoveries?.[id];if(draft&&setQuestionAnswerDraft(state,id,draft)){delete state.questionAnswerRecoveries[id];state.openQuestionId=id;save();render();toast('入力を回答下書きへ戻しました。現在の質問と公開回答を確認し、再プレビューしてください。');}}
+  if(action==='preparation')navigate('preparation');
   if(action==='company-settings')navigate('company/recruiter');
   if(action==='save-job-draft'){const r=saveJobDraft(state);if(r.ok){save();render();toast('下書きを保存しました。候補者の表示は変わっていません。');}else toast(r.reason);}
   if(action==='preview-job'){const r=previewJob(state);if(!r.ok){toast(r.reason);return;}const preview=r.preview;modal('候補者に見える求人説明を確認',jobDescriptionView(preview)+'<details open><summary>公開中の説明との差分</summary>'+jobDiffView(currentJob(state),preview)+'</details><p>この公開で経験・旧提出物・旧回答は書き換えません。実通知は送りません。</p>','この仕事の説明を候補者へ公開（デモ）',()=>{refreshPublicationState();const r=publishJob(state,preview);if(r.ok){save();render();toast('求人説明 v'+r.entry.version+' を公開しました。候補者に差分を表示します。');}else {render(false);toast(r.reason);}});}
