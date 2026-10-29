@@ -44,7 +44,10 @@ test('an unsubmitted scene-free interview uses draft wording without claiming su
 test('both roles open the same read-only preparation route without saving or exposing private editors',()=>{
  const s=createState();s.draft.content={...SAMPLE};submit(s);createAgenda(s);propose(s);s.agenda.focus='PRIVATE-UNSENT-FOCUS';s.agenda.notes='PRIVATE-COMPANY-NOTE';setQuestionAnswerDraft(s,s.submissionQuestionId,{status:'answered',text:'PRIVATE-ANSWER-DRAFT'});
  load(s,'#candidate/submitted');click('preparation');assert.equal(location.hash.replace(/^#/,''),'preparation');let before=writes;windowEvents.hashchange();assert.equal(writes,before);const candidate=element('#app').innerHTML;assert.equal(candidate.includes('PRIVATE'),false);assert.equal(candidate.includes('experience-select'),false);assert.match(candidate,/明示提案 1/);assert.doesNotMatch(candidate,/<(?:input|textarea|select)\b/);
- load(s,'#recruiter');click('preparation');before=writes;windowEvents.hashchange();assert.equal(writes,before);assert.equal(element('#app').innerHTML,candidate);
+ load(s,'#recruiter');click('preparation');before=writes;windowEvents.hashchange();assert.equal(writes,before);assert.equal(element('#app').innerHTML.replace(/<time[^>]*>[\s\S]*?<\/time>/g,'<time>loaded</time>'),candidate.replace(/<time[^>]*>[\s\S]*?<\/time>/g,'<time>loaded</time>'));
+});
+test('preparation reload rereads browser storage without publishing, saving or changing the preference',()=>{
+ const s=createState();s.draft.content={...SAMPLE};submit(s);const id=s.submissionQuestionId;load(s,'#preparation');assert.match(element('#app').innerHTML,/<time datetime=/);const remote=JSON.parse(saved);setQuestionAnswerDraft(remote,id,{status:'checking',text:'',reason:'RELOADED-PUBLIC-REASON'});publishQuestionAnswer(remote,previewQuestionAnswer(remote,id).preview);saved=JSON.stringify(remote);const before=writes;click('reload-preparation');assert.equal(writes,before);assert.match(element('#app').innerHTML,/RELOADED-PUBLIC-REASON/);assert.match(element('#app').innerHTML,/確認中 <strong>1件/);assert.equal(JSON.parse(saved).questionPublications.length,1);assert.equal(JSON.parse(saved).decision,null);
 });
 test('recruiter render never contains private candidate draft or private correction', () => {
   const state = createState(); state.draft.content = { ...SAMPLE, action: 'PRIVATE-DRAFT-UNSENT' };

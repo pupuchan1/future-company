@@ -15,6 +15,7 @@ try { lastStorageRaw=localStorage.getItem(STORAGE_KEY);state = restore(lastStora
 let changesReviewed = false;
 let confirmAction = null;
 let focusQuestion = false;
+let preparationLoadedAt=null;
 const questions = [
   ['situation', 'そのとき、何が起きましたか？', 'いつ、どこで、誰が困っていたか。あなたの立場も教えてください。'],
   ['action', 'あなたは、具体的に何をしましたか？', '最初に聞いたこと、伝えたこと、誰に引き継いだか。自分の行動を一つずつ。'],
@@ -24,6 +25,7 @@ const questions = [
 ];
 function save() { try { const raw=JSON.stringify(state);localStorage.setItem(STORAGE_KEY, raw);lastStorageRaw=raw; } catch { memoryOnly = true; } storageLabel(); }
 function refreshPublicationState(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw!==lastStorageRaw){state=retainPreviewInputs(state,restore(raw));lastStorageRaw=raw;render(false);}}catch{memoryOnly=true;}}
+function readPreparationData(){try{const raw=localStorage.getItem(STORAGE_KEY);if(raw!==lastStorageRaw){state=retainPreviewInputs(state,restore(raw));lastStorageRaw=raw;}}catch{memoryOnly=true;}preparationLoadedAt=new Date().toISOString();}
 function storageLabel() { $('#storage-status').textContent = memoryOnly ? '保存できないため、このタブを閉じると消えます' : '入力はこのブラウザ内に保存されます'; }
 function toast(message) { $('#toast').textContent = message; $('#toast').classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => $('#toast').classList.remove('show'), 4200); }
 function navigate(path) { if (location.hash === `#${path}`) render(); else location.hash = path; }
@@ -122,7 +124,7 @@ function render(persist = true) {
   const role = parts[0]==='preparation'?'shared':['recruiter','company'].includes(parts[0]) ? 'recruiter' : 'candidate';
   document.querySelectorAll('[data-role]').forEach(el => { const active = el.dataset.role === role; el.classList.toggle('active', active); el.setAttribute('aria-pressed', String(active)); });
   let content;
-  if (parts[0] === 'preparation') content = preparationView(state);
+  if (parts[0] === 'preparation'){readPreparationData();content = preparationView(state,{loadedAt:preparationLoadedAt,memoryOnly});}
   else if (parts[0] === 'about') content = about();
   else if (parts[0] === 'company') content = companySettingsView(state,parts[1]==='field'?'field':'recruiter');
   else if (role === 'recruiter') content = recruiter();
@@ -181,6 +183,7 @@ document.addEventListener('click', event => {
   if(action==='recover-job-draft'){if(recoverJobDraft(state)){save();render();toast('入力を編集下書きへ戻しました。公開版との違いを確認し、保存と再プレビューをしてください。');}}
   if(action==='recover-question-answer'){const id=button.dataset.questionId,draft=state.questionAnswerRecoveries?.[id];if(draft&&setQuestionAnswerDraft(state,id,draft)){delete state.questionAnswerRecoveries[id];state.openQuestionId=id;save();render();toast('入力を回答下書きへ戻しました。現在の質問と公開回答を確認し、再プレビューしてください。');}}
   if(action==='preparation')navigate('preparation');
+  if(action==='reload-preparation'){render(false);toast('このブラウザの保存内容を読み直しました。画面上の読込時刻を確認してください。');}
   if(action==='company-settings')navigate('company/recruiter');
   if(action==='save-job-draft'){const r=saveJobDraft(state);if(r.ok){save();render();toast('下書きを保存しました。候補者の表示は変わっていません。');}else toast(r.reason);}
   if(action==='preview-job'){const r=previewJob(state);if(!r.ok){toast(r.reason);return;}const preview=r.preview;modal('候補者に見える求人説明を確認',jobDescriptionView(preview)+'<details open><summary>公開中の説明との差分</summary>'+jobDiffView(currentJob(state),preview)+'</details><p>この公開で経験・旧提出物・旧回答は書き換えません。実通知は送りません。</p>','この仕事の説明を候補者へ公開（デモ）',()=>{refreshPublicationState();const r=publishJob(state,preview);if(r.ok){save();render();toast('求人説明 v'+r.entry.version+' を公開しました。候補者に差分を表示します。');}else {render(false);toast(r.reason);}});}
